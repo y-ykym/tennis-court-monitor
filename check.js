@@ -48,13 +48,12 @@ const DRY_RUN = process.argv.includes('--dry-run');
   const prev = loadState();
   const newSlots = diffNewSlots(prev, targets);
 
-  // 4. 新しい空きがあればLINEへ通知
+  // 4. 新しい空きがあればLINEへ通知(Flex Message。dry-run時はテキスト表現で表示)
   if (newSlots.length > 0) {
-    const msg = formatMessage(newSlots);
     if (DRY_RUN) {
-      console.log('[dry-run] 送信される通知内容:\n' + msg);
+      console.log('[dry-run] 送信される通知内容:\n' + formatMessage(newSlots));
     } else {
-      await sendLineMessage(msg);
+      await sendLineMessage(newSlots);
       console.log(`LINE通知を送信しました (${newSlots.length}件)`);
     }
   } else {
