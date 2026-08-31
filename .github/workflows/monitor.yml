@@ -1,0 +1,64 @@
+name: tennis-court-monitor
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # 5分おき(混雑時は5〜20分間隔になる。許容済み)
+  workflow_dispatch: # 手動実行(テスト用)
+    inputs:
+      mode:
+        description: 実行モード
+        type: choice
+        default: normal
+        options:
+          - normal # 通常実行(実サイトをチェック)
+          - mock-test # モックデータでLINE送信経路をテスト(サイトアクセスなし)
+
+# 前の実行が終わるまで次を待たせる(重複実行防止)
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write # state.json をコミットするため
+
+env:
+  TZ: Asia/Tokyo
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 依存パッケージをインストール
+        run: npm ci
+
+      - name: 空きチェック実行
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          # mock-test時はサイトにアクセスせず、モックデータで実際にLINEへ送信する
+          MOCK_SLOTS_FILE: ${{ inputs.mode == 'mock-test' && 'test/mock-slots.json' || '' }}
+        run: node check.js
+
+      - name: 失敗時のデバッグ用レスポンスを保存
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-responses
+          path: debug/
+          if-no-files-found: ignore
+
+      - name: state.json をコミット(変化があった時のみ)
+        if: inputs.mode != 'mock-test' # テスト実行の結果は保存しない
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || (git commit -m "update state [skip ci]" && git push)

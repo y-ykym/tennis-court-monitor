@@ -1,0 +1,14 @@
+{
+  "name": "tennis-court-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "東京都スポーツ施設予約システムのテニスコート空き監視・LINE通知",
+  "scripts": {
+    "check": "node check.js",
+    "dry-run": "node check.js --dry-run",
+    "test:logic": "MOCK_SLOTS_FILE=test/mock-slots.json node check.js --dry-run"
+  },
+  "dependencies": {
+    "japanese-holidays": "^1.0.10"
+  }
+}
