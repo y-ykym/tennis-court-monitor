@@ -4,7 +4,7 @@
 name: cron-trigger
 on:
   schedule:
-    - cron: '3-58/5 * * * *'
+    - cron: '*/5 * * * *' # 切り分けのため最も単純な記法にしている
   workflow_dispatch: {}
 
 permissions:
