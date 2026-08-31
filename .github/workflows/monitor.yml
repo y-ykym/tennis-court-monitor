@@ -2,7 +2,7 @@ name: tennis-court-monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # 5分おき(共有キューのため実効5〜20分間隔になる。許容済み)
+    - cron: '1-56/5 * * * *' # 5分おき(毎時1,6,11,...,56分。全世界が集中する5の倍数分ちょうどを避けて混雑による破棄を減らす)
   workflow_dispatch: # 手動実行(テスト用)
     inputs:
       mode:
