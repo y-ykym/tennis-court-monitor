@@ -35,7 +35,9 @@ docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(
 
 ## セットアップ手順
 
-1. **このリポジトリをpush**(public推奨: Actions実行時間が無料・無制限)
+1. **LINE Developersでボットを用意**: Messaging APIチャネルを作成し、
+   チャネルアクセストークン(長期)を発行。通知の受信先(自分)と友だちになるか、
+   通知先グループにボットを招待しておく
 2. **GitHub Secretsを登録**: Settings → Secrets and variables → Actions で
    `LINE_CHANNEL_ACCESS_TOKEN` と `LINE_USER_ID` を登録
    - `LINE_USER_ID` にはユーザーID(`U`〜)のほか**グループID(`C`〜)も指定可能**(グループ通知運用)
@@ -61,6 +63,8 @@ docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(
 - **通知の見た目**: カード型Flex Message(日付チップは土=青/日祝=赤、残1面はオレンジ強調、
   末尾に予約サイトへのリンクボタン)。21件以上は「…ほかN件」と省略される
 - **LINE無料枠**: 月200通まで。1回の実行で出た新規空きは1通にまとめて送信(グループ宛ては1通カウント)
+- **Actions無料枠**: publicリポジトリは実行時間が無料・無制限。privateの場合は月2,000分の
+  無料枠を消費する(1回約2分×5分おきだと超過するので、間隔調整かpublic化を検討)
 - **60日ルール**: publicリポジトリはコミット等の活動が60日ないと定期実行が自動停止する。
   state.jsonの自動コミットで通常は維持されるが、止まったらActionsタブから再有効化する
 - **サイトメンテナンス**: 毎月27日12:00〜28日8:45と年末年始(12/28 12:00〜1/4 8:45)はスキップ
