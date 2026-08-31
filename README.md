@@ -22,13 +22,15 @@ lib/scrape.js                内部APIから空き枠を取得(リトライ最�
 lib/config.js                公園定義・監視条件の一元管理
 lib/filter.js                監視条件(平日/土日祝)での絞り込み
 lib/state.js                 前回結果(state.json)との差分検出
-lib/notify.js                LINE Messaging APIでのpush通知
+lib/notify.js                LINEへのpush通知(カード型Flex Message)
+lib/date.js                  JST基準の日付ユーティリティ
 lib/maintenance.js           サイトの定期メンテ時間帯のスキップ判定
 .github/workflows/monitor.yml  5分おきの定期実行(GitHub Actions)
 state.json                   前回の空き状況(自動更新される)
 test/mock-slots.json         ロジック動作確認用のモックデータ
 docs/site-notes.md           サイト調査記録(API仕様・画面遷移・コード表)
 docs/予約空き監視_要件定義書.md  要件定義書
+docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(記録用)
 ```
 
 ## セットアップ手順
@@ -36,6 +38,10 @@ docs/予約空き監視_要件定義書.md  要件定義書
 1. **このリポジトリをpush**(public推奨: Actions実行時間が無料・無制限)
 2. **GitHub Secretsを登録**: Settings → Secrets and variables → Actions で
    `LINE_CHANNEL_ACCESS_TOKEN` と `LINE_USER_ID` を登録
+   - `LINE_USER_ID` にはユーザーID(`U`〜)のほか**グループID(`C`〜)も指定可能**(グループ通知運用)
+   - IDが分からないときは、Webhook URLに [webhook.site](https://webhook.site) を一時設定し、
+     ボットへのメッセージ送信(ユーザーID)やグループ招待(グループID)のイベントJSONの
+     `source` から拾う。取得後はWebhookをOFFに戻し、応答メッセージも無効化しておく
 3. **ローカルで動作確認**(任意):
    ```bash
    npm install
@@ -43,13 +49,18 @@ docs/予約空き監視_要件定義書.md  要件定義書
    npm run dry-run      # 実サイト取得→通知内容の表示のみ(LINE送信なし)
    ```
 4. **手動テスト**: GitHubの Actions タブ → tennis-court-monitor → Run workflow。
-   初回は state.json が空なので、監視対象の空きがあればLINEに通知が届く
+   実行モードで `mock-test` を選ぶと、サイトにアクセスせずモックデータで実際にLINEへ
+   送信でき、通知経路とFlexカードの見た目を確認できる(state.jsonは更新されない)。
+   `normal` は本番同等の実行。初回は state.json が空なので、監視対象の空きがあれば通知が届く
 5. **運用開始**: 手動テストが通れば、あとは5分おきに自動実行される
 
 ## 運用メモ
 
-- **通知が来る条件**: 前回チェック時に無かった空き枠が新たに出現したときだけ(重複通知なし)
-- **LINE無料枠**: 月200通まで。1回の実行で出た新規空きは1通にまとめて送信
+- **通知が来る条件**: 前回チェック時に無かった空き枠が新たに出現したときだけ(重複通知なし)。
+  「空き面数が減っただけ」では通知しない(施設×日付×時間帯の出現のみを差分とみなす)
+- **通知の見た目**: カード型Flex Message(日付チップは土=青/日祝=赤、残1面はオレンジ強調、
+  末尾に予約サイトへのリンクボタン)。21件以上は「…ほかN件」と省略される
+- **LINE無料枠**: 月200通まで。1回の実行で出た新規空きは1通にまとめて送信(グループ宛ては1通カウント)
 - **60日ルール**: publicリポジトリはコミット等の活動が60日ないと定期実行が自動停止する。
   state.jsonの自動コミットで通常は維持されるが、止まったらActionsタブから再有効化する
 - **サイトメンテナンス**: 毎月27日12:00〜28日8:45と年末年始(12/28 12:00〜1/4 8:45)はスキップ
