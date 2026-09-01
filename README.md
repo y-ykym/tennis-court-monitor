@@ -11,7 +11,7 @@
 - 種目: テニス(人工芝)
 - 平日: 猿江恩賜公園の19時枠のみ
 - 土日祝: 猿江恩賜公園・亀戸中央公園・大島小松川公園の全時間帯
-- 範囲: 当日から1ヶ月分 / チェック間隔: 5分おき(cron-job.orgからの外部トリガー。下記運用メモ参照)
+- 範囲: 当日から1ヶ月分 / チェック間隔: 3分おき(cron-job.orgからの外部トリガー。下記運用メモ参照)
 - 条件を変えたいとき(公園の増減・平日の時間変更)は `lib/config.js` だけを編集
 
 ## ファイル構成
@@ -25,7 +25,7 @@ lib/state.js                 前回結果(state.json)との差分検出
 lib/notify.js                LINEへのpush通知(カード型Flex Message)
 lib/date.js                  JST基準の日付ユーティリティ
 lib/maintenance.js           サイトの定期メンテ時間帯のスキップ判定
-.github/workflows/monitor.yml  空きチェックの実行(起動はcron-job.orgから5分おき)
+.github/workflows/monitor.yml  空きチェックの実行(起動はcron-job.orgから3分おき)
 state.json                   前回の空き状況(自動更新される)
 test/mock-slots.json         ロジック動作確認用のモックデータ
 docs/site-notes.md           サイト調査記録(API仕様・画面遷移・コード表)
@@ -54,7 +54,7 @@ docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(
    実行モードで `mock-test` を選ぶと、サイトにアクセスせずモックデータで実際にLINEへ
    送信でき、通知経路とFlexカードの見た目を確認できる(state.jsonは更新されない)。
    `normal` は本番同等の実行。初回は state.json が空なので、監視対象の空きがあれば通知が届く
-5. **運用開始**: 手動テストが通れば、あとは5分おきに自動実行される
+5. **運用開始**: 手動テストが通れば、あとは3分おきに自動実行される
 
 ## 運用メモ
 
@@ -65,10 +65,10 @@ docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(
   (Flex Messageの10KB制限対策。20件載せると超過して400エラーになるため)
 - **LINE無料枠**: 月200通まで。1回の実行で出た新規空きは1通にまとめて送信(グループ宛ては1通カウント)
 - **Actions無料枠**: publicリポジトリは実行時間が無料・無制限。privateの場合は月2,000分の
-  無料枠を消費する(1回約2分×5分おきだと超過するので、間隔調整かpublic化を検討)
+  無料枠を消費する(1回約2分×3分おきだと超過するので、間隔調整かpublic化を検討)
 - **定期起動の仕組み**: GitHubのschedule(cron)はこのアカウントで極端に間引かれる
   (5分指定で実効3〜4時間。最小構成の検証リポジトリ y-ykym/cron-canary でも同様)ため、
-  cron-job.org から5分おきに workflow_dispatch API を叩いて起動している。
+  cron-job.org から3分おきに workflow_dispatch API を叩いて起動している。
   canaryの実行間隔が5分に正常化したら、monitor.ymlにscheduleトリガーを復活させて
   cron-job.org側を停止し、一本化する
 - **60日ルール**: scheduleトリガーを復活させた場合、publicリポジトリは活動が60日ないと

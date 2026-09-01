@@ -1,6 +1,6 @@
 name: tennis-court-monitor
 
-# 定期起動は cron-job.org から5分おきに workflow_dispatch API を叩いて行う。
+# 定期起動は cron-job.org から3分おきに workflow_dispatch API を叩いて行う。
 # (GitHubのschedule(cron)がこのアカウントで極端に間引かれる問題への対応。
 #  経緯と観測装置は y-ykym/cron-canary を参照。GitHub cronが正常化したら
 #  scheduleトリガーを復活させ、cron-job.org側を止めて一本化する)
