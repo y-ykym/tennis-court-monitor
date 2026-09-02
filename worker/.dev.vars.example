@@ -1,0 +1,19 @@
+# ローカル開発用の環境変数のひな形。
+#   cp .dev.vars.example .dev.vars   してから値を埋める(.dev.vars は .gitignore 済み・コミット禁止)
+# 本番(Cloudflare)には `npx wrangler secret put <キー名>` で同じキー名を登録する。
+# ここには値を書かない。
+
+# --- LINE Messaging API ---
+LINE_CHANNEL_SECRET=
+LINE_CHANNEL_ACCESS_TOKEN=
+# 「よやく」を受け付けるグループのID(C〜)。フェーズ1の LINE_USER_ID と同じ値
+LINE_GROUP_ID=
+
+# --- 予約サイト(東京都スポーツ施設予約システム)のログイン情報 ---
+# A・B 2人分。LABEL_* は返信に表示する名前(例: 太郎)
+SITE_USER_A=
+SITE_PASS_A=
+LABEL_A=
+SITE_USER_B=
+SITE_PASS_B=
+LABEL_B=

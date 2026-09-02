@@ -1,0 +1,17 @@
+# Cloudflare Workers の設定(フェーズ1.5 予約確認ボット)
+#
+# ここに Secrets(トークン・パスワード・利用者番号)は絶対に書かない。
+# Secrets は `npx wrangler secret put <NAME>` で登録する(一覧は .dev.vars.example / README 参照)。
+# ローカル開発(`npm run dev`)では、同じキー名を worker/.dev.vars に書くと自動で読み込まれる。
+
+name = "tennis-reservation-bot"
+main = "src/index.js"
+# インストール済み workerd(1.20260831)が対応する最新日付。Node互換フラグは不要(標準fetch/Web Cryptoのみ使用)
+compatibility_date = "2026-08-31"
+
+# *.workers.dev のURLを有効にする(LINEのWebhook URLとして使う)
+workers_dev = true
+
+# `wrangler tail` に加えて、Cloudflareダッシュボードでもログを見られるようにする(無料枠あり)
+[observability]
+enabled = true
