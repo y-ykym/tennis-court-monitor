@@ -3,6 +3,9 @@
 東京都スポーツ施設予約システムの空き状況を GitHub Actions で定期チェックし、
 新しい空きが出たときだけ LINE に通知します。ランニングコストはほぼ0円。
 
+フェーズ1.5として、LINEグループで `よやく` と送ると A・B 2人分の予約一覧をカードで返す
+予約確認ボット(Cloudflare Workers)も稼働中です(後述「フェーズ1.5 予約確認ボット」)。
+
 サイトの週表示カレンダーが使う内部JSON APIをHTTP(Node標準fetch)で直接叩くため、
 ブラウザ自動化(Playwright)は不要です。依存パッケージは japanese-holidays の1個だけ。
 
@@ -28,9 +31,21 @@ lib/maintenance.js           サイトの定期メンテ時間帯のスキップ
 .github/workflows/monitor.yml  空きチェックの実行(起動はcron-job.orgから3分おき)
 state.json                   前回の空き状況(自動更新される)
 test/mock-slots.json         ロジック動作確認用のモックデータ
-docs/site-notes.md           サイト調査記録(API仕様・画面遷移・コード表)
-docs/予約空き監視_要件定義書.md  要件定義書
+docs/site-notes.md           サイト調査記録(API仕様・画面遷移・コード表・ログイン/予約一覧)
+docs/予約空き監視_要件定義書.md  要件定義書(§11 がフェーズ1.5)
 docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(記録用)
+
+worker/                      フェーズ1.5 予約確認ボット(Cloudflare Workers。lib/ とは独立)
+  src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply)
+  src/line.js                LINE署名検証・イベント抽出・reply送信
+  src/site.js                予約サイトへログインして「予約の確認」一覧を取得(読み取りのみ)
+  src/format.js              テキスト整形(0件・失敗時の文言)
+  src/flex.js                予約一覧のFlex Message(カード)
+  scripts/probe-site.mjs     ローカルからログイン確認(パスワード変更後の疎通確認にも)
+  scripts/send-test-event.mjs 署名付きの模擬Webhookを wrangler dev に送る
+  test/                      node --test のユニットテスト(fixturesは個人情報をダミー化済み)
+  wrangler.toml              Workers設定(Secretsは含めない)
+  .dev.vars.example          ローカル用環境変数のキー名一覧(値は書かない)
 ```
 
 ## セットアップ手順
@@ -78,3 +93,121 @@ docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(
   それでも失敗した回はエラーにせず「スキップ」として次回に任せる
 - **サイト改修で動かなくなったら**: Actionsの失敗ログを確認し、docs/site-notes.md を参考に
   lib/scrape.js を修正する
+
+## フェーズ1.5 予約確認ボット(2026-09-02 稼働開始)
+
+LINEグループで `よやく` と送ると、A・B 2人分の「予約の確認」一覧をカード(Flex Message)で返します。
+reply(返信)は LINE の月200通の無料枠を消費しません。フェーズ1のコードと monitor.yml とは独立しています。
+
+### 構成
+
+```
+LINEグループ「よやく」
+  → LINE Platform が Webhook(POST /webhook)を送信
+  → Cloudflare Workers(tennis-reservation-bot, 無料プラン)
+      1. X-Line-Signature を LINE_CHANNEL_SECRET で検証(不一致は401)
+      2. source.groupId === LINE_GROUP_ID かつ本文が「よやく」に完全一致 のイベントだけ処理。即座に200を返す
+      3. (応答後に継続: ctx.waitUntil)A・B それぞれの利用者番号で予約サイトにログイン(並行)
+         GET index.jsp → POST ログイン画面(loginJKey取得)→ POST ログイン → POST 予約の確認・取消画面
+      4. 一覧HTML(Shift_JIS)を解析してカードに整形 → reply API で返信 → 予約サイトからログアウト
+  → グループにカードが届く(通常 6〜12秒。予約サイトの応答速度に依存)
+```
+
+- 予約サイトへは読み取りだけを行い、キャンセル・予約・抽選などの操作は一切送りません
+- LINE が Webhook の応答を長く待たないため、処理を先に終えてから200を返す方式は成立しません
+  (実測でキャンセルされた)。200を先に返し、Cloudflare の `waitUntil`(応答後最長30秒)で処理を続けます。
+  そのため取得は25秒で打ち切り、再試行は開始10秒以内の失敗のみ、ログアウトは返信後に回しています
+- 返信の見た目: 濃紺ヘッダー「予約一覧 / M/D 現在」、人ごとに名前ラベルと件数、1予約1行で
+  日付タイル(土=青/日祝=赤/平日=グレー)+時間+公園名。直近は「今日/明日」、当日で終了した枠はグレー+「終了」。
+  Flexの10KB制限のため表示は9件まで(超過は「…ほかN件」)
+- 全員0件は「予約はありません」、全員失敗は「予約サイトに繋がりませんでした。少し待ってもう一度お試しください」、
+  片方だけ失敗はその人の区画に「取得失敗」と表示
+- 1分超過時の push フォールバック(§11.9)は未実装。必要になったら追加する(200通枠を消費するため)
+
+### Secrets 一覧(Cloudflare Workers Secrets)
+
+| 名前 | 内容 |
+|---|---|
+| `LINE_CHANNEL_SECRET` | Webhook署名検証用(LINE Developers → チャネル基本設定 → チャネルシークレット) |
+| `LINE_CHANNEL_ACCESS_TOKEN` | reply送信用(GitHub Secrets と同じ値。**再発行するとフェーズ1の通知も止まる**) |
+| `LINE_GROUP_ID` | 反応するグループID(GitHub Secret `LINE_USER_ID` と同じ C〜の値) |
+| `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A` | Aの利用者番号(8桁)・パスワード・返信に表示する名前 |
+| `SITE_USER_B` / `SITE_PASS_B` / `LABEL_B` | Bの同上(未登録なら A だけで動く) |
+
+値はコード・設定ファイル・リポジトリに一切書かず、`npx wrangler secret put <名前>` で登録します。
+ローカル開発(`npm run dev`)では `worker/.dev.vars`(gitignore済み)に同じキー名で書くと読み込まれます。
+
+### 配置手順(初回)
+
+```bash
+cd worker
+npm install
+npm test                       # ユニットテスト
+npx wrangler login             # ブラウザでCloudflareにログイン
+npx wrangler deploy            # 初回は workers.dev のサブドメイン名を聞かれる
+npx wrangler secret put LINE_CHANNEL_SECRET        # 以下、Secretsを1件ずつ登録(値は対話入力)
+npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+npx wrangler secret put LINE_GROUP_ID
+npx wrangler secret put SITE_USER_A
+npx wrangler secret put SITE_PASS_A
+npx wrangler secret put LABEL_A
+npx wrangler secret list       # 名前だけ一覧表示(値は出ない)
+```
+
+Secret の登録・更新は自動で新しい版が配置されるので、再デプロイは不要です。
+コードを変えたときだけ `npx wrangler deploy` します。公開URLは `https://tennis-reservation-bot.<サブドメイン>.workers.dev`
+で、`GET /` が `ok` を返せば生存確認OKです。
+
+### LINE設定チェックリスト
+
+LINE Developers コンソール → チャネル → Messaging API設定
+
+- [ ] Webhook URL に `https://tennis-reservation-bot.<サブドメイン>.workers.dev/webhook`
+- [ ] 「検証」で成功(Workerが署名を検証して200を返せている)
+- [ ] 「Webhookの利用」ON
+- [ ] 「Webhookの再送」OFF(ONだと同じ「よやく」に二重返信)
+- [ ] 「グループトーク・複数人トークへの参加を許可する」ON(既にグループで通知できていれば済み)
+
+LINE Official Account Manager → 設定 → 応答設定
+
+- [ ] 「応答メッセージ」OFF(ONだと全発言に定型文が返る)
+- [ ] 「Webhook」ON
+- [ ] 「あいさつメッセージ」任意(OFF推奨)
+
+### パスワードを変えたとき・ログインに失敗するとき
+
+A または B が予約サイトのパスワードを変えたら、Secrets も更新します(再デプロイ不要)。
+
+```bash
+cd worker && npx wrangler secret put SITE_PASS_A     # Bなら SITE_PASS_B
+```
+
+先にローカルで新しいパスワードが通るか確かめられます(パスワードは非表示入力・保存されない):
+
+```bash
+cd worker
+read -s SITE_PASS && export SITE_PASS
+SITE_USER=<利用者番号> LABEL=A node scripts/probe-site.mjs
+```
+
+利用者カードの有効期限が切れるとログインできなくなり、カードのその人の区画が「取得失敗」になります
+(ログには「ログインが拒否されました」と出る)。期限更新は有効期限の2週間前からサイトのマイメニューで行えます。
+
+### トラブル時の確認手順
+
+1. ログを流した状態でグループに `よやく` と送る:
+   ```bash
+   cd worker && npx wrangler tail --format pretty
+   ```
+   ログには通信ごとの所要時間(`[A] GET index.jsp 200 931ms` など)、取得結果、返信結果が出ます。
+   利用者番号・パスワード・トークン・Cookie・グループID・表示名はログに出ない設計です
+2. `webhook受信` 自体が出ない → LINE側の設定(Webhook URL・Webhookの利用ON・応答設定のWebhook ON)を確認
+3. `対象イベント 0件` → グループIDの不一致(LINE_GROUP_ID)か、本文が「よやく」に完全一致していない
+4. `署名不一致` → LINE_CHANNEL_SECRET の値が違う
+5. `ログインが拒否されました` → 利用者番号・パスワード・利用者カードの期限を確認(再試行はしない設計)
+6. `HTTP 502` や `予約確認画面が想定外です` → 予約サイト側の一時的な不調。少し待って再送。
+   続く場合はサイト改修の可能性があるので docs/site-notes.md「フェーズ1.5 追加調査」を参考に worker/src/site.js を修正
+7. `reCAPTCHA が有効になっており` → サイト側が画像認証を有効化した。自動ログイン不可なので方式の見直しが必要
+8. 返信が来ないが `返信しました` は出ている → LINE側の一時的な遅延。`返信に失敗 ... HTTP 400` なら Flex の形式不備
+   (テキスト版で自動再送する)、`HTTP 401` なら LINE_CHANNEL_ACCESS_TOKEN を確認
+9. Cloudflare ダッシュボード → Workers & Pages → tennis-reservation-bot → Logs でも過去ログを見られます
