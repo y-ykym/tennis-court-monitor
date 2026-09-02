@@ -1,0 +1,20 @@
+{
+  "name": "tennis-reservation-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LINEグループで「よやく」と送ると予約サイトの予約一覧を返信する Cloudflare Workers ボット(フェーズ1.5)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail --format pretty",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "send-test-event": "node scripts/send-test-event.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.128.0"
+  },
+  "dependencies": {
+    "japanese-holidays": "^1.0.10"
+  }
+}
