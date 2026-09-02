@@ -83,3 +83,73 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
 - 公園を変えるには週表示画面の公園コンボは使えない(検索した1公園しか選択肢に出ない)ため、**公園ごとにホームから検索し直す**のが確実
 - 定期メンテナンス(毎月27日12:00〜28日8:45等)中はフォームが出ないはず → `#purpose-home` のwaitForSelectorタイムアウトで検知
 - 日付・種目・公園はid/valueで指定できるため日本語ロケール非依存。曜日表記(pc-text/sp-text)もパースには使わない
+
+---
+
+# フェーズ1.5 追加調査: ログインと予約一覧 (2026-09-02 Chrome DevTools + HTTP直叩きで調査)
+
+「よやく」ボット(Cloudflare Workers)が使う、ログイン → 予約の確認 → ログアウトの流れ。
+**読み取り専用。キャンセル(`rsvWCancelRsvAction.do` / `selectCancel=1`)は絶対に送らない。**
+
+## 全体像
+
+1. `GET /web/index.jsp` — セッションCookie(JSESSIONID)取得(フェーズ1と同じ)
+2. `POST /web/rsvWTransUserLoginAction.do` — ログイン画面(`pawab2100.jsp`)を表示。**hiddenの `loginJKey`(128桁・表示ごとに変わる)を取る**
+   - body: `displayNo=pawab2000&displayNoFrm=pawab2000`
+3. `POST /web/rsvWUserAttestationLoginAction.do` — ログイン実行。成功するとログイン後ホーム(`pawab2000.jsp`、ヘッダーに「マイメニュー」「利用者カード表示」)が200で返る
+4. `POST /web/rsvWGetCancelRsvDataAction.do` — 予約の確認・取消画面(`prwha1000.jsp`)。ここに予約一覧が **サーバ描画のHTML** で入っている(Ajax無し)
+   - body: `displayNo=pawab2000&displayNoFrm=pawab2000`(直前画面のdisplayNo)
+5. `POST /web/rsvWTransUserAttestationEndAction.do` — ログアウト(`displayNo=prwha1000&displayNoFrm=prwha1000`)。ログアウト後ホームが返る
+   - ログアウト直後にホームの Ajax(お気に入り取得)が失敗して「データ通信を正しく行うことができませんでした」の alert が出ることがあるが、ログアウト自体は完了している
+
+文字コードは全て **Shift_JIS(Windows-31J)**、`content-type: text/html;charset=Windows-31J`。CSRFトークンは無く、`loginJKey` だけがページ由来の値。
+
+## ログインの詳細(`pawab2100.jsp` + `js/pawab2100.js` の `submitLogin()`)
+
+- 入力項目: `userId`(半角数字8桁・`type=tel`)、`password`(最大24文字)
+- hidden: `fcflg`(空)、`displayNo=pawab2100`、`loginJKey`
+- **ブラウザはパスワードを1文字ずつ `loginCharPass` という hidden に分解して追加してから送る**(`loginCharPass=a&loginCharPass=b&...` の形)。自動化でも同じ形で送る
+- 送信先: `POST /web/rsvWUserAttestationLoginAction.do`。フォーム(form1)の hidden 一式 + `userId` + `password` + `loginCharPass`×N
+- reCAPTCHA: 組み込みはあるが `var gRecaptchaActive = false;` で **現在は無効**。有効化されると `recaptchaToken` が必要になり自動ログイン不可 → ログイン画面でこの変数を確認して true ならエラー扱いにする
+- MFA(多要素認証): 設定画面 `rsvWTransSetMfaAction.do` は存在するが、**2026-09-02 の実機ログイン(利用者A)では認証コード等の追加画面は出なかった**
+- 成功判定: 応答HTMLに `loginJKey` が無く、「マイメニュー」(`gRsvWTransMenuAction`)と `利用者カード表示` ボタンが含まれる
+- 失敗時: ログイン画面(`pawab2100.jsp`)が再表示され、hidden のエラーメッセージを `showAlert()` で出す(例: 「パスワードは10桁以上で入力して下さい。…」)
+- ログイン画面は約5分(`gTimerValue = 300`)で `rsvWTransUserAttestationEndAction.do` へタイムアウト遷移する
+- **未ログインで手順4を叩いてもエラーにならず、ホーム画面(`pawab2000.jsp`)が200で返る**。応答の `<!-- prwha1000.jsp -->` コメント(または `id="rsvacceptlist"`)で画面種別を必ず確認する
+
+## 予約一覧の構造(`prwha1000.jsp`)
+
+- `<table id="rsvacceptlist" class="table sp-block-table">` の `<tbody>` に **1予約=1行**(`<tr>`)
+- 各行の列: 予約番号 / 利用日 / 時間 / 公園・施設 / 設備予約 / 支払状況 / キャンセル(ボタン) / 使用券ダウンロード
+- 各行には詳細モーダル(`<div class="modal" id="rsvDetailN">`)が埋め込まれ、その中の `<table class="mx-auto">` が **項目名付きで一番解析しやすい**:
+
+  ```html
+  <tr><th scope="row">予約番号</th><td>2026000001</td></tr>
+  <tr><th scope="row">利用日</th><td><span class="dow-sunday">9月6日(日曜)</span>2026年</td></tr>
+  <tr><th scope="row">時間</th><td>19時00分～21時00分</td></tr>
+  <tr><th scope="row">公園・施設</th><td>猿江恩賜公園&nbsp;テニス（人工芝）</td></tr>
+  <tr><th scope="row">利用目的</th><td>テニス（人工芝）</td></tr>
+  <tr><th scope="row">利用人数</th><td>1人</td></tr>
+  <tr><th scope="col">設備予約</th><td>あり</td></tr>
+  <tr><th scope="col">支払状況</th><td>支払前</td></tr>
+  <tr><th scope="col">施設利用料金</th><td>3,600円</td></tr>
+  ```
+
+- 機械可読な hidden も行ごとにある: `useday0=20260906`(YYYYMMDD)、`stime0=1900`(開始時刻コード)、`penaltyday0=3`。終了時刻は hidden に無いので「時間」列(`19時00分～21時00分`)から取る
+- 利用日の `<span>` は日曜・祝日で `class="dow-sunday"`、平日は class 無し(土曜は未確認。パースには使わない)
+- 「状態」列は無い。この画面に載るのは **有効な(キャンセルされていない)予約のみ** で、キャンセル済みは消える想定。「支払状況」(支払前/支払済 等)が唯一の状態情報
+- ページング: hidden `pageNo` / `cancelPageNo` があり、ページ送りは `submitPageIndex()` → `rsvWGetConfirmRsvDataAction.do`。予約3件の実機では1ページのみで、ページ送りUIは出ていない(件数上限は未確認)
+- 0件のときの表示は未確認(該当利用者がいなかった)。`rsvacceptlist` に行が無い、または表自体が無いの両方を「0件」として扱う
+- 抽選当選を確定した予約がこの一覧に載るかは未確認(該当データ無し)
+- その他の hidden: `displayNo=prwha1000`、`procType=1`、`delIRsvJKey`(キャンセル用トークン。使わない)、`selectCancel`(行ごと、空)、`selectIndex=-1`
+
+## 「予約の確認」以外のマイメニュー(参考。今回は使わない)
+
+| メニュー | action |
+|---|---|
+| 予約の確認 | `rsvWGetCancelRsvDataAction.do` |
+| 利用履歴(過去分) | `rsvWTransGetRsvDataListAction.do` |
+| 抽選申込みの確認 | `lotWTransLotCancelListAction.do` |
+| 抽選結果 | `lotWTransLotElectListAction.do` |
+| オンライン支払い | `rsvWRsvGetNotPaymentRsvDataListAction.do` |
+| ログアウト | `rsvWTransUserAttestationEndAction.do` |
