@@ -13,7 +13,7 @@ const fs = require('fs');
 const { scrapeAvailability } = require('./lib/scrape');
 const { filterTargetSlots } = require('./lib/filter');
 const { loadState, diffNewSlots, saveState } = require('./lib/state');
-const { sendLineMessage, formatMessage } = require('./lib/notify');
+const { sendLineMessage, formatMessage, warmupBookingServer } = require('./lib/notify');
 const { inMaintenanceWindow } = require('./lib/maintenance');
 
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -53,7 +53,9 @@ const DRY_RUN = process.argv.includes('--dry-run');
     if (DRY_RUN) {
       console.log('[dry-run] 送信される通知内容:\n' + formatMessage(newSlots));
     } else {
-      await sendLineMessage(newSlots);
+      // 予約支援サーバー(フェーズ2)を通知と同時に起こしておく(コールドスタート対策。失敗しても通知は送る)
+      const [sent] = await Promise.allSettled([sendLineMessage(newSlots), warmupBookingServer()]);
+      if (sent.status === 'rejected') throw sent.reason;
       console.log(`LINE通知を送信しました (${newSlots.length}件)`);
     }
   } else {
