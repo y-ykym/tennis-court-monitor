@@ -71,15 +71,35 @@ async function hidden(page, name) {
 
 async function saveDebug(page, debugDir, label) {
   if (!debugDir || page.isClosed()) return;
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const base = path.join(debugDir, `${stamp}-${label}`);
+  // HTML を先に書く(スクショが失敗しても HTML は残す)
   try {
     fs.mkdirSync(debugDir, { recursive: true });
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const base = path.join(debugDir, `${stamp}-${label}`);
-    await page.screenshot({ path: `${base}.png`, fullPage: true });
     fs.writeFileSync(`${base}.html`, await page.content());
   } catch {
-    /* デバッグ保存の失敗は無視 */
+    /* 無視 */
   }
+  try {
+    await page.screenshot({ path: `${base}.png`, fullPage: true, timeout: 15000 });
+  } catch {
+    /* 無視 */
+  }
+}
+
+// 予約内容確認画面で「目に見える reCAPTCHA(v2 チェックボックス)」が要求されているかを判定する。
+// v3(バッジのみ)なら false。判定材料: 促し文「チェックを入れて…」、badge の外にある可視の anchor iframe、g-recaptcha 枠の可視化
+async function recaptchaChallenge(page) {
+  return page.evaluate(() => {
+    const promptShown = /チェックを入れて/.test(document.body.innerText || '');
+    let boxVisible = false;
+    for (const f of document.querySelectorAll('iframe[src*="recaptcha/api2/anchor"]')) {
+      if (f.closest('.grecaptcha-badge')) continue; // v3 のバッジは対象外
+      const r = f.getBoundingClientRect();
+      if (r.width > 10 && r.height > 10) boxVisible = true;
+    }
+    return { promptShown, boxVisible };
+  });
 }
 
 // "2026-09-17" → { ymd: "20260917", label: "9月17日" }
@@ -252,8 +272,16 @@ export async function reserve(slot, credentials, options = {}) {
     log(`予約内容確認画面: ${heading} 人数${people} (${Date.now() - started}ms)`);
 
     if (dryRun) {
-      await saveDebug(page, debugDir, 'dry-run-confirm');
-      return done('dry_run', `予約内容確認画面まで到達(予約はしていません): ${facility} ${dateLabel} ${slot.startHour}時`, { facility });
+      // reCAPTCHA チャレンジ(v2 チェックボックス)が出るかを判定。少し待ってから見る(iframe の描画待ち)
+      await page.waitForTimeout(2500);
+      const rc = await recaptchaChallenge(page);
+      const challenge = rc.promptShown || rc.boxVisible;
+      log(`reCAPTCHA: ${challenge ? 'v2チャレンジあり(要チェック)' : 'v3のみ(チェック不要)'} (促し文=${rc.promptShown}, 可視box=${rc.boxVisible})`);
+      await saveDebug(page, debugDir, `dry-run-${challenge ? 'v2challenge' : 'v3ok'}`);
+      return done('dry_run', `予約内容確認画面まで到達(予約はしていません): ${facility} ${dateLabel} ${slot.startHour}時`, {
+        facility,
+        recaptcha: challenge ? 'v2_challenge' : 'v3_ok',
+      });
     }
 
     // 7. 「予約」→ 確認ダイアログ OK(dialog ハンドラ)→ サイトの JS が reCAPTCHA v3 トークンを取って送信 → 完了画面
