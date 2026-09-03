@@ -122,10 +122,12 @@ function startSession(token, payload) {
     log: (m) => log(`  ${m}`),
   };
   (async () => {
-    // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す
-    s.message = 'ログインして枠を選んでいます(高速経路)…';
-    let result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true });
-    if (result.status === 'error') {
+    // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す。
+    // 環境変数 FAST_PATH=0 で高速経路を使わず、最初から UI 操作(人間らしい操作)で進める(reCAPTCHA の重さの比較用)
+    const useFast = process.env.FAST_PATH !== '0';
+    s.message = useFast ? 'ログインして枠を選んでいます(高速経路)…' : 'ブラウザでログインして枠を選んでいます…';
+    let result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast });
+    if (useFast && result.status === 'error') {
       log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
       s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
       result = await reserve(slot, credentials, browserOptions);
