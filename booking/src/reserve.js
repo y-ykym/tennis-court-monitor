@@ -211,7 +211,13 @@ export async function reserve(slot, credentials, options = {}) {
     await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="submitLogin"]')]);
     const afterLogin = await pageId(page);
     if (afterLogin === 'pawab2100.jsp') {
-      throw new ReserveError('auth_error', `ログインが拒否されました: ${lastAlert() || '利用者番号・パスワード・カード有効期限を確認'}`);
+      // ログイン画面に戻された。サイトの一時的な通信エラー(「データ通信を正しく行うことができませんでした」)なら
+      // 認証の失敗ではないので、やり直し可能な error にする。それ以外(パスワード誤り等)は auth_error(やり直さない)
+      const reason = lastAlert();
+      if (/データ通信|時間をあけ|再度操作/.test(reason)) {
+        throw new ReserveError('error', `ログイン時にサイトの一時エラー: ${reason.replace(/\s+/g, ' ')}`);
+      }
+      throw new ReserveError('auth_error', `ログインが拒否されました: ${reason || '利用者番号・パスワード・カード有効期限を確認'}`);
     }
     if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', `ログイン後の画面が想定外です (${afterLogin})`);
     loggedIn = true;
