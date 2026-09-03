@@ -208,9 +208,14 @@ export async function reserve(slot, credentials, options = {}) {
     let facility = slot.park;
     if (fastInPage) {
       // 高速経路(ブラウザ内版): トップページを開き、その中で fetch によりログイン〜枠選択 → 確認画面へ POST
-      await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+      const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
       if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
-        throw new ReserveError('error', 'トップページにログインボタンがありません(メンテナンス中の可能性)');
+        // 何を受け取ったかを残す(サイトの 502・メンテナンス・IP による応答差の切り分け用)
+        const diag = await page
+          .evaluate(() => `${document.title} | ${document.body?.innerText.replace(/\s+/g, ' ').slice(0, 160)}`)
+          .catch(() => '(取得不可)');
+        await saveDebug(page, debugDir, 'top-unexpected');
+        throw new ReserveError('error', `トップページにログインボタンがありません (HTTP ${topRes?.status() ?? '?'}, ${await pageId(page)}: ${diag})`);
       }
       const r = await page.evaluate(inPageFlow, { slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour) }, credentials });
       if (!r.ok) throw new ReserveError(r.status, r.message);
@@ -238,9 +243,13 @@ export async function reserve(slot, credentials, options = {}) {
       log(`高速経路: 予約内容確認画面へ POST (${Date.now() - started}ms)`);
     } else {
       // 1. トップ → ログイン画面
-      await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+      const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
       if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
-        throw new ReserveError('error', 'トップページにログインボタンがありません(メンテナンス中の可能性)');
+        const diag = await page
+          .evaluate(() => `${document.title} | ${document.body?.innerText.replace(/\s+/g, ' ').slice(0, 160)}`)
+          .catch(() => '(取得不可)');
+        await saveDebug(page, debugDir, 'top-unexpected');
+        throw new ReserveError('error', `トップページにログインボタンがありません (HTTP ${topRes?.status() ?? '?'}, ${await pageId(page)}: ${diag})`);
       }
       await pause();
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="gRsvWTransUserLoginAction"]')]);
