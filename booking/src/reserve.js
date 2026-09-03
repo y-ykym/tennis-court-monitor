@@ -245,7 +245,15 @@ export async function reserve(slot, credentials, options = {}) {
         if (attempt >= 2) throw new ReserveError('error', `ホーム画面で公園の選択肢が出ませんでした: ${e.message.split('\n')[0]}`);
         log('ホーム画面の読み込みに失敗したため読み直します');
         alerts.length = 0;
-        await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+        // index.jsp を直接開くとログイン状態の画面に戻れないことがあるため、サイトの「ホーム」操作(form1 の POST)で読み直す
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+          page.evaluate(() => {
+            document.form1.action = gRsvWOpeHomeAction;
+            document.form1.submit();
+          }),
+        ]);
+        await pause(800, 1500);
         if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', 'ホームを読み直したらログインが外れていました');
       }
     }
