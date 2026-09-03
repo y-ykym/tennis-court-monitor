@@ -30,6 +30,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { reserve } from '../src/reserve.js';
+import { restoreProfile, saveProfile } from '../src/profile-store.js';
 import { verify } from '../src/token.js';
 
 const PORT = Number(process.env.PORT || 8080);
@@ -45,6 +46,9 @@ const DONE_KEEP_MS = 10 * 60 * 1000;
 // noVNC クライアント(npm の lib は CommonJS なので、esbuild でブラウザ用 ESM に束ねたもの。npm run build:novnc)
 const NOVNC_BUNDLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'rfb.js');
 const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
+// ブラウザプロファイルの保存先(GCS バケット名。無ければ持ち越さない)と、コンテナ内の置き場所
+const PROFILE_BUCKET = process.env.PROFILE_BUCKET || '';
+const PROFILE_DIR = '/tmp/profile';
 
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 
@@ -122,6 +126,12 @@ function startSession(token, payload) {
     log: (m) => log(`  ${m}`),
   };
   (async () => {
+    // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
+    if (PROFILE_BUCKET) {
+      s.message = 'ブラウザを準備しています…';
+      await restoreProfile(PROFILE_BUCKET, PROFILE_DIR, (m) => log(`  ${m}`));
+      browserOptions.userDataDir = PROFILE_DIR;
+    }
     // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す。
     // 環境変数 FAST_PATH=0 で高速経路を使わず、最初から UI 操作(人間らしい操作)で進める(reCAPTCHA の重さの比較用)
     const useFast = process.env.FAST_PATH !== '0';
@@ -146,7 +156,8 @@ function startSession(token, payload) {
       s.message = e.message;
       log(`予約フロー例外: ${e.message}`);
     })
-    .finally(() => {
+    .finally(async () => {
+      if (PROFILE_BUCKET) await saveProfile(PROFILE_BUCKET, PROFILE_DIR, (m) => log(`  ${m}`));
       setTimeout(() => {
         if (session === s) session = null;
       }, DONE_KEEP_MS);

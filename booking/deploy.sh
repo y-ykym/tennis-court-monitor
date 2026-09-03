@@ -53,7 +53,7 @@ gcloud run deploy "$SERVICE" \
   --timeout 3600 \
   --concurrency 20 \
   --port 8080 \
-  --set-env-vars "SCREEN_W=600,SCREEN_H=1000" \
+  --update-env-vars "SCREEN_W=600,SCREEN_H=1000,PROFILE_BUCKET=${PROJECT}-profile" \
   --set-secrets "$SECRETS"
 
 URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format 'value(status.url)')
