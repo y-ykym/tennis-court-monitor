@@ -30,7 +30,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { reserve } from '../src/reserve.js';
-import { prepareConfirmPage } from '../src/site-http.js';
 import { verify } from '../src/token.js';
 
 const PORT = Number(process.env.PORT || 8080);
@@ -123,19 +122,10 @@ function startSession(token, payload) {
     log: (m) => log(`  ${m}`),
   };
   (async () => {
-    // まず高速経路(HTTP でログイン〜枠選択)。一時エラーなら全ブラウザ方式に切り替える
-    let prepared = null;
-    try {
-      s.message = 'ログインして枠を選んでいます(高速経路)…';
-      prepared = await prepareConfirmPage(slot, credentials, { log: (m) => log(`  [http] ${m}`) });
-    } catch (e) {
-      if (e.status === 'auth_error' || e.status === 'taken') return { status: e.status, message: e.message, elapsedMs: Date.now() - s.startedAt };
-      log(`  高速経路を諦めてブラウザ方式に切り替え: ${e.message}`);
-    }
-    s.message = prepared ? '予約内容確認画面を開いています…' : 'ブラウザでログインして枠を選んでいます…';
-    let result = await reserve(slot, credentials, { ...browserOptions, prepared });
-    // 高速経路のセッションをサイトが認識しなかった等の一時エラーは、全ブラウザ方式で1回だけやり直す
-    if (prepared && result.status === 'error') {
+    // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す
+    s.message = 'ログインして枠を選んでいます(高速経路)…';
+    let result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true });
+    if (result.status === 'error') {
       log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
       s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
       result = await reserve(slot, credentials, browserOptions);
@@ -338,6 +328,7 @@ const server = http.createServer((req, res) => {
       const link = (who) => `/book?token=${encodeURIComponent(token)}&person=${who}`;
       return send(
         res,
+        200,
         page(
           '誰の予約にしますか',
           `<div class="card"><h1>誰の予約にしますか?</h1>
