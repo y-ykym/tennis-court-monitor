@@ -153,3 +153,143 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
 | 抽選結果 | `lotWTransLotElectListAction.do` |
 | オンライン支払い | `rsvWRsvGetNotPaymentRsvDataListAction.do` |
 | ログアウト | `rsvWTransUserAttestationEndAction.do` |
+
+---
+
+# フェーズ2 追加調査: 予約導線・reCAPTCHA・セッション (2026-09-03 公開ページとJSの静的解析)
+
+ログインせずに分かる範囲の調査。ログイン後の画面(「予約する」の先)は `booking/scripts/explore-flow.mjs` で本人ログインのうえ調べる。
+
+## 予約導線の仕組み(`prwrc2000.js`)
+
+- 空きセル(`td#YYYYMMDD_NN`)の onclick は **ログイン時のみ** `setReserv(id, bldCd, instCd, useDay, startTime, endTime, tzoneNo)`。
+  未ログインだと `showAlert(msgNotLoggedIn)`(「予約される方はログインを行ってください。」)
+- `setReserv` は Ajax `POST /web/rsvWOpeInstReservAjaxAction.do`
+  (`displayNo=prwrc2000, bldCd, instCd, useDay, startTime, endTime, tzoneNo, akiNum, selectNum`)で
+  **セッション上の選択状態をトグル**し、応答JSON `{selectState, selectNum, akiNum, divFldFg}` で
+  セルを「選択中」(`calendar_check_outline.svg`)に描き替え、`form1.selectSize` に選択件数を入れる
+- 「予約する」ボタンは**ログイン時のみサーバ描画**(未ログインのHTMLに `checkSelect` は無い)。
+  `checkSelect(form1, gRsvWOpeReservedApplyAction)`:
+  1. `penalty==1` のとき、選択枠に `penaltyday`(=3)日以内のものがあれば confirm(「…キャンセルを行った場合、ペナルティが付与されますが、よろしいですか？」)
+  2. `selectSize==0` なら alert(「施設を選択して下さい。」)
+  3. `applyFlg=1` にして `POST /web/rsvWOpeReservedApplyAction.do`(form1 の hidden 一式)→ 申込画面へ(**この先は未調査**)
+- 一操作で予約できるのは2件まで(ご利用ガイド・利用案内)。フェーズ2は常に1件だけ選択する
+
+## reCAPTCHA の方式
+
+- ログイン画面(`pawab2100.js`)の組み込みは **reCAPTCHA v3(見えない方式)**:
+  `grecaptcha.execute(gRecaptchaSiteKey, {action: gRecaptchaActionName})` でトークンを取り hidden `recaptchaToken` に入れて送信。
+  チェックボックスや画像選択は出ない。現在は `gRecaptchaActive = false` で無効
+- 予約フロー側(申込・確認画面)に reCAPTCHA があるかは**ログイン後の画面なので未確認**。
+  同じ v3 方式なら「人間が解く」工程は存在せず、人間の操作は「確定を押す」だけになる
+  (実ブラウザで本物のページのボタンを押す限り、v3のスコア判定を回避・突破する行為には当たらない)
+
+## セッションの引き継ぎは不可(noVNC 方式が必要な根拠)
+
+- `JSESSIONID` Cookie は `Path=/web; HttpOnly; Secure; SameSite=None`
+- URL でのセッション指定(`…Action.do;jsessionid=XXX` / `;JSESSIONID=` / `?jsessionid=`)は**すべて不可**:
+  エラー画面(`pawfa1000.jsp`)が返り、新しい JSESSIONID が発行される
+- → サーバ側で作ったログイン済みセッションをスマホのブラウザに渡す手段はない。
+  「自動遷移した実ブラウザの画面をそのまま見せる(noVNC)」方式が必要
+- JS側のタイマー: `paw_common.js` の `startInitTimer()` は空実装。ログイン画面だけ `gTimerValue=300`(5分)。
+  サーバ側のセッションタイムアウトは匿名セッションで実測(結果は下記)
+
+## 利用案内(規約に相当する文書)の確認結果
+
+- サイト内に「利用規約」ページは無い。フッターの「都立公園のスポーツ施設 利用案内」
+  (https://www.kensetsu.metro.tokyo.lg.jp/documents/d/kensetsu/080601suporekuriyouannai 、PDF 18ページ)が
+  利用条件を定める文書。「ご利用ガイド」(`pawcc1000.jsp`)は対応ブラウザと手続きの説明のみ
+- **自動操作・プログラム利用・ボットを明示的に禁じる記述は無い**(「自動」「プログラム」「ボット」「不正」は0件)
+- 関係しうる条項(§5 システム利用にあたっての注意事項):
+  - パスワードは第三者に教えない。利用者登録は本人が管理し、第三者との貸し借りをしない
+  - 予約者本人が利用する予定の予約以外を申し込まない(予約・利用状況により登録取消・利用停止あり)
+  - 一操作での予約件数は2件まで。同一時間の複数予約は不可
+- ペナルティ(§4): テニスは利用日の4日前までにキャンセル。以後は直前キャンセル1点、無断キャンセル2点。
+  累積2点で30日、3点で60日、4点で1年の利用停止。ポイントは1年で失効
+- 空き施設予約の受付期間: 利用前月22日 0:00 〜 利用当日の利用開始時刻(先着順)
+- 対応ブラウザ: Chrome / Firefox / Edge / Safari(macOS) / Chrome for Android / iOS Safari の最新版
+
+## 画面ID(追加)
+
+| 画面 | JSP |
+|---|---|
+| 空き状況(施設ごと) | `prwrc2000.jsp` |
+| ご利用ガイド | `pawcc1000.jsp` |
+| サイトマップ | `pawag1000.jsp` |
+| エラー画面 | `pawfa1000.jsp` |
+
+## セッション寿命の実測結果(2026-09-03、匿名セッション。ログイン済みも同じサーバ設定と推定)
+
+作成直後に1回叩いて有効を確認した匿名セッションを、放置時間ごとに3本ずつ用意し、放置後に1回だけ週JSONを取得。
+切れた場合はエラー画面(`pawfa1000.jsp`)が返る(= セッション未認識時と同じ応答)。
+
+| 放置時間 | 有効 / 3本 |
+|---|---|
+| 5分 | 3 |
+| 10分 | 3 |
+| 15分 | 1 |
+| 20分(実測21分) | 1 |
+| 30分 | 0 |
+
+- **10分以内なら確実に有効、15分を超えると半分以上が切れ、30分では全滅**。サーバ側のタイムアウトは
+  15分前後(期限切れ掃除のタイミングでばらつく)とみるのが妥当
+- 設計上の扱い: **セッションの安全な寿命は10分**。フェーズ2の自動遷移(30〜60秒)には十分だが、
+  noVNC 表示後に人間が放置すると切れるので、待機画面に「表示後は数分以内に確定」の注意を出す
+- JSESSIONID の末尾(ノード識別子)は常に `c056_web_instance` の1種類で、複数サーバの差ではない
+- 測定スクリプトは Claude のスクラッチ領域にあり、リポジトリには含めていない(必要なら
+  「index.jsp → 検索POST → 週JSON」の3リクエストで再現できる)
+
+## 予約フローの実機確認結果(2026-09-03、explore-flow.mjs で本人ログインのうえ確認)
+
+亀戸中央公園 9/9 15時(空き4面)で、「予約」ボタンの次の画面まで進めて停止(確定は押していない)。
+
+### 画面遷移(ログイン後)
+
+1. ホーム(`pawab2000.jsp`)。ログイン直後に **「東京都からのお知らせ」モーダル(`#modal-news`)が出ることがある**
+   (2回目の実行で出現。1回目は出なかった)。自動操作ではこれを閉じてから検索フォームを触る
+2. 検索 → 空き状況(`prwrc2000.jsp`)。ログイン時はセルの onclick が `setReserv(...)` になり、
+   「予約」ボタン(`button#btn-go`, `checkSelect(form1, gRsvWOpeReservedApplyAction)`)と「選択解除」(`akireset`)が描画される
+3. セルクリック → Ajax で「選択中」(`S_=1`, `form1.selectSize=1`)。**この時点で他のセッションから見た空き面数は変わらない(仮押さえではない)**
+4. 「予約」→ `POST rsvWOpeReservedApplyAction.do` → **予約内容確認画面(`prwea1000.jsp`、タイトルは「予約内容一覧画面」)**。
+   **この画面に到達しても空き面数は変わらない(仮押さえではない)**。ログアウトすれば選択は消える
+5. 予約内容確認画面が**最後の画面**。ここで「予約」を押すと予約が成立する(次の画面は完了画面と推定。未確認)
+
+### 予約内容確認画面(`prwea1000.jsp`)の構造
+
+- 表示: 公園名・利用日・利用時間・施設(テニス（人工芝）)・利用面数(1面)
+- 入力(必須): **種目** `select#purpose0[name=purpose]`(初期値でテニス（人工芝）が選択済み)、
+  **利用人数** `input#peoples0[name=applyNum]`(半角数字、`MaxApplyNum=9999`)
+- ボタン: **予約** `button#btn-go` → `checkTextValue(form1, gRsvWInstRsvApplyAction, '1', event)`、
+  **キャンセル** → `rsvreset(form1, gRsvWOpeReservedApplyBackAction)`(confirm「予約申込処理を中止します。よろしいですか？」)
+- 「予約」の処理(`js/prwea1000.js`): 入力検証 → `showConfirm("予約申込処理を行います。よろしいですか？")` →
+  **reCAPTCHA v3** `grecaptcha.execute(siteKey, {action:'webRsv'})` でトークンを hidden `recaptchaToken` に入れる →
+  `POST /web/rsvWInstRsvApplyAction.do`(form1 一式。`insIRsvJKey` という画面ごとのトークン付き)
+- **reCAPTCHA はこの画面で有効(`gRecaptchaActive = true`)**。v3(見えない方式)なので画面右下にバッジが出るだけで、
+  人間がチェックや画像選択をする工程は無い。人間の操作は「人数を入れて『予約』→ 確認ダイアログでOK」
+- hidden: `displayNo=prwea1000`, `stimeZoneNo/etimeZoneNo=40`(時間帯), `ppsdCd=1000`, `ppsCd=1030`, `field=1面`,
+  `selectRsvDetailNo=0`, `insIRsvJKey`(128桁)
+- エラーメッセージ定義: 一度に予約できるのは2件まで(e412250)、人数は半角数字(e410200)、収容人数超過(e410190)
+
+### フェーズ2 設計への反映
+
+- **自動遷移の止めどころ = 予約内容確認画面**。ここまで(ログイン→検索→セル選択→「予約」)を自動化し、
+  種目(既定で選択済み)と人数の入力までは自動で埋めてよい。**「予約」ボタンと確認ダイアログのOKは人間**
+- reCAPTCHA v3 は実ブラウザで人間がボタンを押したときにサイトのJSが自動で動く。回避・偽装は一切しない
+- 選択〜確認画面到達は仮押さえにならないので、人間が確定しなければ他の利用者に影響しない。
+  ただしセッションは10分で切れるので、noVNC 表示後は速やかに操作してもらう
+
+## 通しテストの結果(2026-09-03、explore-flow.mjs --through。Playwright が「予約」を押した)
+
+亀戸中央公園 9/17 15時(空き4面)で、予約内容確認画面の「予約」クリックと確認ダイアログ OK をスクリプトが行った。
+
+- **予約は成立した**。遷移先は **施設予約完了画面(`prwec1000.jsp`)**。本文に「以下の内容で予約しました。」、
+  予約番号(10桁)、時間、施設、種目、利用人数、利用料金(2時間1面 2,600円)が表示され、
+  「オンライン支払いへ」(`gRsvCreditInitListAction`)と「ホームへ」のボタンがある
+- **reCAPTCHA v3 は Playwright 制御の headful Chromium からのクリックでも通った**(チャレンジ表示なし、エラーなし)。
+  ログイン → 検索 → 選択 → 予約 → 完了まで約40秒(ログイン後の自動部分は約20秒)
+- 完了後、他セッションから見た空き面数は 4 → 3 に減った(予約成立の裏付け)
+- 予約の確認・取消画面(`prwha1000.jsp`)の各行「キャンセル」は `rsvcancel(form1, gRsvWCancelRsvAction, 行index)` で、
+  confirm「選択した施設予約申込みをキャンセルしますか？」→ `POST rsvWCancelRsvAction.do`。
+  **Playwright のダイアログリスナーが confirm を自動で閉じると人間がキャンセルできなくなる**ので、
+  人間に画面を渡すときはダイアログの扱いに注意(explore-flow.mjs では「予約申込」以外の confirm をキャンセル扱いにしていたため、
+  テスト予約の取消は通常のブラウザから行った)

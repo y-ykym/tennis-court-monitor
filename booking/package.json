@@ -1,0 +1,15 @@
+{
+  "name": "tennis-booking-assist",
+  "version": "0.1.0",
+  "private": true,
+  "description": "フェーズ2 予約支援(半自動予約)。LINEの「予約する」ボタンから予約直前画面まで自動遷移し、reCAPTCHAと確定だけ人間が行う",
+  "type": "module",
+  "scripts": {
+    "reserve": "node scripts/reserve-cli.mjs",
+    "explore": "node scripts/explore-flow.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

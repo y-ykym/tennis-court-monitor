@@ -4,3 +4,6 @@ debug/
 worker/.dev.vars
 worker/node_modules/
 worker/.wrangler/
+booking/node_modules/
+booking/.explore/
+booking/.debug/
