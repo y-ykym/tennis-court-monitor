@@ -12,6 +12,8 @@
 //     debugDir: null,        失敗時にスクリーンショットと HTML を保存する場所(個人情報を含むので共有しない)
 //     onConfirm: null,       半自動用。予約内容確認画面(人数入力後)で呼ばれ、人間の操作が終わるまで待つ関数。
 //                            渡すと「予約」は押さない(人間が押す)。({ page, facility, dateLabel, slot, people })
+//     prepared: null,        高速経路(src/site-http.js の prepareConfirmPage の結果)。渡すとログイン〜枠選択を飛ばし、
+//                            Cookie を移植して予約内容確認画面の POST から始める
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //   }
@@ -127,7 +129,7 @@ async function parseResultTable(page) {
 }
 
 export async function reserve(slot, credentials, options = {}) {
-  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null } = options;
+  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, prepared = null } = options;
   const started = Date.now();
   const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...extra });
 
@@ -201,104 +203,124 @@ export async function reserve(slot, credentials, options = {}) {
 
   let loggedIn = false;
   try {
-    // 1. トップ → ログイン画面
-    await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
-    if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
-      throw new ReserveError('error', 'トップページにログインボタンがありません(メンテナンス中の可能性)');
-    }
-    await pause();
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="gRsvWTransUserLoginAction"]')]);
-    if ((await pageId(page)) !== 'pawab2100.jsp') throw new ReserveError('error', `ログイン画面が想定外です (${await pageId(page)})`);
-
-    // 2. ログイン(サイトの submitLogin() がパスワードの分解と reCAPTCHA v3 の処理を行う)
-    await humanType('input[name="userId"]', credentials.userId);
-    await humanType('input[name="password"]', credentials.password);
-    await pause();
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="submitLogin"]')]);
-    const afterLogin = await pageId(page);
-    if (afterLogin === 'pawab2100.jsp') {
-      // ログイン画面に戻された。サイトの一時的な通信エラー(「データ通信を正しく行うことができませんでした」)なら
-      // 認証の失敗ではないので、やり直し可能な error にする。それ以外(パスワード誤り等)は auth_error(やり直さない)
-      const reason = lastAlert();
-      if (/データ通信|時間をあけ|再度操作/.test(reason)) {
-        throw new ReserveError('error', `ログイン時にサイトの一時エラー: ${reason.replace(/\s+/g, ' ')}`);
+    let facility = slot.park;
+    if (prepared) {
+      // 高速経路: HTTP で作ったログイン済みセッションの Cookie を移植し、予約内容確認画面へ進む POST だけをブラウザで行う
+      await context.addCookies(prepared.cookies);
+      facility = prepared.facility || slot.park;
+      loggedIn = true;
+      const escAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      const inputs = Object.entries(prepared.applyFields)
+        .map(([k, v]) => `<input type="hidden" name="${escAttr(k)}" value="${escAttr(v)}">`)
+        .join('');
+      await page.setContent(
+        `<form id="f" method="post" action="${BASE_URL}/web/rsvWOpeReservedApplyAction.do" accept-charset="Shift_JIS">${inputs}</form>`
+      );
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+        page.evaluate(() => document.getElementById('f').submit()),
+      ]);
+      log(`高速経路: 予約内容確認画面へ POST (${Date.now() - started}ms)`);
+    } else {
+      // 1. トップ → ログイン画面
+      await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+      if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
+        throw new ReserveError('error', 'トップページにログインボタンがありません(メンテナンス中の可能性)');
       }
-      throw new ReserveError('auth_error', `ログインが拒否されました: ${reason || '利用者番号・パスワード・カード有効期限を確認'}`);
-    }
-    if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', `ログイン後の画面が想定外です (${afterLogin})`);
-    loggedIn = true;
-    log(`ログイン完了 (${Date.now() - started}ms)`);
+      await pause();
+      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="gRsvWTransUserLoginAction"]')]);
+      if ((await pageId(page)) !== 'pawab2100.jsp') throw new ReserveError('error', `ログイン画面が想定外です (${await pageId(page)})`);
 
-    // 3. ログイン直後の「お知らせ」等のモーダルを閉じる
-    const closed = await page.evaluate(() => {
-      const open = [...document.querySelectorAll('.modal.show')];
-      for (const m of open) window.jQuery?.(m).modal('hide');
-      return open.map((m) => m.id);
-    });
-    if (closed.length) {
-      log(`モーダルを閉じました: ${closed.join(', ')}`);
-      await page.waitForSelector('.modal-backdrop', { state: 'detached', timeout: 5000 }).catch(() => {});
-    }
-
-    // 4. 空き検索(種目 → 公園の順。同期先の hidden も揃ってから検索する。docs/site-notes.md「ハマりどころ」)
-    //    ホーム画面の Ajax(種目→公園の選択肢)が失敗して「データ通信を正しく行うことができませんでした」が出ることがあるので、
-    //    公園の選択肢が出てこなければホームを読み直して1回だけやり直す
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await page.fill('#daystart-home', slot.date);
-        await page.selectOption('#purpose-home', PURPOSE_VALUE);
-        await page.waitForFunction(
-          (code) => [...document.querySelectorAll('#bname-home option')].some((o) => o.value === code),
-          slot.park,
-          { timeout: 15000 }
-        );
-        break;
-      } catch (e) {
-        if (attempt >= 2) throw new ReserveError('error', `ホーム画面で公園の選択肢が出ませんでした: ${e.message.split('\n')[0]}`);
-        log('ホーム画面の読み込みに失敗したため読み直します');
-        alerts.length = 0;
-        // index.jsp を直接開くとログイン状態の画面に戻れないことがあるため、サイトの「ホーム」操作(form1 の POST)で読み直す
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-          page.evaluate(() => {
-            document.form1.action = gRsvWOpeHomeAction;
-            document.form1.submit();
-          }),
-        ]);
-        await pause(800, 1500);
-        if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', 'ホームを読み直したらログインが外れていました');
+      // 2. ログイン(サイトの submitLogin() がパスワードの分解と reCAPTCHA v3 の処理を行う)
+      await humanType('input[name="userId"]', credentials.userId);
+      await humanType('input[name="password"]', credentials.password);
+      await pause();
+      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="submitLogin"]')]);
+      const afterLogin = await pageId(page);
+      if (afterLogin === 'pawab2100.jsp') {
+        // ログイン画面に戻された。サイトの一時的な通信エラー(「データ通信を正しく行うことができませんでした」)なら
+        // 認証の失敗ではないので、やり直し可能な error にする。それ以外(パスワード誤り等)は auth_error(やり直さない)
+        const reason = lastAlert();
+        if (/データ通信|時間をあけ|再度操作/.test(reason)) {
+          throw new ReserveError('error', `ログイン時にサイトの一時エラー: ${reason.replace(/\s+/g, ' ')}`);
+        }
+        throw new ReserveError('auth_error', `ログインが拒否されました: ${reason || '利用者番号・パスワード・カード有効期限を確認'}`);
       }
-    }
-    await page.selectOption('#bname-home', slot.park);
-    await page.waitForFunction(
-      (code) => document.querySelector('#bname')?.value === code && document.querySelector('#selectAreaBcd')?.value === code,
-      slot.park
-    );
-    await pause();
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
-    if ((await pageId(page)) !== 'prwrc2000.jsp' || (await hidden(page, 'selectBldCd')) !== slot.park) {
-      // セッション未認識のまま 200 が返るパターン(公園未指定の空き状況画面)
-      throw new ReserveError('error', `検索結果画面が想定外です (${await pageId(page)}, 公園=${await hidden(page, 'selectBldCd')})`);
-    }
-    const facility = (await hidden(page, 'selectBldName')) || slot.park;
-    await page.waitForSelector(`#week-info td[id^="${ymd.slice(0, 6)}"]`);
-    log(`空き状況画面 ${facility} (${Date.now() - started}ms)`);
+      if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', `ログイン後の画面が想定外です (${afterLogin})`);
+      loggedIn = true;
+      log(`ログイン完了 (${Date.now() - started}ms)`);
 
-    // 5. 対象セル(id が数字始まりなので [id="..."] で指定)
-    const cell = await page.$(`[id="${cellId}"]`);
-    if (!cell) throw new ReserveError('error', `対象セル ${cellId} が週表示にありません`);
-    const vacant = await page.$eval(`[id="A_${cellId}"]`, (e) => e.value).catch(() => null);
-    if (vacant === null || Number(vacant) < 1) {
-      const alt = await cell.$eval('img', (e) => e.alt).catch(() => '不明');
-      return done('taken', `その枠は空きではありませんでした(${alt})`);
-    }
-    await humanClick(`[id="${cellId}"]`);
-    await page.waitForFunction((id) => document.getElementById(`S_${id}`)?.value === '1', cellId, { timeout: 15000 });
-    log(`枠を選択 (空き${vacant}面, ${Date.now() - started}ms)`);
+      // 3. ログイン直後の「お知らせ」等のモーダルを閉じる
+      const closed = await page.evaluate(() => {
+        const open = [...document.querySelectorAll('.modal.show')];
+        for (const m of open) window.jQuery?.(m).modal('hide');
+        return open.map((m) => m.id);
+      });
+      if (closed.length) {
+        log(`モーダルを閉じました: ${closed.join(', ')}`);
+        await page.waitForSelector('.modal-backdrop', { state: 'detached', timeout: 5000 }).catch(() => {});
+      }
 
-    // 6. 「予約」→ 予約内容確認画面(prwea1000)
-    await pause();
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
+      // 4. 空き検索(種目 → 公園の順。同期先の hidden も揃ってから検索する。docs/site-notes.md「ハマりどころ」)
+      //    ホーム画面の Ajax(種目→公園の選択肢)が失敗して「データ通信を正しく行うことができませんでした」が出ることがあるので、
+      //    公園の選択肢が出てこなければホームを読み直して1回だけやり直す
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await page.fill('#daystart-home', slot.date);
+          await page.selectOption('#purpose-home', PURPOSE_VALUE);
+          await page.waitForFunction(
+            (code) => [...document.querySelectorAll('#bname-home option')].some((o) => o.value === code),
+            slot.park,
+            { timeout: 15000 }
+          );
+          break;
+        } catch (e) {
+          if (attempt >= 2) throw new ReserveError('error', `ホーム画面で公園の選択肢が出ませんでした: ${e.message.split('\n')[0]}`);
+          log('ホーム画面の読み込みに失敗したため読み直します');
+          alerts.length = 0;
+          // index.jsp を直接開くとログイン状態の画面に戻れないことがあるため、サイトの「ホーム」操作(form1 の POST)で読み直す
+          await Promise.all([
+            page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+            page.evaluate(() => {
+              document.form1.action = gRsvWOpeHomeAction;
+              document.form1.submit();
+            }),
+          ]);
+          await pause(800, 1500);
+          if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', 'ホームを読み直したらログインが外れていました');
+        }
+      }
+      await page.selectOption('#bname-home', slot.park);
+      await page.waitForFunction(
+        (code) => document.querySelector('#bname')?.value === code && document.querySelector('#selectAreaBcd')?.value === code,
+        slot.park
+      );
+      await pause();
+      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
+      if ((await pageId(page)) !== 'prwrc2000.jsp' || (await hidden(page, 'selectBldCd')) !== slot.park) {
+        // セッション未認識のまま 200 が返るパターン(公園未指定の空き状況画面)
+        throw new ReserveError('error', `検索結果画面が想定外です (${await pageId(page)}, 公園=${await hidden(page, 'selectBldCd')})`);
+      }
+      facility = (await hidden(page, 'selectBldName')) || slot.park;
+      await page.waitForSelector(`#week-info td[id^="${ymd.slice(0, 6)}"]`);
+      log(`空き状況画面 ${facility} (${Date.now() - started}ms)`);
+
+      // 5. 対象セル(id が数字始まりなので [id="..."] で指定)
+      const cell = await page.$(`[id="${cellId}"]`);
+      if (!cell) throw new ReserveError('error', `対象セル ${cellId} が週表示にありません`);
+      const vacant = await page.$eval(`[id="A_${cellId}"]`, (e) => e.value).catch(() => null);
+      if (vacant === null || Number(vacant) < 1) {
+        const alt = await cell.$eval('img', (e) => e.alt).catch(() => '不明');
+        return done('taken', `その枠は空きではありませんでした(${alt})`);
+      }
+      await humanClick(`[id="${cellId}"]`);
+      await page.waitForFunction((id) => document.getElementById(`S_${id}`)?.value === '1', cellId, { timeout: 15000 });
+      log(`枠を選択 (空き${vacant}面, ${Date.now() - started}ms)`);
+
+      // 6. 「予約」→ 予約内容確認画面(prwea1000)
+      await pause();
+      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
+    }
     if ((await pageId(page)) !== 'prwea1000.jsp') {
       // 空き状況画面が返ってくる = サイトがセッション上の選択を認識しなかった(ロードバランサ配下の癖)可能性が高い。
       // 呼び出し側の再試行(新しいセッション)で回復する
