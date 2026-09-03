@@ -12,6 +12,7 @@
     "server": "node server/server.mjs"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.22.0",
     "@novnc/novnc": "^1.5.0",
     "playwright": "^1.62.1",
     "ws": "^8.21.3"

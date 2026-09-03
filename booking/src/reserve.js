@@ -16,6 +16,7 @@
 //                            予約内容確認画面の POST まで進める(src/site-inpage.js)。UI 操作の待ちを省く
 //     prepared: null,        高速経路(Node HTTP 版。src/site-http.js)。Cloud Run では通信の出口が分かれて失敗することがあるため非推奨
 //     channel: undefined,    'chrome' で Google Chrome 安定版を使う(既定は環境変数 BROWSER_CHANNEL)。無ければ Chromium
+//     userDataDir: null,     渡すとそのディレクトリをブラウザプロファイルとして使う(Cookie 等を持ち越す)
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //   }
@@ -148,21 +149,38 @@ export async function reserve(slot, credentials, options = {}) {
   // ブラウザ本体: BROWSER_CHANNEL=chrome なら Google Chrome 安定版(reCAPTCHA の判定が素の Chromium より穏やかになる見込み)。
   // 入っていない環境では Playwright 同梱の Chromium に戻す
   const channel = options.channel ?? process.env.BROWSER_CHANNEL ?? undefined;
-  let browser;
-  try {
-    browser = await chromium.launch({ headless, channel: channel || undefined, args: options.launchArgs || [] });
-  } catch (e) {
-    if (!channel) throw e;
-    log(`${channel} を起動できないため同梱の Chromium を使います: ${e.message.split('\n')[0]}`);
-    browser = await chromium.launch({ headless, args: options.launchArgs || [] });
-  }
-  log(`ブラウザ: ${browser.version()}${channel ? ` (channel=${channel})` : ''}`);
-  const context = await browser.newContext({
+  // 起動オプションは環境変数でも足せる(運用側の判断で設定する。値はここでは決めない):
+  //   CHROME_ARGS         追加の起動引数(空白区切り)
+  //   IGNORE_DEFAULT_ARGS Playwright 既定の起動引数から外すもの(空白区切り)
+  const envArgs = (process.env.CHROME_ARGS || '').split(/\s+/).filter(Boolean);
+  const ignoreDefaultArgs = (process.env.IGNORE_DEFAULT_ARGS || '').split(/\s+/).filter(Boolean);
+  const launchBase = { headless, args: ['--lang=ja-JP', ...envArgs, ...(options.launchArgs || [])] };
+  if (ignoreDefaultArgs.length) launchBase.ignoreDefaultArgs = ignoreDefaultArgs;
+  const contextBase = {
     // viewport: null を渡すとウィンドウサイズに従う(noVNC で画面ごと配信するとき用)
     viewport: 'viewport' in options ? options.viewport : { width: 1000, height: 900 },
     locale: 'ja-JP',
     timezoneId: 'Asia/Tokyo',
-  });
+  };
+  // userDataDir を渡すとプロファイル(Cookie 等)を持ち越す永続コンテキストで起動する(src/profile-store.js で保存・復元)
+  const launchWith = async (ch) => {
+    if (options.userDataDir) {
+      const ctx = await chromium.launchPersistentContext(options.userDataDir, { ...launchBase, ...contextBase, channel: ch || undefined });
+      return { browser: ctx.browser(), context: ctx };
+    }
+    const br = await chromium.launch({ ...launchBase, channel: ch || undefined });
+    return { browser: br, context: await br.newContext(contextBase) };
+  };
+  let browser;
+  let context;
+  try {
+    ({ browser, context } = await launchWith(channel));
+  } catch (e) {
+    if (!channel) throw e;
+    log(`${channel} を起動できないため同梱の Chromium を使います: ${e.message.split('\n')[0]}`);
+    ({ browser, context } = await launchWith(undefined));
+  }
+  log(`ブラウザ: ${browser?.version?.() ?? '(persistent)'}${channel ? ` (channel=${channel})` : ''}${options.userDataDir ? ' プロファイル持ち越し' : ''}${envArgs.length || ignoreDefaultArgs.length ? ' 起動オプション指定あり' : ''}`);
   // サイトの静的ファイル配信が遅い(1ファイル3〜7秒)ため、予約に不要な画像・フォント・都のチャットボットは読み込まない。
   // サイト本体の JS と Google の reCAPTCHA はそのまま通す
   // ※reCAPTCHA(google.com / gstatic.com)の画像・フォントは止めない(画像選択のチャレンジが表示できなくなる)
@@ -173,7 +191,7 @@ export async function reserve(slot, credentials, options = {}) {
     const siteAsset = url.startsWith(BASE_URL) && ['image', 'font', 'media'].includes(type);
     return siteAsset ? route.abort() : route.continue();
   });
-  const page = await context.newPage();
+  const page = context.pages()[0] || (await context.newPage());
   page.setDefaultTimeout(STEP_TIMEOUT);
 
   // 人間らしい操作(reCAPTCHA v3 のスコア対策)。実際にマウスを動かして押し、入力に間を置くだけで、
@@ -470,7 +488,8 @@ export async function reserve(slot, credentials, options = {}) {
         log(`ログアウト失敗(無視): ${e.message.split('\n')[0]}`);
       }
     }
-    await browser.close().catch(() => {});
+    await context.close().catch(() => {});
+    await browser?.close?.().catch(() => {});
   }
 }
 
