@@ -70,10 +70,27 @@ jobs:
           cache: 'npm'
           cache-dependency-path: booking/package-lock.json
 
-      - name: 依存パッケージと Chromium をインストール
+      - name: 依存パッケージをインストール
+        run: npm ci
+
+      # Chromium 本体(約150MB)は Playwright のバージョンごとにキャッシュして、毎回のダウンロード(約40秒)を省く
+      - name: Playwright のバージョンを取得
+        id: pw
+        run: echo "version=$(node -e "console.log(require('playwright/package.json').version)")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ steps.pw.outputs.version }}
+
+      - name: Chromium をインストール
         run: |
-          npm ci
-          npx playwright install --with-deps chromium
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
 
       - name: 予約実行
         id: reserve
