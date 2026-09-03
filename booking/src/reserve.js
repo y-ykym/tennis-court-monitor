@@ -152,6 +152,29 @@ export async function reserve(slot, credentials, options = {}) {
   const page = await context.newPage();
   page.setDefaultTimeout(STEP_TIMEOUT);
 
+  // 人間らしい操作(reCAPTCHA v3 のスコア対策)。実際にマウスを動かして押し、入力に間を置くだけで、
+  // ブラウザの正体やトークンの偽装はしない(検出回避ではなく、実際に自然に操作する)。
+  // options.humanize=false で従来どおりの機械操作(速度比較用)
+  const humanize = options.humanize !== false;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pause = (a = 250, b = 700) => (humanize ? page.waitForTimeout(rand(a, b)) : Promise.resolve());
+  async function humanClick(selector) {
+    if (!humanize) return page.click(selector);
+    const el = page.locator(selector).first();
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    const box = await el.boundingBox().catch(() => null);
+    if (box) {
+      await page.mouse.move(box.x + box.width / 2 + rand(-6, 6), box.y + box.height / 2 + rand(-4, 4), { steps: Math.round(rand(6, 18)) });
+    }
+    await pause(150, 450);
+    await el.click();
+  }
+  async function humanType(selector, text) {
+    if (!humanize) return page.fill(selector, String(text));
+    await humanClick(selector);
+    for (const ch of String(text)) await page.keyboard.type(ch, { delay: rand(60, 160) });
+  }
+
   // ダイアログの扱い:
   //   - 「予約申込処理を行います」(最終確認)   → OK(dryRun のときはここまで来ない)
   //   - 「…ペナルティが付与されますが…」(3日以内の枠を選んだときの注意) → OK(予約する意思は確定している)
@@ -177,13 +200,15 @@ export async function reserve(slot, credentials, options = {}) {
     if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
       throw new ReserveError('error', 'トップページにログインボタンがありません(メンテナンス中の可能性)');
     }
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('[onclick*="gRsvWTransUserLoginAction"]')]);
+    await pause();
+    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="gRsvWTransUserLoginAction"]')]);
     if ((await pageId(page)) !== 'pawab2100.jsp') throw new ReserveError('error', `ログイン画面が想定外です (${await pageId(page)})`);
 
     // 2. ログイン(サイトの submitLogin() がパスワードの分解と reCAPTCHA v3 の処理を行う)
-    await page.fill('input[name="userId"]', credentials.userId);
-    await page.fill('input[name="password"]', credentials.password);
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('[onclick*="submitLogin"]')]);
+    await humanType('input[name="userId"]', credentials.userId);
+    await humanType('input[name="password"]', credentials.password);
+    await pause();
+    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="submitLogin"]')]);
     const afterLogin = await pageId(page);
     if (afterLogin === 'pawab2100.jsp') {
       throw new ReserveError('auth_error', `ログインが拒否されました: ${lastAlert() || '利用者番号・パスワード・カード有効期限を確認'}`);
@@ -229,7 +254,8 @@ export async function reserve(slot, credentials, options = {}) {
       (code) => document.querySelector('#bname')?.value === code && document.querySelector('#selectAreaBcd')?.value === code,
       slot.park
     );
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#btn-go')]);
+    await pause();
+    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     if ((await pageId(page)) !== 'prwrc2000.jsp' || (await hidden(page, 'selectBldCd')) !== slot.park) {
       // セッション未認識のまま 200 が返るパターン(公園未指定の空き状況画面)
       throw new ReserveError('error', `検索結果画面が想定外です (${await pageId(page)}, 公園=${await hidden(page, 'selectBldCd')})`);
@@ -246,12 +272,13 @@ export async function reserve(slot, credentials, options = {}) {
       const alt = await cell.$eval('img', (e) => e.alt).catch(() => '不明');
       return done('taken', `その枠は空きではありませんでした(${alt})`);
     }
-    await cell.click();
+    await humanClick(`[id="${cellId}"]`);
     await page.waitForFunction((id) => document.getElementById(`S_${id}`)?.value === '1', cellId, { timeout: 15000 });
     log(`枠を選択 (空き${vacant}面, ${Date.now() - started}ms)`);
 
     // 6. 「予約」→ 予約内容確認画面(prwea1000)
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#btn-go')]);
+    await pause();
+    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     if ((await pageId(page)) !== 'prwea1000.jsp') {
       // 空き状況画面が返ってくる = サイトがセッション上の選択を認識しなかった(ロードバランサ配下の癖)可能性が高い。
       // 呼び出し側の再試行(新しいセッション)で回復する
@@ -268,7 +295,7 @@ export async function reserve(slot, credentials, options = {}) {
       throw new ReserveError('error', `予約内容確認画面の枠が一致しません (${heading}, 時間帯=${await hidden(page, 'stimeZoneNo')})`);
     }
     if (!(await page.$eval('#purpose0', (e) => e.value).catch(() => ''))) await page.selectOption('#purpose0', PURPOSE_VALUE);
-    await page.fill('#peoples0', people);
+    await humanType('#peoples0', people);
     log(`予約内容確認画面: ${heading} 人数${people} (${Date.now() - started}ms)`);
 
     if (dryRun) {
@@ -293,7 +320,8 @@ export async function reserve(slot, credentials, options = {}) {
       throw new ReserveError('error', 'reCAPTCHA のスクリプトが読み込まれなかったため、予約を送信しませんでした');
     }
     alerts.length = 0; // ここまでの alert(トップページの Ajax 失敗など)は結果判定に混ぜない
-    await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), page.click('#btn-go')]);
+    await pause();
+    await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     const resultId = await pageId(page);
     if (resultId === 'prwec1000.jsp') {
       const t = await parseResultTable(page);
