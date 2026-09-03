@@ -153,11 +153,13 @@ export async function reserve(slot, credentials, options = {}) {
   });
   // サイトの静的ファイル配信が遅い(1ファイル3〜7秒)ため、予約に不要な画像・フォント・都のチャットボットは読み込まない。
   // サイト本体の JS と Google の reCAPTCHA はそのまま通す
+  // ※reCAPTCHA(google.com / gstatic.com)の画像・フォントは止めない(画像選択のチャレンジが表示できなくなる)
   await context.route('**/*', (route) => {
     const type = route.request().resourceType();
     const url = route.request().url();
-    if (['image', 'font', 'media'].includes(type) || url.includes('chatbot.metro.tokyo.lg.jp')) return route.abort();
-    return route.continue();
+    if (url.includes('chatbot.metro.tokyo.lg.jp')) return route.abort();
+    const siteAsset = url.startsWith(BASE_URL) && ['image', 'font', 'media'].includes(type);
+    return siteAsset ? route.abort() : route.continue();
   });
   const page = await context.newPage();
   page.setDefaultTimeout(STEP_TIMEOUT);
