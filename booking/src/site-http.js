@@ -60,7 +60,11 @@ function createSession(log) {
     }
     const body = new TextDecoder('shift_jis').decode(await res.arrayBuffer());
     log(`${form ? 'POST' : 'GET'} ${pathname.replace('/web/', '')} ${res.status} ${Date.now() - started}ms`);
-    if (!res.ok) throw new HttpFlowError('error', `HTTP ${res.status}: ${pathname}`);
+    if (!res.ok) {
+      const e = new HttpFlowError('error', `HTTP ${res.status}: ${pathname}`);
+      e.httpStatus = res.status;
+      throw e;
+    }
     return body;
   }
   request.cookies = cookies;
@@ -120,7 +124,14 @@ async function attempt(slot, credentials, log) {
   body.set('userId', credentials.userId);
   body.set('password', credentials.password);
   for (const ch of credentials.password) body.append('loginCharPass', ch);
-  const home = await request('/web/rsvWUserAttestationLoginAction.do', body);
+  let home;
+  try {
+    home = await request('/web/rsvWUserAttestationLoginAction.do', body);
+  } catch (e) {
+    // 利用者番号の形式不正などではサイトが 302 を返す。認証系の失敗として扱い、やり直さない
+    if (e.httpStatus === 302) throw new HttpFlowError('auth_error', 'ログインが受け付けられませんでした(利用者番号の形式・パスワードを確認)');
+    throw e;
+  }
   if (pageId(home) === 'pawab2100.jsp') {
     const alert = home.match(/showAlert\(["']([^"']{1,120})/)?.[1] ?? '';
     if (/データ通信|時間をあけ|再度操作/.test(alert)) throw new HttpFlowError('error', `ログイン時にサイトの一時エラー: ${alert}`);
