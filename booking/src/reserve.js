@@ -184,12 +184,26 @@ export async function reserve(slot, credentials, options = {}) {
     }
 
     // 4. 空き検索(種目 → 公園の順。同期先の hidden も揃ってから検索する。docs/site-notes.md「ハマりどころ」)
-    await page.fill('#daystart-home', slot.date);
-    await page.selectOption('#purpose-home', PURPOSE_VALUE);
-    await page.waitForFunction(
-      (code) => [...document.querySelectorAll('#bname-home option')].some((o) => o.value === code),
-      slot.park
-    );
+    //    ホーム画面の Ajax(種目→公園の選択肢)が失敗して「データ通信を正しく行うことができませんでした」が出ることがあるので、
+    //    公園の選択肢が出てこなければホームを読み直して1回だけやり直す
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await page.fill('#daystart-home', slot.date);
+        await page.selectOption('#purpose-home', PURPOSE_VALUE);
+        await page.waitForFunction(
+          (code) => [...document.querySelectorAll('#bname-home option')].some((o) => o.value === code),
+          slot.park,
+          { timeout: 15000 }
+        );
+        break;
+      } catch (e) {
+        if (attempt >= 2) throw new ReserveError('error', `ホーム画面で公園の選択肢が出ませんでした: ${e.message.split('\n')[0]}`);
+        log('ホーム画面の読み込みに失敗したため読み直します');
+        alerts.length = 0;
+        await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+        if (!(await page.$(LOGOUT_SELECTOR))) throw new ReserveError('error', 'ホームを読み直したらログインが外れていました');
+      }
+    }
     await page.selectOption('#bname-home', slot.park);
     await page.waitForFunction(
       (code) => document.querySelector('#bname')?.value === code && document.querySelector('#selectAreaBcd')?.value === code,
