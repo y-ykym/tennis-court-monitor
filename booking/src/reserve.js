@@ -235,7 +235,22 @@ export async function reserve(slot, credentials, options = {}) {
       await humanType('input[name="userId"]', credentials.userId);
       await humanType('input[name="password"]', credentials.password);
       await pause();
-      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="submitLogin"]')]);
+      // 入力エラーの alert(「利用者番号は半角数字で…」等)が出ると遷移しないので、alert を見たら即 auth_error にする
+      const alertCount = alerts.length;
+      const alertSeen = new Promise((resolve) => {
+        const t = setInterval(() => {
+          if (alerts.length > alertCount) {
+            clearInterval(t);
+            resolve('alert');
+          }
+        }, 200);
+        setTimeout(() => clearInterval(t), STEP_TIMEOUT);
+      });
+      const outcome = await Promise.race([
+        Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), humanClick('[onclick*="submitLogin"]')]).then(() => 'nav'),
+        alertSeen,
+      ]);
+      if (outcome === 'alert') throw new ReserveError('auth_error', `ログインの入力が受け付けられませんでした: ${lastAlert()}`);
       const afterLogin = await pageId(page);
       if (afterLogin === 'pawab2100.jsp') {
         // ログイン画面に戻された。サイトの一時的な通信エラー(「データ通信を正しく行うことができませんでした」)なら
