@@ -7,9 +7,16 @@
   "scripts": {
     "reserve": "node scripts/reserve-cli.mjs",
     "explore": "node scripts/explore-flow.mjs",
-    "test": "node --test \"test/**/*.test.mjs\""
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "build:novnc": "esbuild node_modules/@novnc/novnc/lib/rfb.js --bundle --format=esm --minify --outfile=server/public/rfb.js",
+    "server": "node server/server.mjs"
   },
   "dependencies": {
-    "playwright": "^1.62.1"
+    "@novnc/novnc": "^1.5.0",
+    "playwright": "^1.62.1",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

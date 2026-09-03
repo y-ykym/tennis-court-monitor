@@ -1,0 +1,7 @@
+node_modules
+.explore
+.debug
+debug-out
+scripts
+test
+*.log
