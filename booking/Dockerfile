@@ -16,11 +16,14 @@ COPY src ./src
 COPY server ./server
 # noVNC クライアントをブラウザ用に束ねてから、開発用パッケージを落とす
 RUN npm run build:novnc && npm prune --omit=dev
+# Google Chrome 安定版(素の Chromium より reCAPTCHA に疑われにくい)。Linux 版は amd64 のみなので、それ以外(手元の arm64)では入れない
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then npx playwright install chrome; fi
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
 # 仮想ディスプレイ(スマホで見やすいよう縦長)。server 側の Chromium ウィンドウサイズもこれに合わせる
-ENV DISPLAY=:99 \
+ENV BROWSER_CHANNEL=chrome \
+    DISPLAY=:99 \
     SCREEN_W=600 \
     SCREEN_H=1000 \
     PORT=8080 \
