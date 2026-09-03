@@ -12,8 +12,9 @@
 //     debugDir: null,        失敗時にスクリーンショットと HTML を保存する場所(個人情報を含むので共有しない)
 //     onConfirm: null,       半自動用。予約内容確認画面(人数入力後)で呼ばれ、人間の操作が終わるまで待つ関数。
 //                            渡すと「予約」は押さない(人間が押す)。({ page, facility, dateLabel, slot, people })
-//     prepared: null,        高速経路(src/site-http.js の prepareConfirmPage の結果)。渡すとログイン〜枠選択を飛ばし、
-//                            Cookie を移植して予約内容確認画面の POST から始める
+//     fastInPage: false,     高速経路(ブラウザ内版・推奨)。トップを開いたブラウザの中で fetch によりログイン〜枠選択を行い、
+//                            予約内容確認画面の POST まで進める(src/site-inpage.js)。UI 操作の待ちを省く
+//     prepared: null,        高速経路(Node HTTP 版。src/site-http.js)。Cloud Run では通信の出口が分かれて失敗することがあるため非推奨
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //   }
@@ -42,6 +43,7 @@
 //   画面構造・実機確認の記録は docs/site-notes.md「フェーズ2 追加調査」「予約フローの実機確認結果」。
 // ============================================================
 import { chromium } from 'playwright';
+import { inPageFlow, submitApplyForm } from './site-inpage.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -129,7 +131,7 @@ async function parseResultTable(page) {
 }
 
 export async function reserve(slot, credentials, options = {}) {
-  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, prepared = null } = options;
+  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, prepared = null, fastInPage = false } = options;
   const started = Date.now();
   const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...extra });
 
@@ -204,7 +206,20 @@ export async function reserve(slot, credentials, options = {}) {
   let loggedIn = false;
   try {
     let facility = slot.park;
-    if (prepared) {
+    if (fastInPage) {
+      // 高速経路(ブラウザ内版): トップページを開き、その中で fetch によりログイン〜枠選択 → 確認画面へ POST
+      await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+      if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
+        throw new ReserveError('error', 'トップページにログインボタンがありません(メンテナンス中の可能性)');
+      }
+      const r = await page.evaluate(inPageFlow, { slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour) }, credentials });
+      if (!r.ok) throw new ReserveError(r.status, r.message);
+      loggedIn = true;
+      facility = r.facility || slot.park;
+      log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面 (${Date.now() - started}ms)`);
+      await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
+      log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms)`);
+    } else if (prepared) {
       // 高速経路: HTTP で作ったログイン済みセッションの Cookie を移植し、予約内容確認画面へ進む POST だけをブラウザで行う
       await context.addCookies(prepared.cookies);
       facility = prepared.facility || slot.park;

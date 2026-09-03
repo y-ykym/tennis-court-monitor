@@ -8,7 +8,7 @@
 //                                                        [--dry-run] [--headed] [--out result.json] [--debug-dir .debug]
 //
 //     --dry-run    予約内容確認画面まで進んで「予約」を押さない(動作確認用)
-//     --fast       高速経路(HTTP でログイン〜枠選択、ブラウザは予約内容確認画面から)。失敗時はブラウザ方式に戻る
+//     --fast       高速経路(ブラウザ内 fetch でログイン〜枠選択。UI 操作を省く)。error のときは通常どおり再試行(通常方式)
 //     --headed     ブラウザを画面に出す(ローカルで様子を見るとき)
 //     --out        結果 JSON の保存先(GitHub Actions が LINE 通知に使う)
 //     --debug-dir  失敗時のスクリーンショット/HTML 保存先(個人情報を含むので共有しない)
@@ -17,7 +17,6 @@
 // ============================================================
 import fs from 'node:fs';
 import { reserve } from '../src/reserve.js';
-import { prepareConfirmPage } from '../src/site-http.js';
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -45,19 +44,7 @@ const options = { headless: !flag('headed'), dryRun: flag('dry-run'), log, debug
 const MAX_ATTEMPTS = Number(opt('attempts', '2'));
 let result;
 for (let n = 1; n <= MAX_ATTEMPTS; n++) {
-  let prepared = null;
-  if (flag('fast')) {
-    try {
-      prepared = await prepareConfirmPage(slot, credentials, { log: (m) => log(`[http] ${m}`) });
-    } catch (e) {
-      if (e.status === 'auth_error' || e.status === 'taken') {
-        result = { status: e.status, message: e.message, elapsedMs: 0 };
-        break;
-      }
-      log(`高速経路を諦めてブラウザ方式に切り替え: ${e.message}`);
-    }
-  }
-  result = await reserve(slot, credentials, { ...options, prepared });
+  result = await reserve(slot, credentials, { ...options, fastInPage: flag('fast') });
   if (result.status !== 'error' || n === MAX_ATTEMPTS) break;
   log(`一時的なエラーのためやり直します (${n}/${MAX_ATTEMPTS}): ${result.message}`);
 }
