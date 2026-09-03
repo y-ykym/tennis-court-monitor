@@ -15,6 +15,7 @@
 //     fastInPage: false,     高速経路(ブラウザ内版・推奨)。トップを開いたブラウザの中で fetch によりログイン〜枠選択を行い、
 //                            予約内容確認画面の POST まで進める(src/site-inpage.js)。UI 操作の待ちを省く
 //     prepared: null,        高速経路(Node HTTP 版。src/site-http.js)。Cloud Run では通信の出口が分かれて失敗することがあるため非推奨
+//     channel: undefined,    'chrome' で Google Chrome 安定版を使う(既定は環境変数 BROWSER_CHANNEL)。無ければ Chromium
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //   }
@@ -144,7 +145,18 @@ export async function reserve(slot, credentials, options = {}) {
   const cellId = `${ymd}_${tz}`;
   const people = String(slot.people || 2);
 
-  const browser = await chromium.launch({ headless, args: options.launchArgs || [] });
+  // ブラウザ本体: BROWSER_CHANNEL=chrome なら Google Chrome 安定版(reCAPTCHA の判定が素の Chromium より穏やかになる見込み)。
+  // 入っていない環境では Playwright 同梱の Chromium に戻す
+  const channel = options.channel ?? process.env.BROWSER_CHANNEL ?? undefined;
+  let browser;
+  try {
+    browser = await chromium.launch({ headless, channel: channel || undefined, args: options.launchArgs || [] });
+  } catch (e) {
+    if (!channel) throw e;
+    log(`${channel} を起動できないため同梱の Chromium を使います: ${e.message.split('\n')[0]}`);
+    browser = await chromium.launch({ headless, args: options.launchArgs || [] });
+  }
+  log(`ブラウザ: ${browser.version()}${channel ? ` (channel=${channel})` : ''}`);
   const context = await browser.newContext({
     // viewport: null を渡すとウィンドウサイズに従う(noVNC で画面ごと配信するとき用)
     viewport: 'viewport' in options ? options.viewport : { width: 1000, height: 900 },
