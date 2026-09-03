@@ -221,7 +221,9 @@ function vncPage(token, s) {
 <div id="screen"></div>
 <div id="hint">人数は入力済みです。<b>「予約」</b>を押してください。「チェックを入れてから…」と出たら<b>チェックボックス</b>を押し、もう一度「予約」。完了画面になると自動で結果に進みます。</div>
 <script type="module">
-  import RFB from '/novnc/rfb.js';
+  // esbuild で CommonJS を束ねたため、既定エクスポートが { default: RFB } の形になることがある
+  import mod from '/novnc/rfb.js';
+  const RFB = mod && mod.default ? mod.default : mod;
   const token=${JSON.stringify(token)};
   const proto=location.protocol==='https:'?'wss':'ws';
   const url=proto+'://'+location.host+'/websockify?token='+encodeURIComponent(token);
@@ -229,7 +231,8 @@ function vncPage(token, s) {
   rfb.scaleViewport=true; rfb.resizeSession=false; rfb.showDotCursor=true; rfb.background='#111';
   const st=document.getElementById('st');
   rfb.addEventListener('connect',()=>{st.textContent='接続しました。画面を操作できます';});
-  rfb.addEventListener('disconnect',(e)=>{st.textContent='切断されました'+(e.detail.clean?'':'(エラー)');});
+  rfb.addEventListener('disconnect',(e)=>{st.textContent='切断されました'+(e.detail.clean?'':'(エラー)');console.log('noVNC disconnect',e.detail);});
+  window.addEventListener('error',(e)=>{st.textContent='エラー: '+e.message;});
   rfb.addEventListener('securityfailure',(e)=>{st.textContent='認証に失敗: '+e.detail.reason;});
   async function poll(){
     try{const r=await fetch('/status?token='+encodeURIComponent(token),{cache:'no-store'}); const j=await r.json();
@@ -253,6 +256,7 @@ function send(res, status, body, type = 'text/html; charset=utf-8') {
 
 function tokenOf(url) {
   const token = url.searchParams.get('token') || '';
+  if (token === 'smoke' && process.env.BOOKING_SMOKE === '1') return { token, payload: session?.payload || null };
   const payload = verify(token, SECRET);
   return { token, payload };
 }
@@ -262,6 +266,32 @@ const server = http.createServer((req, res) => {
   const p = url.pathname;
 
   if (p === '/healthz' || p === '/warmup') return send(res, 200, 'ok\n', 'text/plain');
+
+  // 動作確認用(環境変数 BOOKING_SMOKE=1 のときだけ): 認証情報なしで Chromium を仮想ディスプレイに出し、
+  // 予約サイトのトップページを noVNC で見られる状態にする(Xvfb・x11vnc・WebSocket 橋渡しの疎通確認)
+  if (p === '/smoke' && process.env.BOOKING_SMOKE === '1') {
+    const token = 'smoke';
+    if (!session) {
+      const s = { token, payload: { park: '1050', date: '2026-09-17', startHour: 15, people: 2 }, label: 'テスト', status: 'starting', message: 'ブラウザを起動中', result: null, startedAt: Date.now(), readyAt: null, finish: null };
+      session = s;
+      import('playwright').then(async ({ chromium }) => {
+        const browser = await chromium.launch({ headless: false, args: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'] });
+        const pg = await (await browser.newContext({ viewport: null, locale: 'ja-JP' })).newPage();
+        await pg.goto('https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp', { waitUntil: 'domcontentloaded' }).catch(() => {});
+        s.status = 'ready';
+        s.readyAt = Date.now();
+        s.finish = async () => {
+          s.status = 'done';
+          s.result = { status: 'abandoned', message: '動作確認を終了しました' };
+          await browser.close().catch(() => {});
+          setTimeout(() => { if (session === s) session = null; }, 5000);
+        };
+        setTimeout(() => s.finish && s.finish(), HANDOFF_TIMEOUT_MS);
+      }).catch((e) => { s.status = 'done'; s.result = { status: 'error', message: e.message }; s.message = e.message; });
+    }
+    res.writeHead(302, { location: `/wait?token=smoke` });
+    return res.end();
+  }
 
   // noVNC のクライアント JS(単一バンドル)
   if (p === '/novnc/rfb.js') {
@@ -279,6 +309,24 @@ const server = http.createServer((req, res) => {
   }
 
   if (p === '/book') {
+    // 通知のボタンは「誰が押したか」が分からないので、予約者(A/B)をここで選ぶ。B の認証情報が無ければ A だけ
+    const person = payload.person || url.searchParams.get('person');
+    if (!person || !['A', 'B'].includes(person)) {
+      const hasB = !!process.env.SITE_USER_B;
+      const link = (who) => `/book?token=${encodeURIComponent(token)}&person=${who}`;
+      return send(
+        res,
+        page(
+          '誰の予約にしますか',
+          `<div class="card"><h1>誰の予約にしますか?</h1>
+           <div class="slot">${esc(slotText(payload))}<br><span class="muted">人数: ${esc(payload.people || 2)}</span></div>
+           <a class="btn" href="${link('A')}">${esc(process.env.LABEL_A || 'A')} で予約</a>
+           ${hasB ? `&nbsp; <a class="btn" href="${link('B')}">${esc(process.env.LABEL_B || 'B')} で予約</a>` : ''}
+           <div class="muted" style="margin-top:14px">押すとログイン〜枠の選択まで自動で進み、最後の「予約」ボタンだけ自分で押します。</div></div>`
+        )
+      );
+    }
+    payload.person = person;
     if (session && session.token !== token && session.status !== 'done') {
       return send(
         res,
