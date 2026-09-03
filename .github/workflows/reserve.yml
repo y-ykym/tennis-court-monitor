@@ -102,7 +102,7 @@ jobs:
         run: |
           echo "枠: 公園=$PARK 日付=$DATE 開始=$START時 人数=$PEOPLE 予約者=$PERSON dry_run=$DRY_RUN"
           node scripts/reserve-cli.mjs --park "$PARK" --date "$DATE" --start "$START" --people "$PEOPLE" \
-            --out result.json --debug-dir .debug $([ "$DRY_RUN" = "true" ] && echo --dry-run)
+            --out result.json --debug-dir debug-out $([ "$DRY_RUN" = "true" ] && echo --dry-run)
 
       - name: 結果を LINE に通知
         if: env.DRY_RUN != 'true'
@@ -122,6 +122,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: reserve-debug
-          path: booking/.debug/
+          path: booking/debug-out/
           if-no-files-found: ignore
           retention-days: 3

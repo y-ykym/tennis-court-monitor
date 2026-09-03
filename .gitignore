@@ -7,3 +7,4 @@ worker/.wrangler/
 booking/node_modules/
 booking/.explore/
 booking/.debug/
+booking/debug-out/
