@@ -10,9 +10,13 @@
 //     dryRun: false,         true なら予約内容確認画面まで進んで「予約」を押さずに終わる
 //     log: (msg) => {},      進行ログ(利用者番号・パスワード・Cookie は出さない)
 //     debugDir: null,        失敗時にスクリーンショットと HTML を保存する場所(個人情報を含むので共有しない)
+//     onConfirm: null,       半自動用。予約内容確認画面(人数入力後)で呼ばれ、人間の操作が終わるまで待つ関数。
+//                            渡すと「予約」は押さない(人間が押す)。({ page, facility, dateLabel, slot, people })
+//     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
+//     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //   }
 //   Result = {
-//     status: 'success' | 'dry_run' | 'taken' | 'duplicate' | 'rejected' | 'auth_error' | 'error',
+//     status: 'success' | 'dry_run' | 'abandoned' | 'taken' | 'duplicate' | 'rejected' | 'auth_error' | 'error',
 //     message: string,                 人間向けの短い説明
 //     reservationNo?, fee?, facility?, dateText?, timeText?,   成功時の内容(完了画面の表示そのまま)
 //     elapsedMs: number,
@@ -21,6 +25,7 @@
 //   status の意味:
 //     success    完了画面(prwec1000)に到達し予約番号が取れた
 //     dry_run    dryRun 指定で予約内容確認画面まで到達した(予約はしていない)
+//     abandoned  onConfirm(半自動)で人間に渡したが、操作が完了しなかった(予約はされていない)
 //     taken      対象セルが空きではなかった(先に取られた・保守日など)。やり直しても意味がない
 //     duplicate  同じ日時に既に予約がある等、サイトが申込みを断った。やり直しても意味がない
 //     rejected   reCAPTCHA の判定で申込みが拒否された。**やり直さない**(繰り返すのは回避行為になる)
@@ -122,7 +127,7 @@ async function parseResultTable(page) {
 }
 
 export async function reserve(slot, credentials, options = {}) {
-  const { headless = true, dryRun = false, log = () => {}, debugDir = null } = options;
+  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null } = options;
   const started = Date.now();
   const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...extra });
 
@@ -135,9 +140,10 @@ export async function reserve(slot, credentials, options = {}) {
   const cellId = `${ymd}_${tz}`;
   const people = String(slot.people || 2);
 
-  const browser = await chromium.launch({ headless });
+  const browser = await chromium.launch({ headless, args: options.launchArgs || [] });
   const context = await browser.newContext({
-    viewport: { width: 1000, height: 900 },
+    // viewport: null を渡すとウィンドウサイズに従う(noVNC で画面ごと配信するとき用)
+    viewport: 'viewport' in options ? options.viewport : { width: 1000, height: 900 },
     locale: 'ja-JP',
     timezoneId: 'Asia/Tokyo',
   });
@@ -325,17 +331,29 @@ export async function reserve(slot, credentials, options = {}) {
       });
     }
 
-    // 7. 「予約」→ 確認ダイアログ OK(dialog ハンドラ)→ サイトの JS が reCAPTCHA v3 トークンを取って送信 → 完了画面
-    // reCAPTCHA の JS が読み込まれてから押す。読み込み前に押すとサイトの JS は「トークン無し」で送ってしまい、
-    // 結果的に認証を素通りさせる形になる(それはしない)。読み込めない場合は予約せずに error で終える
-    try {
-      await page.waitForFunction(() => typeof window.grecaptcha?.execute === 'function', null, { timeout: 20000 });
-    } catch {
-      throw new ReserveError('error', 'reCAPTCHA のスクリプトが読み込まれなかったため、予約を送信しませんでした');
+    if (onConfirm) {
+      // 半自動(noVNC): ここで人間に制御を渡す。「予約」→(出れば)reCAPTCHA v2 チェック → 再度「予約」は人間が行う。
+      // onConfirm は人間の操作が終わる(完了画面に遷移する)か、時間切れになると戻ってくる
+      alerts.length = 0;
+      log('予約内容確認画面に到達。人間に操作を渡します');
+      await onConfirm({ page, facility, dateLabel, slot, people });
+      if ((await pageId(page)) === 'prwea1000.jsp') {
+        await saveDebug(page, debugDir, 'handoff-abandoned');
+        return done('abandoned', '人間の操作が完了しないまま終了しました(予約はされていません)', { facility });
+      }
+    } else {
+      // 7. 「予約」→ 確認ダイアログ OK(dialog ハンドラ)→ サイトの JS が reCAPTCHA v3 トークンを取って送信 → 完了画面
+      // reCAPTCHA の JS が読み込まれてから押す。読み込み前に押すとサイトの JS は「トークン無し」で送ってしまい、
+      // 結果的に認証を素通りさせる形になる(それはしない)。読み込めない場合は予約せずに error で終える
+      try {
+        await page.waitForFunction(() => typeof window.grecaptcha?.execute === 'function', null, { timeout: 20000 });
+      } catch {
+        throw new ReserveError('error', 'reCAPTCHA のスクリプトが読み込まれなかったため、予約を送信しませんでした');
+      }
+      alerts.length = 0; // ここまでの alert(トップページの Ajax 失敗など)は結果判定に混ぜない
+      await pause();
+      await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     }
-    alerts.length = 0; // ここまでの alert(トップページの Ajax 失敗など)は結果判定に混ぜない
-    await pause();
-    await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     const resultId = await pageId(page);
     if (resultId === 'prwec1000.jsp') {
       const t = await parseResultTable(page);
