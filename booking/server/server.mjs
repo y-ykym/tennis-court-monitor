@@ -340,6 +340,14 @@ const server = http.createServer((req, res) => {
       );
     }
     payload.person = person;
+    // 同じ枠で終わった処理があるとき: 予約が成立していれば結果を見せる(二重予約防止)。それ以外(中止・失敗)はやり直せる
+    if (session && session.token === token && session.status === 'done') {
+      if (session.result?.status === 'success') {
+        res.writeHead(302, { location: `/result?token=${encodeURIComponent(token)}` });
+        return res.end();
+      }
+      session = null;
+    }
     if (session && session.token !== token && session.status !== 'done') {
       return send(
         res,
