@@ -15,3 +15,9 @@ workers_dev = true
 # `wrangler tail` に加えて、Cloudflareダッシュボードでもログを見られるようにする(無料枠あり)
 [observability]
 enabled = true
+
+# フェーズ2 予約支援の玄関で使う KV(自宅 PC の現在の URL を TTL 付きで保存)。
+# 初回: `npx wrangler kv namespace create BOOKING_KV` を実行し、表示された id を下に書く
+[[kv_namespaces]]
+binding = "BOOKING_KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

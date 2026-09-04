@@ -1,0 +1,45 @@
+# 自宅 PC(Windows + Docker Desktop)で予約支援サーバーを動かすための構成。
+#   booking    予約支援サーバー本体(../Dockerfile。自宅回線から予約サイトへ出る → reCAPTCHA v3 で通る → 「予約」まで自動)
+#   tunnel     Cloudflare Tunnel(quick tunnel)。外(スマホ)から booking に届く URL を作る。URL は起動ごとに変わる
+#   registrar  tunnel の現在の URL を玄関の Worker に 4 分ごとに登録する(server/register.mjs)
+#
+# 使い方(この pc/ ディレクトリで):
+#   cp .env.example .env   →  .env に値を書く(パスワード等。ファイルは gitignore 済み)
+#   docker compose up -d --build
+#   docker compose logs -f registrar   # 「登録しました: xxx.trycloudflare.com」が出れば外から届く
+services:
+  booking:
+    build: ..
+    image: tennis-booking:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AUTO_CONFIRM: '1'        # 「予約」まで自動で押す。reCAPTCHA v2 が出たときだけ人間に渡す
+      PROFILE_LOCAL: '1'       # ブラウザプロファイルを下の volume に持ち越す
+      SCREEN_W: '600'
+      SCREEN_H: '1000'
+    volumes:
+      - profile:/tmp/profile
+    ports:
+      - '127.0.0.1:8080:8080' # PC 自身からの確認用(http://localhost:8080/warmup)。外からは tunnel 経由
+    shm_size: 1g
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 --url http://booking:8080
+    depends_on:
+      - booking
+
+  registrar:
+    image: tennis-booking:local
+    restart: unless-stopped
+    command: node server/register.mjs
+    env_file: .env
+    environment:
+      TUNNEL_METRICS_URL: http://tunnel:2000
+    depends_on:
+      - tunnel
+
+volumes:
+  profile:
