@@ -5,6 +5,11 @@
 #   node   : /book(自動遷移)と noVNC の画面配信(WebSocket 橋渡し)
 set -eu
 
+# 引数があればそれを実行する(例: docker compose の registrar サービス `node server/register.mjs`)。仮想ディスプレイは不要
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+
 : "${DISPLAY:=:99}"; : "${SCREEN_W:=600}"; : "${SCREEN_H:=1000}"; : "${PORT:=8080}"
 
 Xvfb "$DISPLAY" -screen 0 "${SCREEN_W}x${SCREEN_H}x24" -nolisten tcp -ac +extension RANDR >/tmp/xvfb.log 2>&1 &
