@@ -29,7 +29,7 @@ test('通知側(Node crypto)で署名したトークンを Worker 側(Web Crypto
   assert.equal(await verifyBookingToken(token, SECRET, Date.UTC(2026, 8, 17, 6, 1)), null);
 });
 
-test('/book: PC が未登録なら 503 の案内、登録があれば 302 で転送', async () => {
+test('/book: PC が未登録なら 503 の案内、登録があれば PC へ中継(プロキシ)', async () => {
   const token = sign(payload, SECRET);
   const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV() };
   const req = new Request(`https://w.example/book?token=${token}&person=A`);
@@ -38,12 +38,38 @@ test('/book: PC が未登録なら 503 の案内、登録があれば 302 で転
   assert.match(await r1.text(), /繋がりません/);
 
   env.BOOKING_KV.store.set('booking_url', 'https://abc-def.trycloudflare.com');
-  const r2 = await handleBooking(req, env, ctx);
-  assert.equal(r2.status, 302);
-  const loc = new URL(r2.headers.get('location'));
-  assert.equal(loc.origin + loc.pathname, 'https://abc-def.trycloudflare.com/book');
-  assert.equal(loc.searchParams.get('token'), token);
-  assert.equal(loc.searchParams.get('person'), 'A');
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (target, init) => {
+    calls.push({ target: String(target), method: init.method });
+    return new Response('<h1>誰の予約にしますか?</h1>', { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  try {
+    const r2 = await handleBooking(req, env, ctx);
+    assert.equal(r2.status, 200);
+    assert.match(await r2.text(), /誰の予約/);
+    assert.equal(calls.length, 1);
+    const t = new URL(calls[0].target);
+    assert.equal(t.origin + t.pathname, 'https://abc-def.trycloudflare.com/book');
+    assert.equal(t.searchParams.get('token'), token);
+    assert.equal(t.searchParams.get('person'), 'A');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('中継: トンネルの一時エラー(530)はやり直し、成功したら返す', async () => {
+  const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV({ booking_url: 'https://abc.trycloudflare.com' }) };
+  let n = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => (++n < 3 ? new Response('error 1033', { status: 530 }) : new Response('{"status":"ready"}', { status: 200 }));
+  try {
+    const r = await handleBooking(new Request('https://w.example/status?token=x'), env, ctx);
+    assert.equal(r.status, 200);
+    assert.equal(n, 3);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test('/book: 署名が不正なら 403', async () => {
