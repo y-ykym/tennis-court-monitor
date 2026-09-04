@@ -20,4 +20,4 @@ enabled = true
 # 初回: `npx wrangler kv namespace create BOOKING_KV` を実行し、表示された id を下に書く
 [[kv_namespaces]]
 binding = "BOOKING_KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "97e0d8dae665476797bae9dc168c560b"
