@@ -16,6 +16,9 @@ function fakeKV(initial = {}) {
     async put(k, v) {
       store.set(k, v);
     },
+    async delete(k) {
+      store.delete(k);
+    },
     store,
   };
 }
