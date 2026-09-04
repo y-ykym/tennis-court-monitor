@@ -9,3 +9,4 @@ booking/.explore/
 booking/.debug/
 booking/debug-out/
 booking/server/public/
+booking/pc/.env

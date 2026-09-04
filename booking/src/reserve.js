@@ -10,6 +10,7 @@
 //     dryRun: false,         true なら予約内容確認画面まで進んで「予約」を押さずに終わる
 //     log: (msg) => {},      進行ログ(利用者番号・パスワード・Cookie は出さない)
 //     debugDir: null,        失敗時にスクリーンショットと HTML を保存する場所(個人情報を含むので共有しない)
+//     onChallenge: null,     自動確定用。「予約」を押した後に reCAPTCHA v2(チェック)が出たときだけ呼ばれ、人間の操作が終わるまで待つ関数
 //     onConfirm: null,       半自動用。予約内容確認画面(人数入力後)で呼ばれ、人間の操作が終わるまで待つ関数。
 //                            渡すと「予約」は押さない(人間が押す)。({ page, facility, dateLabel, slot, people })
 //     fastInPage: false,     高速経路(ブラウザ内版・推奨)。トップを開いたブラウザの中で fetch によりログイン〜枠選択を行い、
@@ -447,26 +448,44 @@ export async function reserve(slot, credentials, options = {}) {
       await pause();
       await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     }
-    const resultId = await pageId(page);
-    if (resultId === 'prwec1000.jsp') {
-      const t = await parseResultTable(page);
-      const title = await page.$eval('h3 .title', (e) => e.textContent.trim()).catch(() => facility);
-      log(`予約完了 予約番号=${t['予約番号']} (${Date.now() - started}ms)`);
-      return done('success', `予約が完了しました: ${title} ${dateLabel} ${t['時間'] || ''} ${t['利用料金'] || ''}`, {
-        reservationNo: t['予約番号'] || '',
-        fee: t['利用料金'] || '',
-        facility: title,
-        dateText: dateLabel,
-        timeText: t['時間'] || '',
-      });
-    }
-    await saveDebug(page, debugDir, `apply-${resultId || 'unknown'}`);
-    const bodyText = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ')).catch(() => '');
-    const reason = lastAlert() || bodyText.slice(0, 200);
-    if (/reCAPTCHA|ロボット|不正なアクセス/i.test(reason)) return done('rejected', `サイトの認証(reCAPTCHA)で申込みが拒否されました: ${reason}`);
-    if (/同じ利用日時|複数の予約|既に予約|2件まで/.test(reason)) return done('duplicate', `サイトが申込みを断りました: ${reason}`);
-    if (/空き|予約済|予約あり|他の利用者/.test(reason)) return done('taken', `先に予約された可能性があります: ${reason}`);
-    return done('error', `完了画面に到達しませんでした (${resultId || '不明'}): ${reason}`);
+    // 送信後の画面を判定する(成功 / 失敗の種類)。onChallenge があり v2 チェックボックスが出た場合は人間に渡してから再判定
+    const classify = async (afterHuman) => {
+      const resultId = await pageId(page);
+      if (resultId === 'prwec1000.jsp') {
+        const t = await parseResultTable(page);
+        const title = await page.$eval('h3 .title', (e) => e.textContent.trim()).catch(() => facility);
+        log(`予約完了 予約番号=${t['予約番号']} (${Date.now() - started}ms)`);
+        return done('success', `予約が完了しました: ${title} ${dateLabel} ${t['時間'] || ''} ${t['利用料金'] || ''}`, {
+          reservationNo: t['予約番号'] || '',
+          fee: t['利用料金'] || '',
+          facility: title,
+          dateText: dateLabel,
+          timeText: t['時間'] || '',
+        });
+      }
+      const bodyText = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ')).catch(() => '');
+      if (resultId === 'prwea1000.jsp' && /チェックを入れて/.test(bodyText)) {
+        if (options.onChallenge && !afterHuman) {
+          // reCAPTCHA v2(チェックボックス)が要求された。人間に画面を渡し、解いて「予約」を押してもらう
+          log('reCAPTCHA v2 のチェックが要求されたため、人間に操作を渡します');
+          alerts.length = 0;
+          await options.onChallenge({ page, facility, dateLabel, slot, people, challenge: true });
+          return classify(true);
+        }
+        await saveDebug(page, debugDir, 'apply-recaptcha-v2');
+        return done(afterHuman ? 'abandoned' : 'rejected', afterHuman ? '人間の操作が完了しないまま終了しました(予約はされていません)' : 'reCAPTCHA v2 のチェックが要求されました(人間の操作が必要)', { facility });
+      }
+      if (resultId === 'prwea1000.jsp' && afterHuman) {
+        return done('abandoned', '人間の操作が完了しないまま終了しました(予約はされていません)', { facility });
+      }
+      await saveDebug(page, debugDir, `apply-${resultId || 'unknown'}`);
+      const reason = lastAlert() || bodyText.slice(0, 200);
+      if (/reCAPTCHA|ロボット|不正なアクセス/i.test(reason)) return done('rejected', `サイトの認証(reCAPTCHA)で申込みが拒否されました: ${reason}`);
+      if (/同じ利用日時|複数の予約|既に予約|2件まで/.test(reason)) return done('duplicate', `サイトが申込みを断りました: ${reason}`);
+      if (/空き|予約済|予約あり|他の利用者/.test(reason)) return done('taken', `先に予約された可能性があります: ${reason}`);
+      return done('error', `完了画面に到達しませんでした (${resultId || '不明'}): ${reason}`);
+    };
+    return await classify(false);
   } catch (e) {
     await saveDebug(page, debugDir, 'error');
     if (e instanceof ReserveError) return done(e.status, e.message);
