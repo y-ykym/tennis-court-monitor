@@ -26,8 +26,8 @@ const PROXY_PATHS = new Set(['/book', '/wait', '/status', '/result', '/vnc', '/a
 // トンネルの一時エラー時のやり直し(回数・間隔)
 const PROXY_RETRIES = 4;
 const PROXY_RETRY_MS = 1500;
-// PC からの登録の有効期限(秒)。PC は 4 分ごとに登録し直す
-const REGISTER_TTL_SEC = 600;
+// PC からの登録の有効期限(秒)。PC は 2 分ごとに登録し直す(PC 停止後、古い URL が残る時間を短くする)
+const REGISTER_TTL_SEC = 300;
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 
 const enc = new TextEncoder();
@@ -161,12 +161,12 @@ export async function handleBooking(request, env, ctx) {
   }
   if (!registered) return html('予約サーバーに繋がりません', `自宅の予約サーバー(PC)が起動していないようです。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`, 503);
 
-  return proxyToServer(request, `${registered}${p}${url.search}`);
+  return proxyToServer(request, `${registered}${p}${url.search}`, env);
 }
 
 // PC(トンネル越し)へ中継する。Cloudflare Tunnel の一時エラー(1033 = HTTP 530 など)は少し待ってやり直す。
 // WebSocket(noVNC)は Upgrade をそのまま渡し、返ってきた 101 応答を返せば双方向に流れる
-async function proxyToServer(request, target) {
+async function proxyToServer(request, target, env) {
   const headers = new Headers(request.headers);
   headers.delete('host');
   headers.delete('cf-connecting-ip');
@@ -187,6 +187,9 @@ async function proxyToServer(request, target) {
     if (n < PROXY_RETRIES) await new Promise((r) => setTimeout(r, PROXY_RETRY_MS));
   }
   console.warn(`PC への中継が ${PROXY_RETRIES} 回とも失敗: ${new URL(target).pathname}`);
+  // 登録されている URL が死んでいる(PC 再起動で URL が変わった等)。登録を消して、次からは「繋がりません」の案内にする。
+  // PC 側の registrar が生きていれば 2 分以内に新しい URL を登録し直す
+  if (!isWs) await env.BOOKING_KV.delete(KV_KEY).catch(() => {});
   if (isWs) return last;
   return html(
     '予約サーバーに繋がりませんでした',

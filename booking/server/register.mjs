@@ -6,7 +6,7 @@
 //     WORKER_URL              玄関の Worker(例: https://tennis-reservation-bot.y-ykym.workers.dev)
 //     BOOKING_SIGNING_SECRET  署名鍵(Worker と同じ値)。登録の認証にも使う: x-booking-auth = base64url(HMAC-SHA256(secret, url))
 //     TUNNEL_METRICS_URL      cloudflared の metrics(例: http://tunnel:2000)。/quicktunnel が {"hostname": "..."} を返す
-//     REGISTER_INTERVAL_MS    登録間隔(既定 240000 = 4分。Worker 側の TTL は 10 分)
+//     REGISTER_INTERVAL_MS    登録間隔(既定 120000 = 2分。Worker 側の TTL は 5 分)
 //
 // PC が落ちると登録が止まり、Worker 側の TTL で自然に消える(「繋がりません」案内に切り替わる)。
 // ============================================================
@@ -15,7 +15,7 @@ import { createHmac } from 'node:crypto';
 const WORKER_URL = (process.env.WORKER_URL || '').replace(/\/$/, '');
 const SECRET = process.env.BOOKING_SIGNING_SECRET || '';
 const METRICS = (process.env.TUNNEL_METRICS_URL || 'http://tunnel:2000').replace(/\/$/, '');
-const INTERVAL = Number(process.env.REGISTER_INTERVAL_MS || 240000);
+const INTERVAL = Number(process.env.REGISTER_INTERVAL_MS || 120000);
 
 const log = (m) => console.log(`[${new Date().toISOString()}] [register] ${m}`);
 
