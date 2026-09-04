@@ -4,7 +4,10 @@
 // 自宅 PC で動く予約支援サーバーは、Cloudflare Tunnel(quick tunnel)の URL が起動ごとに変わる。
 // そこで固定 URL のこの Worker を LINE の「予約」ボタンの宛先にし、PC が登録した現在の URL へ転送する。
 //
-//   GET  /book?token=…&person=…   署名トークンを検証 → PC の URL が登録されていれば 302 で転送。無ければ「繋がりません」画面
+//   GET  /book?token=…&person=…   署名トークンを検証 → PC の URL が登録されていれば PC へ中継(プロキシ)。無ければ「繋がりません」画面
+//   GET  /wait /status /result /vnc /abort /novnc/rfb.js, WS /websockify
+//                                  PC の画面・API・noVNC の WebSocket を中継。スマホは常にこの Worker(固定 URL)だけと通信し、
+//                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する
 //   POST /booking/register         PC 側(server/register.mjs)が自分の URL を登録。ヘッダ x-booking-auth = HMAC(secret, url)
 //                                  KV に TTL 付きで保存(PC が落ちると自然に消える)
 //   GET  /warmup                   登録先の /warmup を叩く(通知と同時にブラウザを起こす)
@@ -18,6 +21,11 @@
 // ============================================================
 
 const KV_KEY = 'booking_url';
+// PC(トンネル)へ中継するパス。これ以外(/webhook など)は触らない
+const PROXY_PATHS = new Set(['/book', '/wait', '/status', '/result', '/vnc', '/abort', '/websockify', '/novnc/rfb.js']);
+// トンネルの一時エラー時のやり直し(回数・間隔)
+const PROXY_RETRIES = 4;
+const PROXY_RETRY_MS = 1500;
 // PC からの登録の有効期限(秒)。PC は 4 分ごとに登録し直す
 const REGISTER_TTL_SEC = 600;
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
@@ -96,7 +104,7 @@ a.btn{display:inline-block;margin-top:14px;padding:10px 16px;border-radius:8px;b
 export async function handleBooking(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname;
-  if (!['/book', '/booking/register', '/warmup', '/booking/status'].includes(p)) return null;
+  if (!PROXY_PATHS.has(p) && !['/booking/register', '/warmup', '/booking/status'].includes(p)) return null;
 
   if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) {
     console.error('BOOKING_SIGNING_SECRET または BOOKING_KV が未設定です');
@@ -136,20 +144,53 @@ export async function handleBooking(request, env, ctx) {
     return new Response(registered ? 'ok' : 'no server', { status: 200 });
   }
 
-  // GET /book
-  const token = url.searchParams.get('token') || '';
-  const payload = await verifyBookingToken(token, env.BOOKING_SIGNING_SECRET);
-  if (!payload) {
-    return html('このリンクは使えません', 'リンクの期限が切れているか、正しくありません。新しい通知のボタンから開いてください。', 403);
+  // /book だけは Worker 側でも署名を検証する(PC が無いときの案内を出すため。PC 側でも検証する)
+  if (p === '/book') {
+    const token = url.searchParams.get('token') || '';
+    const payload = await verifyBookingToken(token, env.BOOKING_SIGNING_SECRET);
+    if (!payload) {
+      return html('このリンクは使えません', 'リンクの期限が切れているか、正しくありません。新しい通知のボタンから開いてください。', 403);
+    }
+    if (!registered) {
+      return html(
+        '予約サーバーに繋がりません',
+        `自宅の予約サーバー(PC)が起動していないようです。お手数ですが予約サイトで手動で予約してください。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`,
+        503
+      );
+    }
   }
-  if (!registered) {
-    return html(
-      '予約サーバーに繋がりません',
-      `自宅の予約サーバー(PC)が起動していないようです。お手数ですが予約サイトで手動で予約してください。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`,
-      503
-    );
+  if (!registered) return html('予約サーバーに繋がりません', `自宅の予約サーバー(PC)が起動していないようです。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`, 503);
+
+  return proxyToServer(request, `${registered}${p}${url.search}`);
+}
+
+// PC(トンネル越し)へ中継する。Cloudflare Tunnel の一時エラー(1033 = HTTP 530 など)は少し待ってやり直す。
+// WebSocket(noVNC)は Upgrade をそのまま渡し、返ってきた 101 応答を返せば双方向に流れる
+async function proxyToServer(request, target) {
+  const headers = new Headers(request.headers);
+  headers.delete('host');
+  headers.delete('cf-connecting-ip');
+  const isWs = (request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
+  const init = { method: request.method, headers, redirect: 'manual' };
+  if (!isWs && request.method !== 'GET' && request.method !== 'HEAD') init.body = request.body;
+  let last;
+  for (let n = 1; n <= PROXY_RETRIES; n++) {
+    try {
+      const res = await fetch(target, init);
+      // 530/502/503/504 はトンネル側の一時エラーの可能性が高いのでやり直す(WebSocket は 101 以外をやり直す)
+      const transient = isWs ? res.status !== 101 : [502, 503, 504, 530].includes(res.status);
+      if (!transient) return res;
+      last = res;
+    } catch (e) {
+      last = new Response(`中継に失敗: ${e.message}`, { status: 502 });
+    }
+    if (n < PROXY_RETRIES) await new Promise((r) => setTimeout(r, PROXY_RETRY_MS));
   }
-  const dest = new URL(`${registered}/book`);
-  for (const [k, v] of url.searchParams) dest.searchParams.set(k, v);
-  return Response.redirect(dest.toString(), 302);
+  console.warn(`PC への中継が ${PROXY_RETRIES} 回とも失敗: ${new URL(target).pathname}`);
+  if (isWs) return last;
+  return html(
+    '予約サーバーに繋がりませんでした',
+    '自宅の予約サーバーへの中継が一時的に失敗しました。数秒待ってから、ブラウザで再読み込みしてください(処理は裏で続いています)。',
+    503
+  );
 }

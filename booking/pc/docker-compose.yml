@@ -27,7 +27,8 @@ services:
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 --url http://booking:8080
+    # --protocol http2: 既定の QUIC(UDP)は家庭用回線(SoftBank Air 等)で不安定なことがあるため、TCP の http2 で張る
+    command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 --url http://booking:8080
     depends_on:
       - booking
 
