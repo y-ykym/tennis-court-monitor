@@ -1,0 +1,131 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<style>
+  body{margin:0;background:#fff;font-family:"Hiragino Sans","Noto Sans JP",-apple-system,sans-serif}
+  svg{display:block}
+  .t{font-size:15px;fill:#222}
+  .s{font-size:12.5px;fill:#555}
+  .h{font-size:17px;font-weight:700;fill:#fff}
+  .lane{font-size:14px;font-weight:700}
+  .note{font-size:12px;fill:#7a3e00}
+  .box{rx:10;ry:10}
+</style></head><body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker>
+    <marker id="ag" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#06863b"/></marker>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b03a3a"/></marker>
+  </defs>
+  <rect width="1600" height="1180" fill="#ffffff"/>
+  <text x="40" y="46" font-size="26" font-weight="700" fill="#111">テニスコート予約システム 全体図(2026-09 時点・最終方針)</text>
+  <text x="40" y="72" class="s">費用: 全体でほぼ0円(GitHub Actions / cron-job.org / Cloudflare 無料枠、自宅PCの電気代のみ)。Cloud Run は不使用</text>
+
+  <!-- ===== 共通: 都営予約サイト(右上) ===== -->
+  <rect x="1230" y="110" width="330" height="150" class="box" fill="#f1f3f5" stroke="#8a94a6" stroke-width="2"/>
+  <text x="1395" y="140" text-anchor="middle" class="lane" fill="#333">東京都 スポーツ施設予約システム</text>
+  <text x="1395" y="164" text-anchor="middle" class="s">kouen.sports.metro.tokyo.lg.jp</text>
+  <text x="1395" y="186" text-anchor="middle" class="s">空き照会 JSON API(ログイン不要)</text>
+  <text x="1395" y="206" text-anchor="middle" class="s">ログイン / 予約(Shift_JIS, POST遷移)</text>
+  <text x="1395" y="228" text-anchor="middle" class="s">reCAPTCHA v3(低スコア時は v2 画像問題)</text>
+  <text x="1395" y="248" text-anchor="middle" class="s">セッション寿命 約10分</text>
+
+  <!-- ===== LINE グループ(中央上) ===== -->
+  <rect x="620" y="110" width="300" height="150" class="box" fill="#e6f8ee" stroke="#06C755" stroke-width="2.5"/>
+  <text x="770" y="140" text-anchor="middle" class="lane" fill="#065f2e">LINE グループ(A・B・ボット)</text>
+  <text x="770" y="166" text-anchor="middle" class="s">① 空き通知カード(枠ごとに「予約」ボタン)</text>
+  <text x="770" y="188" text-anchor="middle" class="s">② 「よやく」→ 予約一覧カード</text>
+  <text x="770" y="210" text-anchor="middle" class="s">③ 予約結果カード(予約番号・料金)</text>
+  <text x="770" y="240" text-anchor="middle" class="s">無料枠 月200通(push のみ消費)</text>
+
+  <!-- ===== レーン1: 監視(フェーズ1) ===== -->
+  <rect x="40" y="300" width="1520" height="200" rx="14" fill="#fbfcfe" stroke="#d5dbe5"/>
+  <text x="60" y="330" class="lane" fill="#1f4e8c">フェーズ1 空き監視(稼働中)</text>
+
+  <rect x="60" y="360" width="220" height="100" class="box" fill="#fff" stroke="#1f4e8c" stroke-width="2"/>
+  <text x="170" y="392" text-anchor="middle" class="t">cron-job.org</text>
+  <text x="170" y="414" text-anchor="middle" class="s">3分おきに workflow_dispatch</text>
+  <text x="170" y="434" text-anchor="middle" class="s">(GitHub の cron は間引かれるため)</text>
+
+  <rect x="340" y="360" width="300" height="100" class="box" fill="#fff" stroke="#1f4e8c" stroke-width="2"/>
+  <text x="490" y="392" text-anchor="middle" class="t">GitHub Actions: check.js</text>
+  <text x="490" y="414" text-anchor="middle" class="s">取得→絞込(平日=猿江19時/土日祝=3公園)</text>
+  <text x="490" y="434" text-anchor="middle" class="s">→ state.json と差分 → 新規空きだけ通知</text>
+
+  <line x1="280" y1="410" x2="336" y2="410" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M640,395 C900,395 1100,250 1226,215" fill="none" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="900" y="372" class="s">空き照会(JSON API, 3公園×5週)</text>
+  <path d="M640,430 C700,430 740,300 770,264" fill="none" stroke="#06863b" stroke-width="2.5" marker-end="url(#ag)"/>
+  <text x="660" y="470" class="s" fill="#06863b">① Flex 通知 push(「予約」ボタン = 署名付きURL、有効期限=枠の開始時刻)</text>
+
+  <!-- ===== レーン2: 予約確認ボット(フェーズ1.5) ===== -->
+  <rect x="40" y="520" width="1520" height="150" rx="14" fill="#fbfcfe" stroke="#d5dbe5"/>
+  <text x="60" y="550" class="lane" fill="#7a4b00">フェーズ1.5 予約確認ボット(稼働中)</text>
+
+  <rect x="420" y="575" width="400" height="80" class="box" fill="#fff" stroke="#f38020" stroke-width="2"/>
+  <text x="620" y="605" text-anchor="middle" class="t">Cloudflare Worker: tennis-reservation-bot</text>
+  <text x="620" y="628" text-anchor="middle" class="s">署名検証 → A・B でログイン → 予約一覧を返信</text>
+
+  <path d="M700,264 C700,420 560,520 580,571" fill="none" stroke="#06863b" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="60" y="605" class="s" fill="#06863b">② 「よやく」Webhook → reply</text>
+  <text x="60" y="625" class="s" fill="#06863b">(無料枠を消費しない)</text>
+  <path d="M820,615 C1000,615 1160,330 1230,235" fill="none" stroke="#555" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <text x="900" y="592" class="s">ログイン→予約の確認画面(読み取りのみ)</text>
+
+  <!-- ===== レーン3: 予約支援(フェーズ2 最終方針) ===== -->
+  <rect x="40" y="690" width="1520" height="470" rx="14" fill="#fbfcfe" stroke="#d5dbe5"/>
+  <text x="60" y="720" class="lane" fill="#8b1e1e">フェーズ2 予約支援(構築中・最終方針: 自宅PCで完全自動)</text>
+
+  <!-- スマホ -->
+  <rect x="60" y="760" width="200" height="110" class="box" fill="#fff" stroke="#06C755" stroke-width="2"/>
+  <text x="160" y="792" text-anchor="middle" class="t">スマホ(LINE)</text>
+  <text x="160" y="815" text-anchor="middle" class="s">通知カードの「予約」をタップ</text>
+  <text x="160" y="835" text-anchor="middle" class="s">→ 誰の予約か(A/B)を選ぶ</text>
+  <text x="160" y="855" text-anchor="middle" class="s">→ 待機画面 → 結果画面</text>
+
+  <!-- Worker 玄関 -->
+  <rect x="340" y="760" width="300" height="110" class="box" fill="#fff" stroke="#f38020" stroke-width="2"/>
+  <text x="490" y="792" text-anchor="middle" class="t">Cloudflare Worker(玄関・固定URL)</text>
+  <text x="490" y="815" text-anchor="middle" class="s">/book → KV に登録された PC の現在URLへ転送</text>
+  <text x="490" y="835" text-anchor="middle" class="s">PC が不在なら「サイトで手動で」と案内</text>
+  <text x="490" y="855" text-anchor="middle" class="s">(ドメイン無しのため quick tunnel + URL登録)</text>
+  <line x1="260" y1="815" x2="336" y2="815" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="262" y="805" class="s">署名付きURL</text>
+
+  <!-- Tunnel -->
+  <rect x="700" y="775" width="180" height="80" class="box" fill="#fff" stroke="#f38020" stroke-width="2"/>
+  <text x="790" y="805" text-anchor="middle" class="t">Cloudflare Tunnel</text>
+  <text x="790" y="828" text-anchor="middle" class="s">cloudflared(外→自宅、無料)</text>
+  <line x1="640" y1="815" x2="696" y2="815" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="880" y1="815" x2="936" y2="815" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- 自宅PC -->
+  <rect x="940" y="740" width="420" height="230" class="box" fill="#fff7e6" stroke="#b36b00" stroke-width="2.5"/>
+  <text x="1150" y="770" text-anchor="middle" class="lane" fill="#7a4b00">自宅PC(NEC LAVIE, Windows, 常時起動)</text>
+  <text x="1150" y="792" text-anchor="middle" class="s">SoftBank Air(自宅IP)/ Docker Desktop(WSL2)</text>
+  <rect x="960" y="806" width="380" height="148" rx="8" fill="#fff" stroke="#b36b00" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="1150" y="830" text-anchor="middle" class="t">コンテナ: booking/server(Node)</text>
+  <text x="1150" y="852" text-anchor="middle" class="s">Chrome(Playwright, Xvfb)+ x11vnc + noVNC橋渡し</text>
+  <text x="1150" y="874" text-anchor="middle" class="s">高速経路: ブラウザ内 fetch でログイン→検索→枠選択</text>
+  <text x="1150" y="896" text-anchor="middle" class="s">→ 予約内容確認画面(人数入力)→ 「予約」を自動で押す</text>
+  <text x="1150" y="918" text-anchor="middle" class="s">起動時に自分のトンネルURLを Worker の KV に登録</text>
+  <text x="1150" y="942" text-anchor="middle" class="s">認証情報は PC 内の環境変数(本人が入力)</text>
+
+  <!-- PC → サイト -->
+  <path d="M1360,780 C1420,700 1440,400 1395,264" fill="none" stroke="#06863b" stroke-width="2.5" marker-end="url(#ag)"/>
+  <text x="1405" y="520" class="s" fill="#06863b">自宅IP → v3 通過(実績 3/3)</text>
+  <text x="1405" y="540" class="s" fill="#06863b">→ 予約成立(完全自動)</text>
+
+  <!-- 結果 → LINE -->
+  <path d="M940,900 C700,900 560,560 830,264" fill="none" stroke="#06863b" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ag)"/>
+  <text x="600" y="905" class="s" fill="#06863b">③ 結果を LINE に push(予約番号・料金)</text>
+
+  <!-- v2 フォールバック -->
+  <rect x="60" y="990" width="1300" height="60" rx="8" fill="#fff0f0" stroke="#b03a3a" stroke-width="1.5"/>
+  <text x="80" y="1015" class="t" fill="#8b1e1e">万一 reCAPTCHA v2(画像問題)が出た場合だけ: noVNC でその画面をスマホに映し、人間がチェックを解いて「予約」を押す</text>
+  <text x="80" y="1037" class="s">(データセンターIPでは毎回 2〜10回の画像問題が出るため Cloud Run は不採用。自宅IPでは出ない見込み)</text>
+
+  <!-- 注記 -->
+  <text x="60" y="1090" class="note">越えてはいけない線: reCAPTCHA のトークン偽造・機械による解答はしない。人間の予約を人間のアカウントで、実ブラウザ上で行う。</text>
+  <text x="60" y="1112" class="note">秘密情報の置き場: GitHub Secrets(LINE トークン・署名鍵)/ Cloudflare Secrets(A・B の利用者番号等)/ 自宅PC の環境変数。リポジトリには置かない。</text>
+  <text x="60" y="1134" class="note">PC が落ちているとき: 空き通知は届く。「予約」ボタンは「サーバーに繋がりません。サイトで手動でお願いします」と案内するだけ。</text>
+</svg>
+</body></html>
