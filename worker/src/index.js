@@ -12,6 +12,7 @@
 //   LINE_GROUP_ID              受け付けるグループのID(C〜)
 //   SITE_USER_A / SITE_PASS_A / LABEL_A   Aの利用者番号・パスワード・表示名
 //   SITE_USER_B / SITE_PASS_B / LABEL_B   Bの同上(未登録なら A だけで動く)
+//   BOOKING_SIGNING_SECRET     フェーズ2: 「予約」ボタンの署名鍵(通知側・自宅 PC と同じ値)。KV BOOKING_KV も必要(wrangler.toml)
 //
 // 方針:
 //   - LINE には即座に 200 を返す(署名不一致だけ 401)。取得と返信は ctx.waitUntil() で応答後に続ける。
@@ -25,6 +26,7 @@ import { verifySignature, pickCommandEvents, replyText, replyMessages } from './
 import { fetchReservations, AuthError } from './site.js';
 import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS } from './format.js';
 import { buildReservationFlex } from './flex.js';
+import { handleBooking } from './booking.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -43,6 +45,10 @@ export default {
     if (request.method === 'POST' && url.pathname === '/webhook') {
       return handleWebhook(request, env, ctx);
     }
+
+    // フェーズ2 予約支援の玄関(/book の転送、自宅 PC の URL 登録、/warmup)。src/booking.js
+    const booking = await handleBooking(request, env, ctx);
+    if (booking) return booking;
 
     return new Response('not found', { status: 404 });
   },

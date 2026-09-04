@@ -16,6 +16,9 @@
 //   SITE_USER_A / SITE_PASS_A / LABEL_A(/ _B)  予約サイトの利用者番号・パスワード・呼び名
 //   VNC_PASSWORD            x11vnc のパスワード(entrypoint が生成して渡す)
 //   DISPLAY, SCREEN_W, SCREEN_H, PORT
+//   AUTO_CONFIRM=1          「予約」までサーバーが押す(自宅回線用)。reCAPTCHA v2 が出たときだけ noVNC で人間に渡す
+//   PROFILE_LOCAL=1 / PROFILE_BUCKET  ブラウザプロファイルの持ち越し(ローカル volume / GCS)
+//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  あれば結果を LINE に push
 //
 // 方針:
 //   - 同時に扱う予約は1件だけ(画面が1つしかない)。Cloud Run も max-instances=1 で運用する
@@ -31,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { reserve } from '../src/reserve.js';
 import { restoreProfile, saveProfile } from '../src/profile-store.js';
+import { buildResultFlex, pushResult } from '../src/result-flex.js';
 import { verify } from '../src/token.js';
 
 const PORT = Number(process.env.PORT || 8080);
@@ -49,6 +53,12 @@ const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 116
 // ブラウザプロファイルの保存先(GCS バケット名。無ければ持ち越さない)と、コンテナ内の置き場所
 const PROFILE_BUCKET = process.env.PROFILE_BUCKET || '';
 const PROFILE_DIR = '/tmp/profile';
+// PROFILE_LOCAL=1: GCS ではなくローカルの PROFILE_DIR(docker volume)にプロファイルを持ち越す(自宅 PC 用)
+const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
+// AUTO_CONFIRM=1: 「予約」までサーバーが押す(自宅回線で reCAPTCHA v3 が通る前提)。v2 のチェックが出たときだけ人間に渡す
+const AUTO_CONFIRM = process.env.AUTO_CONFIRM === '1';
+// 結果を LINE に push する(両方あるとき)
+const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
 
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 
@@ -83,11 +93,13 @@ function startSession(token, payload) {
     startedAt: Date.now(),
     readyAt: null,
     finish: null,
+    mode: AUTO_CONFIRM ? 'challenge' : 'confirm', // noVNC 画面の案内文の切り替え用
   };
   session = s;
 
-  // 予約内容確認画面に到達したら呼ばれる。人間の操作が終わる(画面が変わる)か、時間切れ/中止まで待つ
-  const onConfirm = ({ page }) =>
+  // 人間に画面を渡す。半自動では予約内容確認画面で、自動確定では reCAPTCHA v2 が出たときだけ呼ばれる。
+  // 人間の操作が終わる(画面が変わる)か、時間切れ/中止まで待つ
+  const handoff = ({ page }) =>
     new Promise((resolve) => {
       s.status = 'ready';
       s.readyAt = Date.now();
@@ -121,7 +133,7 @@ function startSession(token, payload) {
     headless: false,
     launchArgs: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'],
     viewport: null,
-    onConfirm,
+    ...(AUTO_CONFIRM ? { onChallenge: handoff } : { onConfirm: handoff }),
     debugDir: '/tmp/debug-out',
     log: (m) => log(`  ${m}`),
   };
@@ -130,6 +142,8 @@ function startSession(token, payload) {
     if (PROFILE_BUCKET) {
       s.message = 'ブラウザを準備しています…';
       await restoreProfile(PROFILE_BUCKET, PROFILE_DIR, (m) => log(`  ${m}`));
+      browserOptions.userDataDir = PROFILE_DIR;
+    } else if (PROFILE_LOCAL) {
       browserOptions.userDataDir = PROFILE_DIR;
     }
     // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す。
@@ -144,11 +158,20 @@ function startSession(token, payload) {
     }
     return result;
   })()
-    .then((result) => {
+    .then(async (result) => {
       s.status = 'done';
       s.result = result;
       s.message = result.message;
       log(`予約フロー終了: ${result.status} ${result.message}`);
+      // 結果を LINE にも送る(ボタンを押した本人以外にも分かるように)。失敗しても結果表示には影響させない
+      if (LINE.token && LINE.to && result.status !== 'dry_run') {
+        try {
+          await pushResult(buildResultFlex({ slot, ...result }, s.label), LINE);
+          log('結果を LINE に通知しました');
+        } catch (e) {
+          log(`LINE 通知に失敗(無視): ${e.message}`);
+        }
+      }
     })
     .catch((e) => {
       s.status = 'done';
@@ -244,7 +267,11 @@ function vncPage(token, s) {
 </style></head><body>
 <div id="bar"><b>${esc(slotText(s.payload))}</b><span class="st" id="st">接続中…</span><a href="/abort?token=${encodeURIComponent(token)}">やめる</a></div>
 <div id="screen"></div>
-<div id="hint">人数は入力済みです。<b>「予約」</b>を押してください。「チェックを入れてから…」と出たら<b>チェックボックス</b>を押し、もう一度「予約」。完了画面になると自動で結果に進みます。</div>
+<div id="hint">${
+    s.mode === 'challenge'
+      ? '「予約」は押しました。<b>チェックボックス</b>を押し、画像問題が出たら解いてから、もう一度<b>「予約」</b>を押してください。完了画面になると自動で結果に進みます。'
+      : '人数は入力済みです。<b>「予約」</b>を押してください。「チェックを入れてから…」と出たら<b>チェックボックス</b>を押し、もう一度「予約」。完了画面になると自動で結果に進みます。'
+  }</div>
 <script type="module">
   // esbuild で CommonJS を束ねたため、既定エクスポートが { default: RFB } の形になることがある
   import mod from '/novnc/rfb.js';
