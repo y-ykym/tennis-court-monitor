@@ -44,6 +44,7 @@ async function register(url) {
 }
 
 let lastUrl = null;
+let retryTimer = null;
 async function tick() {
   try {
     const url = await currentTunnelUrl();
@@ -51,7 +52,10 @@ async function tick() {
     if (url !== lastUrl) log(`登録しました: ${new URL(url).hostname}`);
     lastUrl = url;
   } catch (e) {
-    log(`登録に失敗(次回に再試行): ${e.message}`);
+    // 起動直後はトンネルの URL 確定前で失敗しがちなので、失敗したら 15 秒後に早めにやり直す
+    log(`登録に失敗(15秒後に再試行): ${e.message}`);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(tick, 15000);
   }
 }
 
