@@ -17,3 +17,9 @@ LABEL_A=
 SITE_USER_B=
 SITE_PASS_B=
 LABEL_B=
+
+# --- フェーズ2 / 1.6 で使う署名鍵(通知側 GitHub Secrets の BOOKING_SIGNING_SECRET と同じ値) ---
+# 「予約」ボタンの URL と、「キャンセル」ボタンの postback data の署名に使う
+BOOKING_SIGNING_SECRET=
+# ローカルでキャンセルボタンを出すか("1"/"0"。本番は wrangler.toml の [vars])
+CANCEL_ENABLED=1

@@ -1,0 +1,181 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<style>
+  body{margin:0;background:#fff;font-family:"Hiragino Sans","Noto Sans JP",-apple-system,sans-serif}
+  svg{display:block}
+  .t{font-size:15px;fill:#222}
+  .s{font-size:12.5px;fill:#555}
+  .b{font-size:13px;font-weight:700;fill:#222}
+  .lane{font-size:15px;font-weight:700}
+  .step{font-size:14px;font-weight:700;fill:#fff}
+  .note{font-size:12px;fill:#7a3e00}
+  .box{rx:10;ry:10}
+</style></head><body>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1300" viewBox="0 0 1600 1300">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker>
+    <marker id="ag" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#06863b"/></marker>
+    <marker id="ao" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#d9631e"/></marker>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#b03a3a"/></marker>
+  </defs>
+  <rect width="1600" height="1300" fill="#ffffff"/>
+  <text x="40" y="46" font-size="26" font-weight="700" fill="#111">フェーズ1.6 LINEからの予約キャンセル 構成図(2026-09 要件定義)</text>
+  <text x="40" y="72" class="s">「よやく」の予約一覧カードにキャンセルボタンを付け、2段階の確認を経て Cloudflare Worker が予約サイトの取消を代行する。ブラウザ・自宅サーバーは使わない</text>
+
+  <!-- ===== 3つの登場人物(列見出し) ===== -->
+  <rect x="60" y="100" width="420" height="96" class="box" fill="#e6f8ee" stroke="#06C755" stroke-width="2.5"/>
+  <text x="270" y="132" text-anchor="middle" class="lane" fill="#065f2e">LINE グループ(A・B・ボット)</text>
+  <text x="270" y="156" text-anchor="middle" class="s">スマホの LINE。カードのボタンを押すだけ</text>
+  <text x="270" y="178" text-anchor="middle" class="s">ボタンは postback(押した内容がトークにも残る)</text>
+
+  <rect x="590" y="100" width="420" height="96" class="box" fill="#fff3e6" stroke="#f38020" stroke-width="2.5"/>
+  <text x="800" y="132" text-anchor="middle" class="lane" fill="#8a3f00">Cloudflare Worker: tennis-reservation-bot</text>
+  <text x="800" y="156" text-anchor="middle" class="s">既存の「よやく」ボットに postback の分岐を足す</text>
+  <text x="800" y="178" text-anchor="middle" class="s">Secrets: LINE トークン / A・B の利用者番号とパスワード / 署名鍵</text>
+
+  <rect x="1120" y="100" width="420" height="96" class="box" fill="#f1f3f5" stroke="#8a94a6" stroke-width="2"/>
+  <text x="1330" y="132" text-anchor="middle" class="lane" fill="#333">東京都 スポーツ施設予約システム</text>
+  <text x="1330" y="156" text-anchor="middle" class="s">kouen.sports.metro.tokyo.lg.jp(Shift_JIS, POST遷移)</text>
+  <text x="1330" y="178" text-anchor="middle" class="s">取消導線に reCAPTCHA なし(2026-09-06 実機確認)</text>
+
+  <!-- 列の縦線(薄い) -->
+  <line x1="270" y1="200" x2="270" y2="1100" stroke="#cfd6e0" stroke-dasharray="4 6"/>
+  <line x1="800" y1="200" x2="800" y2="1100" stroke="#cfd6e0" stroke-dasharray="4 6"/>
+  <line x1="1340" y1="200" x2="1340" y2="1100" stroke="#cfd6e0" stroke-dasharray="4 6"/>
+
+  <!-- ===== ステップ① 一覧表示(既存 + ボタン) ===== -->
+  <rect x="40" y="220" width="1520" height="250" rx="14" fill="#fbfcfe" stroke="#d5dbe5"/>
+  <rect x="40" y="220" width="190" height="30" rx="8" fill="#1f4e8c"/>
+  <text x="135" y="241" text-anchor="middle" class="step">① 一覧を出す(既存)</text>
+
+  <rect x="90" y="270" width="400" height="66" class="box" fill="#fff" stroke="#06C755" stroke-width="2"/>
+  <text x="290" y="297" text-anchor="middle" class="t">A が「よやく」と送る</text>
+  <text x="290" y="320" text-anchor="middle" class="s">Webhook が Worker に届く</text>
+
+  <line x1="490" y1="303" x2="596" y2="303" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="600" y="270" width="380" height="66" class="box" fill="#fff" stroke="#f38020" stroke-width="2"/>
+  <text x="790" y="297" text-anchor="middle" class="t">署名検証 → A・B でログイン(並行)</text>
+  <text x="790" y="320" text-anchor="middle" class="s">予約の確認・取消画面(prwha1000)を取得</text>
+
+  <line x1="980" y1="303" x2="1136" y2="303" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="1058" y="292" text-anchor="middle" class="s">ログイン・一覧取得</text>
+
+  <rect x="1140" y="270" width="400" height="66" class="box" fill="#fff" stroke="#8a94a6" stroke-width="2"/>
+  <text x="1340" y="297" text-anchor="middle" class="t">予約一覧 HTML を返す</text>
+  <text x="1340" y="320" text-anchor="middle" class="s">予約番号・利用日・時間・公園・支払状況・penaltyday</text>
+
+  <path d="M600,336 C560,336 520,380 492,402" fill="none" stroke="#06863b" stroke-width="2.5" marker-end="url(#ag)"/>
+  <text x="528" y="398" class="s" fill="#06863b">reply(Flex カード)</text>
+
+  <!-- 一覧カードのイメージ -->
+  <rect x="90" y="356" width="400" height="104" class="box" fill="#fff" stroke="#06C755" stroke-width="2"/>
+  <rect x="90" y="356" width="400" height="26" rx="10" fill="#1d3557"/>
+  <text x="290" y="374" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">予約一覧  /  9/6 現在</text>
+  <text x="104" y="401" class="s">A  9/18(金) 17:00-19:00 大島小松川公園</text>
+  <rect x="392" y="389" width="86" height="18" rx="9" fill="#fbe4e4" stroke="#b03a3a"/>
+  <text x="435" y="402" text-anchor="middle" font-size="11" fill="#9b2c2c">キャンセル</text>
+  <text x="104" y="426" class="s">A  9/24(木)  9:00-11:00 大島小松川公園</text>
+  <rect x="392" y="414" width="86" height="18" rx="9" fill="#fbe4e4" stroke="#b03a3a"/>
+  <text x="435" y="427" text-anchor="middle" font-size="11" fill="#9b2c2c">キャンセル</text>
+  <text x="104" y="450" class="s">B  9/10(水) 19:00-21:00 猿江恩賜公園  終了 → ボタン無し</text>
+
+  <text x="660" y="380" class="note">新規: 各行の「キャンセル」ボタン = 署名付き postback</text>
+  <text x="660" y="400" class="note">中身: 誰の予約か(A/B)・予約番号・日付・時刻・公園・有効期限(60分)</text>
+  <text x="660" y="420" class="note">行の並び順(index)は入れない → 実行時に予約番号で探し直す</text>
+  <text x="660" y="440" class="note">ボタン追加で Flex が重くなるため表示上限 9件→7件程度に見直し</text>
+
+  <!-- ===== ステップ② 確認(サイトには行かない) ===== -->
+  <rect x="40" y="490" width="1520" height="240" rx="14" fill="#fbfcfe" stroke="#d5dbe5"/>
+  <rect x="40" y="490" width="250" height="30" rx="8" fill="#b06a00"/>
+  <text x="165" y="511" text-anchor="middle" class="step">② 本当にキャンセルしますか？</text>
+
+  <rect x="90" y="540" width="400" height="66" class="box" fill="#fff" stroke="#06C755" stroke-width="2"/>
+  <text x="290" y="567" text-anchor="middle" class="t">A が 9/18 の「キャンセル」を押す</text>
+  <text x="290" y="590" text-anchor="middle" class="s">トークに「キャンセル: 9/18 17:00 大島小松川」と表示</text>
+
+  <line x1="490" y1="573" x2="596" y2="573" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="543" y="562" text-anchor="middle" class="s">postback</text>
+
+  <rect x="600" y="540" width="380" height="66" class="box" fill="#fff" stroke="#f38020" stroke-width="2"/>
+  <text x="790" y="567" text-anchor="middle" class="t">署名と期限を検証 → 確認カードを返す</text>
+  <text x="790" y="590" text-anchor="middle" class="s">予約サイトへはアクセスしない(即時)</text>
+
+  <path d="M600,606 C560,606 520,650 492,672" fill="none" stroke="#06863b" stroke-width="2.5" marker-end="url(#ag)"/>
+  <text x="528" y="668" class="s" fill="#06863b">reply(確認カード)</text>
+
+  <!-- 確認カードのイメージ -->
+  <rect x="90" y="626" width="400" height="80" class="box" fill="#fff" stroke="#b06a00" stroke-width="2"/>
+  <text x="104" y="648" class="b">本当にキャンセルしますか？</text>
+  <text x="104" y="668" class="s">A  9/18(金) 17:00-19:00 大島小松川公園</text>
+  <rect x="104" y="680" width="190" height="20" rx="10" fill="#b03a3a"/>
+  <text x="199" y="694" text-anchor="middle" font-size="11.5" font-weight="700" fill="#fff">はい、キャンセルする</text>
+  <rect x="304" y="680" width="130" height="20" rx="10" fill="#eef0f3" stroke="#8a94a6"/>
+  <text x="369" y="694" text-anchor="middle" font-size="11.5" fill="#374151">いいえ</text>
+
+  <rect x="1140" y="540" width="400" height="180" class="box" fill="#fff8f0" stroke="#d9631e" stroke-width="1.5"/>
+  <text x="1178" y="566" class="b" fill="#8a3f00">確認カードに足す注意書き</text>
+  <text x="1178" y="592" class="s">⚠ 利用日が3日以内 → 「ペナルティ(1点)が付きます」</text>
+  <text x="1178" y="612" class="s">   (サイトの取消ボタンと同じ判定式。日付のみ比較)</text>
+  <text x="1178" y="644" class="s">「はい」ボタンの有効期限 10分。過ぎたら</text>
+  <text x="1178" y="664" class="s">   「時間切れです。よやくからやり直してください」</text>
+  <text x="1178" y="692" class="s">「いいえ」→「キャンセルしませんでした」</text>
+
+  <!-- ===== ステップ③ 実行 ===== -->
+  <rect x="40" y="750" width="1520" height="330" rx="14" fill="#fbfcfe" stroke="#d5dbe5"/>
+  <rect x="40" y="750" width="230" height="30" rx="8" fill="#9b2c2c"/>
+  <text x="155" y="771" text-anchor="middle" class="step">③ 取消を実行(1回だけ)</text>
+
+  <rect x="90" y="800" width="400" height="66" class="box" fill="#fff" stroke="#06C755" stroke-width="2"/>
+  <text x="290" y="827" text-anchor="middle" class="t">A が「はい、キャンセルする」を押す</text>
+  <text x="290" y="850" text-anchor="middle" class="s">トークに「はい」と表示(誰が押したか残る)</text>
+
+  <line x1="490" y1="833" x2="596" y2="833" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="543" y="822" text-anchor="middle" class="s">postback</text>
+
+  <rect x="600" y="800" width="380" height="180" class="box" fill="#fff" stroke="#f38020" stroke-width="2"/>
+  <text x="790" y="826" text-anchor="middle" class="t">200 を即返し、裏で続行(最長25秒)</text>
+  <text x="620" y="854" class="s">1. 署名・期限を検証(10分)</text>
+  <text x="620" y="876" class="s">2. その人(A)でログイン → 一覧を取り直す</text>
+  <text x="620" y="898" class="s">3. 予約番号で行を探し、日付・時刻・公園も照合</text>
+  <text x="620" y="920" class="s">4. その行の selectCancel=1 + フォーム一式を POST</text>
+  <text x="620" y="942" class="s">5. 応答が「予約取消完了画面(prwga4000)」なら成功</text>
+  <text x="620" y="964" class="s">6. 結果カードを reply → ログアウト</text>
+
+  <path d="M980,870 L1136,870" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="1058" y="860" text-anchor="middle" class="s">ログイン・一覧取得</text>
+  <path d="M980,920 L1136,920" stroke="#b03a3a" stroke-width="2.5" marker-end="url(#ar)"/>
+  <text x="1058" y="910" text-anchor="middle" class="s" fill="#b03a3a">取消 POST(1回だけ)</text>
+  <path d="M1136,950 L980,950" stroke="#555" stroke-width="2" marker-end="url(#a)"/>
+  <text x="1058" y="968" text-anchor="middle" class="s">完了画面 / 他</text>
+
+  <rect x="1140" y="800" width="400" height="180" class="box" fill="#fff" stroke="#8a94a6" stroke-width="2"/>
+  <text x="1340" y="826" text-anchor="middle" class="t">予約サイト側の動き</text>
+  <text x="1178" y="854" class="s">一覧画面のフォーム一式を受け取る(delIRsvJKey は</text>
+  <text x="1178" y="874" class="s">画面ごとの128桁トークン。同一セッション内で送る)</text>
+  <text x="1178" y="900" class="s">取消は 1 回の POST で即時確定。確認画面は挟まらない</text>
+  <text x="1178" y="920" class="s">reCAPTCHA なし(Google への通信も発生しない)</text>
+  <text x="1178" y="946" class="s">成功 → 予約取消完了画面「予約の取消が完了しました。」</text>
+  <text x="1178" y="966" class="s">取消後の一覧から該当行が消える</text>
+
+  <path d="M600,980 C560,980 520,1010 492,1030" fill="none" stroke="#06863b" stroke-width="2.5" marker-end="url(#ag)"/>
+  <text x="528" y="1054" class="s" fill="#06863b">reply(結果)</text>
+
+  <rect x="90" y="886" width="400" height="184" class="box" fill="#fff" stroke="#06C755" stroke-width="2"/>
+  <text x="104" y="910" class="b">返ってくる結果は4種類</text>
+  <text x="104" y="936" class="s"><tspan fill="#06863b" font-weight="700">成功</tspan>  キャンセルしました(予約の内容を添える)</text>
+  <text x="104" y="962" class="s"><tspan fill="#b06a00" font-weight="700">見つからない</tspan>  既に取消済みの可能性。「よやく」で確認</text>
+  <text x="104" y="988" class="s"><tspan fill="#b03a3a" font-weight="700">失敗</tspan>  キャンセルできませんでした。サイトで状態を確認</text>
+  <text x="104" y="1008" class="s">        (成否が分からないときも同じ。自動では再送しない)</text>
+  <text x="104" y="1034" class="s"><tspan fill="#555" font-weight="700">時間切れ</tspan>  「よやく」からやり直し</text>
+  <text x="104" y="1058" class="s">その後「よやく」で一覧から消えたことを確認できる</text>
+
+  <!-- ===== 安全対策まとめ ===== -->
+  <rect x="40" y="1100" width="1520" height="170" rx="14" fill="#fffaf5" stroke="#e0b38a"/>
+  <text x="60" y="1130" class="lane" fill="#7a3e00">誤って取り消さないための仕組み(取り消せない操作なので多重に守る)</text>
+  <text x="60" y="1160" class="s">・ボタンは全て署名付き(鍵は既存の BOOKING_SIGNING_SECRET)。改ざん・期限切れ・別グループからの postback は無視。文字入力(「キャンセル」と打つ等)では受け付けない</text>
+  <text x="60" y="1184" class="s">・必ず 2 段階(ボタン → 確認カード →「はい」)。押した内容はトークに表示され、誰がいつ押したかがグループに残る</text>
+  <text x="60" y="1208" class="s">・実行直前に一覧を取り直し、予約番号と日付・時刻・公園が一致する行だけを送る(並び順が変わっても別の予約を消さない)</text>
+  <text x="60" y="1232" class="s">・取消の POST は絶対に 1 回だけ。二重押しは 2 回目が「見つからない」になるだけで無害。LINE の「Webhook の再送」は OFF のまま</text>
+  <text x="60" y="1256" class="s">・段階導入: 設定 CANCEL_ENABLED=1 のときだけボタンを出す。実機テストは使い捨ての予約を取ってから行う</text>
+</svg>
+</body></html>

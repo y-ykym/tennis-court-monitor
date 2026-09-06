@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeSignature, verifySignature, pickCommandEvents } from '../src/line.js';
+import { computeSignature, verifySignature, pickCommandEvents, pickPostbackEvents } from '../src/line.js';
 
 const SECRET = 'test-channel-secret';
 const GROUP = 'C1234567890abcdef1234567890abcdef';
@@ -55,4 +55,21 @@ test('抽出: 壊れたJSON・eventsなしは空配列', () => {
   assert.deepEqual(pickCommandEvents('not json', GROUP), []);
   assert.deepEqual(pickCommandEvents('{}', GROUP), []);
   assert.deepEqual(pickCommandEvents(body([]), GROUP), []);
+});
+
+test('postback: 対象グループの postback だけを拾う(他グループ・個人・data 無しは無視)', () => {
+  const pb = (data, source = { type: 'group', groupId: GROUP, userId: 'U1' }) => ({ type: 'postback', replyToken: 'rt', source, postback: { data } });
+  const raw = body([
+    pb('c|A|1|20260918|1700|1900|x|3|1.sig'),
+    pb('n'),
+    pb('n', { type: 'group', groupId: 'Cother', userId: 'U1' }),
+    pb('n', { type: 'user', userId: 'U1' }),
+    { type: 'postback', replyToken: 'rt', source: { type: 'group', groupId: GROUP }, postback: {} },
+    textEvent('よやく'),
+  ]);
+  const got = pickPostbackEvents(raw, GROUP);
+  assert.deepEqual(got.map((e) => e.postback.data), ['c|A|1|20260918|1700|1900|x|3|1.sig', 'n']);
+  assert.deepEqual(pickPostbackEvents('not json', GROUP), []);
+  // 逆に「よやく」の抽出には postback は混ざらない
+  assert.equal(pickCommandEvents(raw, GROUP).length, 1);
 });
