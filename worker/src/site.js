@@ -20,8 +20,10 @@
 //   4. POST /web/rsvWGetCancelRsvDataAction.do          予約の確認・取消画面(一覧をHTMLで含む)
 //   5. POST /web/rsvWTransUserAttestationEndAction.do   ログアウト(失敗しても無視)
 //
-// 読み取り専用。キャンセル・予約・抽選など書き込み操作は一切送らない
-// (rsvWCancelRsvAction / selectCancel=1 を送ってはいけない)。
+// fetchReservations は読み取り専用(予約・抽選など書き込み操作は送らない)。
+// 唯一の書き込みは cancelReservation(フェーズ1.6)で、利用者が LINE で2段階の確認をした後にだけ呼ばれる:
+//   6. POST /web/rsvWCancelRsvAction.do   一覧画面の form1 一式 + 対象行の selectCancel=1(1回だけ。再試行しない)
+//      → 予約取消完了画面(prwga4000.jsp)が返れば成功。調査記録は docs/site-notes.md「キャンセル機能の事前調査」
 //
 // サイトの癖への対策(lib/scrape.js と同じ考え方):
 //   - レスポンスは Shift_JIS → TextDecoder('shift_jis')
@@ -142,9 +144,10 @@ function parseTimeRange(text) {
 // HTML全文を一気に正規表現で舐めず、モーダルごとの短い断片だけを処理する(Workers の CPU 制限対策)
 export function parseReservations(html) {
   const reservations = [];
-  const re = /id="rsvDetail\d+"/g;
+  const re = /id="rsvDetail(\d+)"/g;
   let m;
   while ((m = re.exec(html)) !== null) {
+    const index = Number(m[1]);
     const from = html.indexOf('<table', m.index);
     if (from < 0) break;
     const to = html.indexOf('</table>', from);
@@ -159,6 +162,8 @@ export function parseReservations(html) {
     const [start, end] = parseTimeRange(fields['時間'] || '');
     // "猿江恩賜公園 テニス（人工芝）" → 公園名と種目に分ける(&nbsp; 区切り)
     const place = (fields['公園・施設'] || '').split(' ');
+    // 行ごとの hidden(penaltydayN)。キャンセル時のペナルティ判定に使う(無ければ null)
+    const penaltyDay = hiddenValue(html, `penaltyday${index}`);
     reservations.push({
       id: fields['予約番号'] || '',
       date: parseDate(fields['利用日']),
@@ -167,16 +172,16 @@ export function parseReservations(html) {
       facility: place[0] || '',
       purpose: fields['利用目的'] || place.slice(1).join(' ') || '',
       status: fields['支払状況'] || '',
+      index,
+      penaltyDay: penaltyDay == null ? null : Number(penaltyDay),
     });
   }
   return reservations;
 }
 
-// 1回分の試行: 新セッションでログイン → 一覧取得 → ログアウト。
-// deferLogout が渡された場合、ログアウトは待たずに関数として渡す(返信を先に送るため)
-async function attempt({ userId, password }, { signal, log, deferLogout }) {
-  const request = createSession(signal, log);
-
+// 新セッションでログインし、予約の確認・取消画面(一覧)を開くところまで(fetch と cancel で共通)。
+// 戻り値: { list(一覧HTML), logout(関数) }
+async function openReservationList(request, log) {
   // 1. トップ(メンテナンス中は検索画面が無い)
   const top = await request('/web/index.jsp');
   if (!top.includes('rsvWTransUserLoginAction')) {
@@ -197,9 +202,9 @@ async function attempt({ userId, password }, { signal, log, deferLogout }) {
 
   // 3. ログイン実行(ブラウザの submitLogin() と同じ: hidden一式 + userId + password + 1文字ずつの loginCharPass)
   const form = hiddenFields(loginPage);
-  form.set('userId', userId);
-  form.set('password', password);
-  for (const ch of password) form.append('loginCharPass', ch);
+  form.set('userId', request.credentials.userId);
+  form.set('password', request.credentials.password);
+  for (const ch of request.credentials.password) form.append('loginCharPass', ch);
   const home = await request('/web/rsvWUserAttestationLoginAction.do', form);
   const homeId = pageId(home);
   if (homeId === 'pawab2100.jsp') {
@@ -223,7 +228,7 @@ async function attempt({ userId, password }, { signal, log, deferLogout }) {
   };
 
   try {
-    // 4. 予約の確認・取消画面(表示のみ。キャンセルは送らない)
+    // 4. 予約の確認・取消画面(表示のみ)
     const displayNo = hiddenValue(home, 'displayNo') || 'pawab2000';
     const list = await request(
       '/web/rsvWGetCancelRsvDataAction.do',
@@ -234,6 +239,24 @@ async function attempt({ userId, password }, { signal, log, deferLogout }) {
       // セッション未認識でホームが返る等
       throw new Error(`予約確認画面が想定外です (${listId ?? '不明'})`);
     }
+    return { list, logout };
+  } catch (e) {
+    await logout();
+    throw e;
+  }
+}
+
+function sessionFor(credentials, signal, log) {
+  const request = createSession(signal, log);
+  request.credentials = credentials;
+  return request;
+}
+
+// 1回分の試行: 新セッションでログイン → 一覧取得 → ログアウト。
+// deferLogout が渡された場合、ログアウトは待たずに関数として渡す(返信を先に送るため)
+async function attempt(credentials, { signal, log, deferLogout }) {
+  const { list, logout } = await openReservationList(sessionFor(credentials, signal, log), log);
+  try {
     return parseReservations(list);
   } finally {
     if (deferLogout) deferLogout(logout);
@@ -241,6 +264,26 @@ async function attempt({ userId, password }, { signal, log, deferLogout }) {
   }
 }
 
+// 失敗時に新セッションからやり直す共通処理(認証エラー・タイムアウトは即座に諦める)
+async function withRetry(fn, { signal, log, retryUntil, what }) {
+  let lastError;
+  for (let n = 1; n <= MAX_ATTEMPTS; n++) {
+    if (signal?.aborted) throw new Error('タイムアウトのため中断しました');
+    const started = Date.now();
+    try {
+      return await fn(n, started);
+    } catch (e) {
+      lastError = e;
+      if (e instanceof AuthError || signal?.aborted || e.name === 'AbortError') throw e;
+      log(`${what}失敗 (${n}回目, ${Date.now() - started}ms): ${e.message}`);
+      if (Date.now() > retryUntil) {
+        log('返信期限が近いため再試行しません');
+        break;
+      }
+    }
+  }
+  throw lastError;
+}
 
 // 外部から使う本体。失敗時は新セッションから最大 MAX_ATTEMPTS 回。
 //   signal      : 全体のタイムアウト(AbortController)
@@ -251,23 +294,105 @@ export async function fetchReservations(credentials, { signal, log = () => {}, r
   if (!credentials?.userId || !credentials?.password) {
     throw new AuthError('利用者番号またはパスワードが未設定です');
   }
-  let lastError;
-  for (let n = 1; n <= MAX_ATTEMPTS; n++) {
-    if (signal?.aborted) throw new Error('タイムアウトのため中断しました');
-    const started = Date.now();
-    try {
+  return withRetry(
+    async (n, started) => {
       const result = await attempt(credentials, { signal, log, deferLogout });
       log(`取得成功 (${n}回目, ${Date.now() - started}ms, ${result.length}件)`);
       return result;
-    } catch (e) {
-      lastError = e;
-      if (e instanceof AuthError || signal?.aborted || e.name === 'AbortError') throw e;
-      log(`取得失敗 (${n}回目, ${Date.now() - started}ms): ${e.message}`);
-      if (Date.now() > retryUntil) {
-        log('返信期限が近いため再試行しません');
-        break;
-      }
+    },
+    { signal, log, retryUntil, what: '取得' }
+  );
+}
+
+// ---- フェーズ1.6 キャンセル ----
+
+// 一覧画面の form1 一式から、取消 POST の body を組む(ブラウザの rsvcancel() と同じ内容)。
+//   - hidden を並び順のまま全部送る。selectCancel は行ごとに1つあり、対象行(index 番目)だけ "1"、他は空
+//   - pageNo = cancelPageNo
+export function buildCancelForm(listHtml, index) {
+  const params = new URLSearchParams();
+  const re = /<input[^>]*type="hidden"[^>]*>/g;
+  let m;
+  let selectCount = 0;
+  let hasKey = false;
+  while ((m = re.exec(listHtml)) !== null) {
+    const name = m[0].match(/name="([^"]*)"/)?.[1];
+    if (!name) continue;
+    let value = decodeEntities(m[0].match(/value="([^"]*)"/)?.[1] ?? '');
+    if (name === 'selectCancel') {
+      value = selectCount === index ? '1' : '';
+      selectCount++;
     }
+    if (name === 'delIRsvJKey' && value) hasKey = true;
+    params.append(name, value);
   }
-  throw lastError;
+  if (!hasKey) throw new Error('一覧画面に delIRsvJKey がありません');
+  if (index >= selectCount) throw new Error(`対象行 ${index} が一覧にありません(${selectCount}行)`);
+  params.set('pageNo', params.get('cancelPageNo') || '1');
+  return params;
+}
+
+// 取消 POST の応答が「予約取消完了画面」か
+export function isCancelDone(html) {
+  return pageId(html) === 'prwga4000.jsp' || html.includes('予約の取消が完了しました');
+}
+
+// 予約を1件キャンセルする。target = { id(予約番号), date, start, facility } は LINE のトークン由来。
+// 手順: ログイン → 一覧 → 予約番号で行を探し、日付・時刻・公園も一致することを確認 → 取消 POST(1回だけ)→ 完了判定。
+// ログイン〜一覧取得までは fetchReservations と同じ再試行を行うが、取消 POST は絶対に再試行しない。
+// 戻り値: { status: 'success'|'not_found'|'mismatch'|'failed'|'unknown', reservation?, page? }
+//   not_found : 一覧に予約番号が無い(既に取消済みの可能性)
+//   mismatch  : 予約番号はあるが日付・時刻・公園が違う(送らずに中止)
+//   failed    : POST の応答が完了画面ではなかった(取消されていない可能性が高い)
+//   unknown   : POST 自体が失敗・タイムアウト(取消されたか不明。利用者にサイト確認を促す)
+export async function cancelReservation(credentials, target, { signal, log = () => {}, retryUntil = Infinity, deferLogout } = {}) {
+  if (!credentials?.userId || !credentials?.password) {
+    throw new AuthError('利用者番号またはパスワードが未設定です');
+  }
+  // 1. ログイン〜一覧(ここまでは再試行してよい)
+  const { request, list, logout } = await withRetry(
+    async () => {
+      const request = sessionFor(credentials, signal, log);
+      const opened = await openReservationList(request, log);
+      return { request, ...opened };
+    },
+    { signal, log, retryUntil, what: '一覧取得' }
+  );
+  const finish = async () => {
+    if (deferLogout) deferLogout(logout);
+    else await logout();
+  };
+
+  try {
+    // 2. 対象行を探して照合
+    const reservations = parseReservations(list);
+    const found = reservations.find((r) => r.id === target.id);
+    if (!found) {
+      log(`対象の予約が一覧にありません(${reservations.length}件中)`);
+      return { status: 'not_found' };
+    }
+    if (found.date !== target.date || found.start !== target.start || found.facility !== target.facility) {
+      log(`対象の予約の内容が一致しません(一覧: ${found.date} ${found.start} ${found.facility})`);
+      return { status: 'mismatch', reservation: found };
+    }
+
+    // 3. 取消 POST(1回だけ。ここで失敗したら再試行せず unknown)
+    const form = buildCancelForm(list, found.index);
+    let result;
+    try {
+      result = await request('/web/rsvWCancelRsvAction.do', form);
+    } catch (e) {
+      log(`取消 POST に失敗(成否不明): ${e.message}`);
+      return { status: 'unknown', reservation: found };
+    }
+    if (isCancelDone(result)) {
+      log(`取消成功: ${found.date} ${found.start} ${found.facility}`);
+      return { status: 'success', reservation: found };
+    }
+    const page = pageId(result) ?? '不明';
+    log(`取消 POST の応答が完了画面ではありません (${page})`);
+    return { status: 'failed', reservation: found, page };
+  } finally {
+    await finish();
+  }
 }

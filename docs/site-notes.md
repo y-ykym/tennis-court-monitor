@@ -380,3 +380,74 @@ reserve.js をマウス移動・1文字ずつ入力・操作間の小休止を�
   確認画面へ POST する(通信主体をブラウザ1つに統一)。Cloud Run 上で **署名URL → 予約者選択 → 確認画面(人数入力済み)まで 38秒**
   (内訳: ブラウザ起動+トップ表示 約8秒、fetch 6回 約21秒、確認画面 POST 約5秒)。noVNC の WebSocket 橋渡しは RFB 3.8 の応答で確認
 - Cloud Run の URL で `/healthz` は Google 側が 404 を返す(コンテナに届かない)。`/warmup` は届く
+
+# キャンセル機能の事前調査: 取消導線の reCAPTCHA 有無 (2026-09-06 Chrome DevTools、利用者Aでログイン)
+
+予約のキャンセル機能を作るための事前調査。静的解析のあと、**テスト用に取った予約(9/18 17:00 大島小松川)を実際にキャンセルして応答画面まで確認した**(下記「実キャンセルの結果」)。
+
+## 結論
+
+- 予約の確認・取消画面(`prwha1000.jsp`)と、その「キャンセル」ボタンの処理には **reCAPTCHA は組み込まれていない**
+  - ページ内に `gRecaptchaActive` / `gRecaptchaSiteKey` / `grecaptcha` のいずれも定義されていない
+  - reCAPTCHA の script タグ(`www.google.com/recaptcha`, `gstatic`)の読み込み無し。ネットワーク上も Google への通信無し
+  - hidden `recaptchaToken` が form1 に無い(= サーバー側が検証するトークンを送る手段自体が無い)
+  - HTML 全体に "recaptcha" という文字列が 0 件
+  - 読み込む JS は `paw_*`(共通)と `prwha1000.js` のみ。共通 JS(`paw_doaction.js` / `paw_common.js` / `paw_doajax.js` / `paw_l100.js`)にも recaptcha 無し
+- 比較: 予約確定画面(`prwea1000.jsp`)は `gRecaptchaActive = true` で `grecaptcha.execute(..., {action:'webRsv'})` を呼ぶ。ログイン画面は `gRecaptchaActive = false`(無効のまま)
+- 「キャンセル」の処理(`js/prwha1000.js` の `rsvcancel`)は次の順で、全てブラウザ内の同期処理:
+  1. `penalty == 1` のとき、利用日が今日+`penaltydayN`(=3)日以内なら confirm `e430100`
+     「選択した施設予約申込みのキャンセルを行った場合、ペナルティが付与されますが、よろしいですか？」、
+     それ以外は confirm `e410080`「選択した施設予約申込みをキャンセルしますか？」
+  2. `selectCancel[N] = "1"`(1件だけのときは `selectCancel` が単独要素になるので `.length` が undefined の分岐あり)
+  3. `pageNo = cancelPageNo` にして `doAction(form1, gRsvWCancelRsvAction)` = `POST /web/rsvWCancelRsvAction.do`(素の `form.submit()`)
+- したがって HTTP 直叩き(フェーズ1.5 の `worker/src/site.js` 方式)でも、Playwright でもキャンセルは技術的に可能。
+  取消の POST 後は確認画面を挟まず **即時に取消完了画面** になる(下記)
+
+## 取消画面(`prwha1000.jsp`)の hidden 一覧(2026-09-06 時点、予約2件)
+
+`useday0, stime0, penaltyday0, selectCancel, useday1, stime1, penaltyday1, displayNo, e410080, e430100, pageNo, cancelPageNo, procType, delIRsvJKey, selectIndex`
+
+- `delIRsvJKey` は 128 桁(予約確定の `insIRsvJKey` と同じ形式の画面トークン)。キャンセル POST にはこれが form1 一式として付く
+- form の既定 action は `index.jsp`、method POST。実際の送信先は `doAction` が差し替える
+- `penalty` は 1(ペナルティ制度が有効)。テニスは利用日の 4 日前までキャンセル可能(§4)、`penaltyday` は 3
+- `js/prwhb1000.js` も存在するが、これは年月で絞る一覧(`gRsvWGetRsvDataListAction`)用で取消完了画面ではない。recaptcha 無し
+
+## 調査時の注意
+
+- Chrome DevTools MCP でナビの「予約 ⏷」メニューのクリックが安全判定で止められた。折りたたみ内の
+  「予約の確認」リンク(`doAction(form1, gRsvWGetCancelRsvDataAction)`)を直接 click() すれば一覧に進める
+- ログインはパスワードを本人が入力(自動化ツールからは入れない)。MCP サーバーが再接続すると Chrome が再起動しログイン状態が消える
+
+## 実キャンセルの結果(2026-09-06、9/18 17:00〜19:00 大島小松川 テニス(人工芝) をテスト用に予約して取消)
+
+- 一覧画面で行0の「キャンセル」→ confirm「選択した施設予約申込みをキャンセルしますか？」OK → **`POST /web/rsvWCancelRsvAction.do` が 200 で予約取消完了画面(`prwga4000.jsp`)を返す**。
+  途中の確認画面は無い(1 POST で取消が確定する)。所要は通常の画面遷移1回分
+- 完了画面の本文は「予約取消完了」「予約の取消が完了しました。」、ボタンは「予約の確認へ」(`gRsvWGetCancelRsvDataAction`)のみ。
+  予約番号や取消した内容の再表示は無い。hidden は `displayNo=prwga4000`, `procType` のみ
+- 完了画面にも reCAPTCHA 無し(script・変数・文字列ともに 0 件)。取消の POST/応答のどこにも Google への通信は無かった
+- 取消後に「予約の確認」を開くと、該当行が一覧から消え、残り2件(9/24・9/25)だけになった
+- 送信した body(`application/x-www-form-urlencoded`、Shift_JIS で URL エンコード)。一覧画面の form1 一式をそのまま送る形:
+
+  ```
+  useday0=20260918&stime0=1700&penaltyday0=3&selectCancel=1
+  &useday1=20260924&stime1=900&penaltyday1=3&selectCancel=
+  &useday2=20260925&stime2=900&penaltyday2=3&selectCancel=
+  &displayNo=prwha1000&e410080=<確認文言 SJIS>&e430100=<ペナルティ確認文言 SJIS>
+  &pageNo=1&cancelPageNo=1&procType=1&delIRsvJKey=<128桁>&selectIndex=-1
+  ```
+
+  - 取消対象は **`selectCancel` の位置**(N番目の値が `1`)で指定する。予約番号は送らない。行は全件分送る(対象外は空)
+  - `delIRsvJKey` は一覧画面の表示ごとに変わる 128 桁のトークンで、**一覧を取得した同じセッションで送る必要がある**(予約確定の `insIRsvJKey` と同じ扱い)
+  - 予約番号は一覧 HTML の詳細モーダル(`#rsvDetailN`)から取れるので、「利用者が LINE で選んだ予約番号 → 一覧の行 index」に変換してから送る
+  - `e410080` / `e430100` は確認文言の hidden。サーバーが値を使うかは不明だが、form1 一式として送れば問題ない
+
+### 実装への示唆
+
+- **ブラウザ不要**。フェーズ1.5 の Worker(`worker/src/site.js`)の「ログイン → `rsvWGetCancelRsvDataAction.do` で一覧取得」に、
+  「行 index を決めて form1 一式 + `selectCancel[N]=1` を `rsvWCancelRsvAction.do` に POST → 応答が `prwga4000.jsp` なら成功」を足すだけで成立する
+- 成功判定は応答 HTML の `<!-- prwga4000.jsp -->` コメント(または本文「予約の取消が完了しました。」)。失敗時は一覧(`prwha1000.jsp`)や
+  エラー画面に戻ると推定(未確認)。応答が完了画面でなければ「取消できていない可能性」として人間に確認を促す
+- 取消は取り消せない操作なので、LINE 側は「候補を提示 → 本人が予約番号を明示して確定」の 2 段階にし、一覧を再取得して
+  対象行が **同じ日付・時刻・公園** であることを送信直前に照合する(index は一覧の並びで変わる)
+- ペナルティ: 利用日が 3 日以内の取消はペナルティ対象(confirm 文言 `e430100` が出る条件と同じ)。ボットでは同じ判定を自前で行い、
+  対象なら「ペナルティが付きます」と警告してから確定させる

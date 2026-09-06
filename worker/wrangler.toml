@@ -21,3 +21,8 @@ enabled = true
 [[kv_namespaces]]
 binding = "BOOKING_KV"
 id = "97e0d8dae665476797bae9dc168c560b"
+
+# フェーズ1.6 予約キャンセル。"1" のとき予約一覧カードに「キャンセル」ボタンを出し、postback を受け付ける。
+# "0" にして deploy すればボタンは消え、押されても無視する(既に配られたカードのボタンも無効になる)
+[vars]
+CANCEL_ENABLED = "1"

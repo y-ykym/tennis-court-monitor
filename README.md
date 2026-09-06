@@ -5,6 +5,8 @@
 
 フェーズ1.5として、LINEグループで `よやく` と送ると A・B 2人分の予約一覧をカードで返す
 予約確認ボット(Cloudflare Workers)も稼働中です(後述「フェーズ1.5 予約確認ボット」)。
+フェーズ1.6として、その一覧カードの「キャンセル」ボタンから予約を取り消す機能を同じ Worker に実装済みです
+(後述「フェーズ1.6 予約キャンセル」。配置と実機テストはこれから)。
 
 サイトの週表示カレンダーが使う内部JSON APIをHTTP(Node標準fetch)で直接叩くため、
 ブラウザ自動化(Playwright)は不要です。依存パッケージは japanese-holidays の1個だけ。
@@ -48,12 +50,14 @@ booking/                     フェーズ2 予約支援(自宅の Raspberry Pi 5
   test/                      node --test(トークン署名)
 .github/workflows/reserve.yml  Actions からの予約実行(DC IP では reCAPTCHA v2 が出るため、本番導線ではなく検証用)
 
-worker/                      フェーズ1.5 予約確認ボット(Cloudflare Workers。lib/ とは独立)
-  src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply)
-  src/line.js                LINE署名検証・イベント抽出・reply送信
-  src/site.js                予約サイトへログインして「予約の確認」一覧を取得(読み取りのみ)
+worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル(Cloudflare Workers。lib/ とは独立)
+  src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply。postback→確認カード/取消実行)
+  src/line.js                LINE署名検証・イベント抽出(テキスト・postback)・reply送信
+  src/site.js                予約サイトへログインして「予約の確認」一覧を取得。cancelReservation で取消 POST(1回だけ)
+  src/cancel-token.js        「キャンセル」「はい」ボタンに載せる署名付き postback data(HMAC、期限付き)とペナルティ判定
   src/format.js              テキスト整形(0件・失敗時の文言)
-  src/flex.js                予約一覧のFlex Message(カード)
+  src/flex.js                予約一覧・キャンセル確認・結果のFlex Message(カード)。10KB制限に収まるよう行数を自動調整
+  src/booking.js             フェーズ2 予約支援の玄関(署名検証・自宅サーバーへの中継)
   scripts/probe-site.mjs     ローカルからログイン確認(パスワード変更後の疎通確認にも)
   scripts/send-test-event.mjs 署名付きの模擬Webhookを wrangler dev に送る
   test/                      node --test のユニットテスト(fixturesは個人情報をダミー化済み)
@@ -224,6 +228,55 @@ SITE_USER=<利用者番号> LABEL=A node scripts/probe-site.mjs
 8. 返信が来ないが `返信しました` は出ている → LINE側の一時的な遅延。`返信に失敗 ... HTTP 400` なら Flex の形式不備
    (テキスト版で自動再送する)、`HTTP 401` なら LINE_CHANNEL_ACCESS_TOKEN を確認
 9. Cloudflare ダッシュボード → Workers & Pages → tennis-reservation-bot → Logs でも過去ログを見られます
+
+## フェーズ1.6 予約キャンセル(実装済み・配置と実機テスト待ち)
+
+「よやく」の予約一覧カードの各行に「キャンセル」ボタンが付きます。押すと確認カードが返り、「はい、キャンセルする」を押すと
+Worker が予約サイトで取消を実行して結果カードを返します。ブラウザや自宅サーバーは使いません(取消導線に reCAPTCHA が無いことを
+実機で確認済み。`docs/site-notes.md`「キャンセル機能の事前調査」)。要件は `docs/予約空き監視_要件定義書.md` §12、
+構成図は `docs/system-overview-cancel.png`、カードの見た目は `docs/flex-design-cancel.png`。
+
+### 使い方と挙動
+
+1. `よやく` → 一覧カード。終了済みでない行に「キャンセル」ボタン(押した内容は「9/18 17:00 大島小松川公園 をキャンセル」としてトークに残る)
+2. 確認カード「この予約をキャンセルしますか？」。利用日が 3 日以内なら「ペナルティ(1点)が付きます」の警告付き。
+   「いいえ」→「キャンセルしませんでした」。ボタンは一覧表示から 60 分、確認カードから 10 分で期限切れ(「時間切れです」)
+3. 「はい、キャンセルする」→ その人でログイン → 一覧を取り直し → 予約番号で行を探して日付・時刻・公園を照合 → 取消 POST(1回だけ)→
+   - 成功: 緑の「キャンセルしました」カード(直後に `よやく` で消えたことを確認できる)
+   - 一覧に無い: 「この予約は見つかりませんでした(既にキャンセル済みの可能性があります)」
+   - 内容不一致: 「予約の内容が一覧と一致しないため中止しました」(送信しない)
+   - 失敗・成否不明: グレーの「キャンセルできませんでした」カード。**取消されている可能性もあるので、必ずサイトで確認する**
+
+誰の予約でも、グループのメンバーなら取り消せます(2 人グループの前提)。文字入力(「キャンセル」と打つ等)では受け付けません。
+取消の POST は再試行しないので、二重に取り消されることはありません。
+
+### 設定
+
+- Secrets は追加なし(署名鍵は Worker に登録済みの `BOOKING_SIGNING_SECRET` を流用)
+- `worker/wrangler.toml` の `[vars] CANCEL_ENABLED = "1"` でボタンを出す。`"0"` にして `npx wrangler deploy` すればボタンは消え、
+  既に配られたカードのボタンを押しても「キャンセル機能は現在停止しています」と返す
+- LINE Developers の「Webhookの再送」は OFF のまま(ON だと同じ postback が再配送される)
+
+### 配置と実機テスト(初回)
+
+```bash
+cd worker
+npm test                       # ユニットテスト(44件)
+npx wrangler deploy
+npx wrangler tail --format pretty
+```
+
+1. 予約サイトで**使い捨ての予約**を 1 件取る(本番の予約で試さない)
+2. グループで `よやく` → その行に「キャンセル」ボタンが出ることを確認 → 押す → 確認カード → 「はい、キャンセルする」
+3. 緑の「キャンセルしました」が返り、`よやく` で一覧から消えていれば OK。ログには `[cancel:A] 取消成功: 2026-09-18 17:00 大島小松川公園` と出る
+4. 「いいえ」、期限切れ(10 分後に「はい」)、終了済み枠にボタンが無いことも確認する
+
+### トラブル時
+
+- `[cancel] 署名不正の postback を無視しました` → 署名鍵が変わった(古いカードのボタン)か、別の Worker のカード。`よやく` からやり直す
+- `対象の予約が一覧にありません` → 既に取消済み、または別の人(A/B)の予約。`よやく` で確認
+- `取消 POST の応答が完了画面ではありません (xxx.jsp)` → サイト改修の可能性。応答画面名を手がかりに `worker/src/site.js` の `isCancelDone` / `buildCancelForm` を見直す
+- `取消 POST に失敗(成否不明)` → 通信断。サイトで状態を確認する(自動では再送しない)
 
 ## フェーズ2 予約支援(自宅 Raspberry Pi で自動予約。ハード到着待ち)
 
