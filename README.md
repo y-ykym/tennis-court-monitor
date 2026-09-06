@@ -35,7 +35,7 @@ docs/site-notes.md           サイト調査記録(API仕様・画面遷移・�
 docs/予約空き監視_要件定義書.md  要件定義書(§11 がフェーズ1.5)
 docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(記録用)
 
-booking/                     フェーズ2 予約支援(半自動予約。Cloud Run の1コンテナ。lib/ とは独立)
+booking/                     フェーズ2 予約支援(自宅の Raspberry Pi 5 で動かす Docker コンテナ。lib/ とは独立)
   src/reserve.js             Playwright で ログイン→検索→枠選択→予約内容確認→(人間へ引き渡し or 予約)→完了画面の解析
   src/token.js               LINE ボタン用の署名付きトークン(枠情報+有効期限、HMAC)
   server/server.mjs          Web アプリ(/book → 自動遷移 → 待機画面 → noVNC 画面 → 結果)。noVNC の WebSocket 橋渡しも内蔵
@@ -43,7 +43,8 @@ booking/                     フェーズ2 予約支援(半自動予約。Cloud 
   scripts/notify-result.mjs  予約結果の LINE 通知カード(Actions 用)
   scripts/explore-flow.mjs   予約フローの調査スクリプト(本人ログイン。確定は押さない)
   Dockerfile / docker-entrypoint.sh  Playwright 公式イメージ + Xvfb + x11vnc。noVNC クライアントは esbuild で束ねる
-  deploy.sh                  Cloud Run への配置(Cloud Build でビルド → デプロイ)
+  pc/                        自宅 Pi 用: docker-compose.yml(本体+Cloudflare Tunnel+URL登録)、README.md(手順)、pi-init.sh(初期化)、pi-check.sh(確認)
+  deploy.sh                  Cloud Run への配置(検証で使用。DC IP では reCAPTCHA v2 が出るため本番では使わない)
   test/                      node --test(トークン署名)
 .github/workflows/reserve.yml  Actions からの予約実行(DC IP では reCAPTCHA v2 が出るため、本番導線ではなく検証用)
 
@@ -224,19 +225,17 @@ SITE_USER=<利用者番号> LABEL=A node scripts/probe-site.mjs
    (テキスト版で自動再送する)、`HTTP 401` なら LINE_CHANNEL_ACCESS_TOKEN を確認
 9. Cloudflare ダッシュボード → Workers & Pages → tennis-reservation-bot → Logs でも過去ログを見られます
 
-## フェーズ2 予約支援(半自動予約。実装済み・配置は未)
+## フェーズ2 予約支援(自宅 Raspberry Pi で自動予約。ハード到着待ち)
 
-通知カードの各枠に「予約」ボタンが付き、押すと予約支援サーバーが **ログイン〜枠の選択〜予約内容確認画面(人数入力まで)を自動で進め**、
-その画面をスマホのブラウザにそのまま映します(noVNC)。人間がやるのは **「予約」ボタン → 出てきた reCAPTCHA のチェック → もう一度「予約」** だけです。
-方針・経緯・調査結果は `docs/フェーズ2_予約支援_引き継ぎ.md` と `docs/site-notes.md` を参照。
+通知カードの各枠に「予約」ボタンが付き、押すと自宅の予約支援サーバーが **ログイン〜枠の選択〜「予約」確定まで自動で行い**、
+結果(予約番号・料金)を画面と LINE に返します。方針・経緯・調査結果は `docs/フェーズ2_予約支援_引き継ぎ.md`、
+自宅サーバーの選定と手順は `docs/ラズパイ_自宅サーバー_引き継ぎ_自己完結版.md` と `booking/pc/README.md` を参照。
 
-- なぜ半自動か: 予約サイトは reCAPTCHA v3 で点数を付け、**データセンターの IP からの送信には確定時に v2 チェックボックスを要求する**
-  (GitHub Actions からの実予約 0/3。自宅回線からは 1/1)。チェックは人間が自分で解く。機械的な突破・回避はしない
-- 構成: `booking/` を Cloud Run(東京、max-instances=1、セッションアフィニティ)に配置。認証情報は Secret Manager。
-  LINE の「予約」ボタン URL には署名付きトークン(枠情報+利用開始時刻までの有効期限)が入り、第三者が踏んでも起動しない
-- 通知側の設定: GitHub Secrets に `BOOKING_BASE_URL`(Cloud Run の URL)と `BOOKING_SIGNING_SECRET`(サーバーと同じ値)を登録すると
-  ボタンが付く(未登録なら従来どおりボタン無し)。通知と同時に `/warmup` を叩いてコールドスタートを吸収する
-- 予約サイトのセッションは約10分で切れるため、画面が出たら数分以内に操作する(待機画面に注記)
-- ローカル確認: `cd booking && docker build -t tennis-booking:dev . && docker run -p 8080:8080 -e BOOKING_SIGNING_SECRET=x -e BOOKING_SMOKE=1 tennis-booking:dev`
-  → http://localhost:8080/smoke で予約サイトのトップページが noVNC 経由で映れば疎通 OK
-
+- なぜ自宅で動かすか: 予約サイトは確定時に reCAPTCHA v3 で採点し、**データセンターの IP(Cloud Run / GitHub Actions)からは毎回 v2 の
+  画像問題が出て自動化できない**(実予約 0/3)。自宅回線からは画像問題なしで成立する(実測 4/4)。v2 が出たときだけ noVNC でスマホに画面を映して人間が解く
+- 経路: LINE ボタン(署名付き URL)→ Cloudflare Worker `tennis-reservation-bot`(固定 URL の玄関。署名検証と中継)→ Cloudflare Tunnel →
+  Raspberry Pi 5 上の Docker(予約サーバー + cloudflared + URL 登録)。Pi が落ちているときは「サーバーに繋がりません。手動で」と案内
+- 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET`(登録済み)と `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev`
+  (Pi が動くまで未登録 = ボタンは出ない)。通知と同時に `/warmup` を叩く
+- 状態(2026-09-06): コード・Worker は配置済み。Raspberry Pi 5 一式を購入(9/9 着見込み)。到着後は `booking/pc/README.md` §1〜§8 の順に進める
+- Cloud Run(`tennis-booking`、GCP `tennis-booking-c46c52c5`)は検証用に残っているだけ(0 円)。不要になったら削除する
