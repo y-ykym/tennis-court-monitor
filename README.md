@@ -5,8 +5,8 @@
 
 フェーズ1.5として、LINEグループで `よやく` と送ると A・B 2人分の予約一覧をカードで返す
 予約確認ボット(Cloudflare Workers)も稼働中です(後述「フェーズ1.5 予約確認ボット」)。
-フェーズ1.6として、その一覧カードの「キャンセル」ボタンから予約を取り消す機能を同じ Worker に実装済みです
-(後述「フェーズ1.6 予約キャンセル」。配置と実機テストはこれから)。
+フェーズ1.6として、その一覧カードの「キャンセル」ボタンから予約を取り消す機能も同じ Worker で稼働中です
+(後述「フェーズ1.6 予約キャンセル」)。
 
 サイトの週表示カレンダーが使う内部JSON APIをHTTP(Node標準fetch)で直接叩くため、
 ブラウザ自動化(Playwright)は不要です。依存パッケージは japanese-holidays の1個だけ。
@@ -42,13 +42,10 @@ booking/                     フェーズ2 予約支援(自宅の Raspberry Pi 5
   src/token.js               LINE ボタン用の署名付きトークン(枠情報+有効期限、HMAC)
   server/server.mjs          Web アプリ(/book → 自動遷移 → 待機画面 → noVNC 画面 → 結果)。noVNC の WebSocket 橋渡しも内蔵
   scripts/reserve-cli.mjs    予約実行を手元/Actions から動かす CLI(--dry-run で予約直前まで)
-  scripts/notify-result.mjs  予約結果の LINE 通知カード(Actions 用)
   scripts/explore-flow.mjs   予約フローの調査スクリプト(本人ログイン。確定は押さない)
   Dockerfile / docker-entrypoint.sh  Playwright 公式イメージ + Xvfb + x11vnc。noVNC クライアントは esbuild で束ねる
   pc/                        自宅 Pi 用: docker-compose.yml(本体+Cloudflare Tunnel+URL登録)、README.md(手順)、pi-init.sh(初期化)、pi-check.sh(確認)
-  deploy.sh                  Cloud Run への配置(検証で使用。DC IP では reCAPTCHA v2 が出るため本番では使わない)
   test/                      node --test(トークン署名)
-.github/workflows/reserve.yml  Actions からの予約実行(DC IP では reCAPTCHA v2 が出るため、本番導線ではなく検証用)
 
 worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル(Cloudflare Workers。lib/ とは独立)
   src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply。postback→確認カード/取消実行)
@@ -139,7 +136,7 @@ LINEグループ「よやく」
   Flexの10KB制限のため表示は9件まで(超過は「…ほかN件」)
 - 全員0件は「予約はありません」、全員失敗は「予約サイトに繋がりませんでした。少し待ってもう一度お試しください」、
   片方だけ失敗はその人の区画に「取得失敗」と表示
-- 1分超過時の push フォールバック(§11.9)は未実装。必要になったら追加する(200通枠を消費するため)
+- 1分超過時の push フォールバック(§11.9)は**不採用**(2026-09-07 判断)。稼働 5 日間で返信は常に 6〜12 秒で、1 分に迫る例が無く、実装すると月 200 通の枠を消費するため。取得が遅くて返信できなかった場合は「よやく」を送り直す運用とする
 
 ### Secrets 一覧(Cloudflare Workers Secrets)
 
@@ -229,7 +226,7 @@ SITE_USER=<利用者番号> LABEL=A node scripts/probe-site.mjs
    (テキスト版で自動再送する)、`HTTP 401` なら LINE_CHANNEL_ACCESS_TOKEN を確認
 9. Cloudflare ダッシュボード → Workers & Pages → tennis-reservation-bot → Logs でも過去ログを見られます
 
-## フェーズ1.6 予約キャンセル(実装済み・配置と実機テスト待ち)
+## フェーズ1.6 予約キャンセル(2026-09-06 稼働開始)
 
 「よやく」の予約一覧カードの各行に「キャンセル」ボタンが付きます。押すと確認カードが返り、「はい、キャンセルする」を押すと
 Worker が予約サイトで取消を実行して結果カードを返します。ブラウザや自宅サーバーは使いません(取消導線に reCAPTCHA が無いことを
@@ -257,7 +254,7 @@ Worker が予約サイトで取消を実行して結果カードを返します�
   既に配られたカードのボタンを押しても「キャンセル機能は現在停止しています」と返す
 - LINE Developers の「Webhookの再送」は OFF のまま(ON だと同じ postback が再配送される)
 
-### 配置と実機テスト(初回)
+### 配置と実機テスト(2026-09-06 に実施済み。コードを変えたときの再確認手順)
 
 ```bash
 cd worker
@@ -291,4 +288,6 @@ npx wrangler tail --format pretty
 - 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET`(登録済み)と `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev`
   (Pi が動くまで未登録 = ボタンは出ない)。通知と同時に `/warmup` を叩く
 - 状態(2026-09-06): コード・Worker は配置済み。Raspberry Pi 5 一式を購入(9/9 着見込み)。到着後は `booking/pc/README.md` §1〜§8 の順に進める
-- Cloud Run(`tennis-booking`、GCP `tennis-booking-c46c52c5`)は検証用に残っているだけ(0 円)。不要になったら削除する
+- 検証に使った Cloud Run と GitHub Actions からの予約は **2026-09-07 に撤去済み**: GCP プロジェクト `tennis-booking-c46c52c5` を削除(30 日以内なら `gcloud projects undelete` で復元可)、
+  `booking/deploy.sh`・`.github/workflows/reserve.yml`・`booking/scripts/notify-result.mjs` を削除、GitHub Secrets の `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A`(Actions 専用)を削除。
+  `booking/src/profile-store.js` の GCS 保存は Pi では使わない(`PROFILE_LOCAL=1` で docker volume に保存)
