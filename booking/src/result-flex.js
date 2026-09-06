@@ -1,5 +1,5 @@
 // ============================================================
-// 予約結果の LINE カード(Flex Message)。GitHub Actions の notify-result.mjs と、自宅 PC のサーバー(完了時の push)で共用。
+// 予約結果の LINE カード(Flex Message)。自宅サーバー(server/server.mjs)が予約完了時に push で送る
 //
 //   buildResultFlex({ slot, status, message, reservationNo, fee, facility }, label) → Flex Message
 //   pushResult(message, { token, to })                                              → LINE push(失敗時は例外)
