@@ -70,6 +70,26 @@ export function pickCommandEvents(rawBody, groupId) {
   );
 }
 
+// Webhook本文から「対象グループで押された postback(ボタン)」だけを返す(フェーズ1.6 キャンセル用)。
+// data の中身の検証(署名・期限)は呼び出し側(cancel-token.js)で行う
+export function pickPostbackEvents(rawBody, groupId) {
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return [];
+  }
+  const events = Array.isArray(payload?.events) ? payload.events : [];
+  return events.filter(
+    (ev) =>
+      ev?.type === 'postback' &&
+      ev.source?.type === 'group' &&
+      ev.source.groupId === groupId &&
+      typeof ev.postback?.data === 'string' &&
+      typeof ev.replyToken === 'string'
+  );
+}
+
 // reply API でメッセージ(最大5件)を返す(replyToken は受信から1分以内・1回限り)。
 // 失敗時は例外(呼び出し側でログに出して握りつぶす。LINEには200を返す必要があるため)。
 // 例外には status を持たせ、400(メッセージ形式の不備)ならテキストで再送する判断に使う

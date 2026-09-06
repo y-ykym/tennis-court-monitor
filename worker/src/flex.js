@@ -1,31 +1,38 @@
 // ============================================================
-// 予約一覧の Flex Message(カード型)。スマホで一目で読めることを優先した設計。
+// 予約一覧の Flex Message(カード型)と、キャンセル確認・結果のカード。スマホで一目で読めることを優先した設計。
 //
-//   ┌──────────────────────────────────────┐
-//   │ 予約一覧                    9/2 現在 │  ← ヘッダー(濃紺・白文字)
-//   ├──────────────────────────────────────┤
-//   │ ゆうたそ                        3件  │  ← 人ごとの見出し
-//   │ ┌────┐ 19:00 - 21:00                 │
-//   │ │9/6 │ 猿江恩賜公園                   │  ← 左: 日付タイル(土=青/日祝=赤/平日=グレー)
-//   │ │ 日 │                               │     右: 時間(大きく太字)・公園名
-//   │ └────┘                               │
-//   │ ┌────┐  9:00 - 11:00  明日            │
-//   │ │9/24│ 大島小松川公園                 │
-//   │ │ 木 │                               │
-//   │ └────┘                               │
-//   │ ─────────────────────────────────── │
-//   │ B                           取得失敗 │
-//   ├──────────────────────────────────────┤
-//   │           予約サイトを開く            │  ← フッター(リンク)
-//   └──────────────────────────────────────┘
+//   ┌──────────────────────────────────────────┐
+//   │ 予約一覧                 9/6 現在 ・ 4件  │  ← ヘッダー(濃紺・白文字)
+//   ├──────────────────────────────────────────┤
+//   │ ゆうたそ                            3件  │  ← 人ごとの見出し
+//   │ ┌────┐ 9:00 - 11:00                      │  ← 終了済み: 全体グレー、ボタン無し
+//   │ │9/6 │ 猿江恩賜公園  終了                 │
+//   │ │ 日 │                                   │
+//   │ └────┘                                   │
+//   │ ┌────┐ 17:00 - 19:00           (キャンセル)│  ← 右端: 「キャンセル」ピル(postback。フェーズ1.6)
+//   │ │9/7 │ 大島小松川公園  明日                │
+//   │ │ 月 │                                   │
+//   │ └────┘                                   │
+//   │ ───────────────────────────────────────  │
+//   │ B                             取得失敗   │
+//   ├──────────────────────────────────────────┤
+//   │             予約サイトを開く              │  ← フッター(リンク)
+//   └──────────────────────────────────────────┘
 //
-// Flex Message はバブルあたり 10KB の制限があるため、表示は MAX_ROWS 件まで(超過は「…ほかN件」)。
-// 実測: 固定部 約1.8KB + 1行 約0.75KB(今日/明日ラベル付きは約0.9KB)→ 9行で最大約9KB
+// 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
+// 「今日/明日/明後日/終了」の補足は公園名の右(ピルの幅を確保するため時間の行には置かない)。
+//
+// Flex Message はバブルあたり 10KB の制限がある。JSON を軽くするため「時間+公園名+補足」は span 付きの 1 テキストに
+// まとめる。表示行数は固定せず、MAX_BUBBLE_BYTES に収まるまで行を減らす(超過分は「…ほかN件」)。
+// 実測: 固定部 約1.8KB、1行 約1.1KB(ボタン込み)→ 7行で約9.5KB。
 // ============================================================
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso } from './format.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
+// バブル JSON の上限(LINE の 10KB 制限に余裕を持たせる)
+export const MAX_BUBBLE_BYTES = 9800;
+// 上限を試す最大行数(これ以上はバイト数で必ず溢れる)
 const MAX_ROWS = 9;
 
 const DOW_JA = ['日', '月', '火', '水', '木', '金', '土'];
@@ -47,6 +54,14 @@ const COLOR_MUTED = '#9CA3AF';
 const COLOR_LINE = '#E5E7EB';
 const COLOR_ERROR = '#B91C1C';
 const COLOR_SOON = '#DC2626'; // 今日/明日 の強調
+const COLOR_PILL_BG = '#FDECEC'; // キャンセルピル
+const COLOR_PILL_FG = '#B91C1C';
+const COLOR_CONFIRM_BG = '#9A3412'; // 確認カードのヘッダー(琥珀)
+const COLOR_OK_BG = '#15803D'; // 成功
+const COLOR_NG_BG = '#6B7280'; // 失敗
+const COLOR_WARN_BG = '#FFF7E6'; // ペナルティ警告
+const COLOR_WARN_FG = '#8A4B00';
+const COLOR_PANEL_BG = '#F8FAFC';
 
 function toUtcDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -68,8 +83,17 @@ function relativeLabel(iso, today) {
   return ['今日', '明日', '明後日'][diff] || null;
 }
 
+const shortDate = (iso) => {
+  const [, m, d] = iso.split('-').map(Number);
+  return `${m}/${d}`;
+};
+const dowOf = (iso) => DOW_JA[toUtcDate(iso).getUTCDay()];
+
 function text(str, extra = {}) {
   return { type: 'text', text: String(str), ...extra };
+}
+function span(str, extra = {}) {
+  return { type: 'span', text: String(str), ...extra };
 }
 
 function sortReservations(list) {
@@ -84,97 +108,136 @@ export function jstNowHHMM(now = new Date()) {
 }
 
 // 終了済みか(当日で終了時刻を過ぎている、または過去の日付)。サイトは当日中は一覧に残すため
-function isPast(r, today, nowHHMM) {
+export function isPast(r, today, nowHHMM) {
   if (!r.date) return false;
   if (r.date < today) return true;
   return r.date === today && !!r.end && r.end <= nowHHMM;
 }
 
-// 左の日付タイル: 「9/6」を大きく、その下に曜日
+export function bubbleBytes(bubble) {
+  return new TextEncoder().encode(JSON.stringify(bubble)).length;
+}
+
+// 左の日付タイル: 「9/6」を大きく、その下に曜日。
+// span 1テキスト + 改行で軽くする案は、実機(文字サイズ大)で「9/1」「8」に折れたため 2 テキストに戻した。
+// 日付は shrink-to-fit で幅に収める(折り返しも省略記号も出さない)
 function dateTile(iso, past) {
   const colors = !iso ? TILE_COLORS.weekday : past ? TILE_COLORS.past : TILE_COLORS[dayKind(iso)];
-  const [, m, d] = iso ? iso.split('-').map(Number) : [null, null, null];
-  const dow = iso ? DOW_JA[toUtcDate(iso).getUTCDay()] : '-';
   return {
     type: 'box',
     layout: 'vertical',
     flex: 0,
     width: '58px',
     backgroundColor: colors.bg,
-    cornerRadius: '8px',
-    paddingTop: '7px',
-    paddingBottom: '7px',
+    cornerRadius: 'md',
+    paddingAll: '6px',
     contents: [
-      text(iso ? `${m}/${d}` : '-', { size: 'lg', weight: 'bold', color: colors.fg, align: 'center' }),
-      text(dow, { size: 'xs', color: colors.fg, align: 'center' }),
+      text(iso ? shortDate(iso) : '-', { size: 'lg', weight: 'bold', color: colors.fg, align: 'center', adjustMode: 'shrink-to-fit' }),
+      text(iso ? dowOf(iso) : '-', { size: 'xs', color: colors.fg, align: 'center' }),
     ],
   };
 }
 
-// 1予約 = 1行: [日付タイル] 時間(大きく) + 公園名
-// 終了済み(当日で時間を過ぎたもの)は全体をグレーにして「終了」を添える
+// 「時間(太字) / 公園名 + 補足(今日/明日/終了)」の span 1テキスト
+function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
+  const main = past ? COLOR_PAST : COLOR_TEXT;
+  const sub = past ? COLOR_PAST : COLOR_SUB;
+  const time = r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : '時間不明';
+  const spans = [
+    span(time, { size: timeSize, weight: 'bold', color: main, ...(strike ? { decoration: 'line-through' } : {}) }),
+    span(`\n${r.facility || '施設不明'}`, { size: 'sm', color: sub }),
+  ];
+  if (rel) spans.push(span(`  ${rel}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON }));
+  return { type: 'text', flex: 1, margin: 'md', wrap: true, contents: spans };
+}
+
+// 右端の「キャンセル」ピル(postback)。data は cancel-token.js の署名付きトークン
+function cancelPill(r, data) {
+  return {
+    type: 'box',
+    layout: 'vertical',
+    flex: 0,
+    margin: 'sm',
+    backgroundColor: COLOR_PILL_BG,
+    cornerRadius: 'xl',
+    paddingAll: '6px',
+    action: {
+      type: 'postback',
+      label: 'キャンセル',
+      data,
+      displayText: `${shortDate(r.date)} ${formatTime(r.start)} ${r.facility} をキャンセル`,
+    },
+    contents: [text('キャンセル', { size: 'xxs', weight: 'bold', color: COLOR_PILL_FG })],
+  };
+}
+
+// 1予約 = 1行: [日付タイル] 時間 / 公園名 + 補足 [キャンセル]
+// 終了済み(当日で時間を過ぎたもの)は全体をグレーにして「終了」を添え、ボタンは付けない
 function reservationRow(r, today, nowHHMM) {
   const past = isPast(r, today, nowHHMM);
   const rel = past ? '終了' : r.date ? relativeLabel(r.date, today) : null;
-  const time = r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : '時間不明';
-  const mainColor = past ? COLOR_PAST : COLOR_TEXT;
-  // 直近なら時間の右に「今日/明日」を赤字で添える(無ければ text 1つで軽くする)
-  const timeText = text(time, { size: 'lg', weight: 'bold', color: mainColor, flex: 0 });
-  const timeLine = rel
-    ? {
-        type: 'box',
-        layout: 'horizontal',
-        contents: [
-          timeText,
-          text(rel, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON, flex: 1, margin: 'md', gravity: 'center' }),
-        ],
-      }
-    : timeText;
+  const contents = [dateTile(r.date, past), detailText(r, { past, rel })];
+  if (!past && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
+  return { type: 'box', layout: 'horizontal', margin: 'lg', alignItems: 'center', contents };
+}
 
-  // 公園名は時間と同格の情報なので濃い色・md サイズで(支払状況は表示しない。利用者の要望)
-  const placeLine = text(r.facility || '施設不明', { size: 'md', color: mainColor, wrap: true, margin: 'xs' });
-
+// 人の名前ラベル(薄い紺の角丸)
+function personLabel(label) {
   return {
     type: 'box',
-    layout: 'horizontal',
-    margin: 'lg',
-    alignItems: 'center',
-    contents: [
-      dateTile(r.date, past),
-      {
-        type: 'box',
-        layout: 'vertical',
-        flex: 1,
-        margin: 'lg',
-        contents: [timeLine, placeLine],
-      },
-    ],
+    layout: 'vertical',
+    flex: 0,
+    backgroundColor: COLOR_LABEL_BG,
+    cornerRadius: '6px',
+    paddingTop: '3px',
+    paddingBottom: '3px',
+    paddingStart: '10px',
+    paddingEnd: '10px',
+    contents: [text(label, { size: 'md', weight: 'bold', color: COLOR_LABEL_FG })],
   };
 }
 
-// 人ごとの見出し行: 名前を色付きラベルで目立たせ、右に件数(または「取得失敗」「予約なし」)
+// 人ごとの見出し行: 名前ラベル + 右に件数(または「取得失敗」「予約なし」)
 function personHeader(label, right, rightColor, first) {
   return {
     type: 'box',
     layout: 'horizontal',
     margin: first ? 'lg' : 'xl',
     alignItems: 'center',
+    contents: [personLabel(label), text(right, { size: 'sm', color: rightColor, flex: 1, align: 'end', gravity: 'center' })],
+  };
+}
+
+function header(title, right, bg) {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    backgroundColor: bg,
+    paddingAll: '14px',
+    paddingStart: '16px',
+    paddingEnd: '16px',
     contents: [
-      {
-        type: 'box',
-        layout: 'vertical',
-        flex: 0,
-        backgroundColor: COLOR_LABEL_BG,
-        cornerRadius: '6px',
-        paddingTop: '3px',
-        paddingBottom: '3px',
-        paddingStart: '10px',
-        paddingEnd: '10px',
-        contents: [text(label, { size: 'md', weight: 'bold', color: COLOR_LABEL_FG })],
-      },
-      text(right, { size: 'sm', color: rightColor, flex: 1, align: 'end', gravity: 'center' }),
+      text(title, { color: '#FFFFFF', weight: 'bold', size: 'lg', flex: 1, gravity: 'center' }),
+      ...(right ? [text(right, { color: '#E5E7EB', size: 'xs', flex: 0, gravity: 'center', align: 'end' })] : []),
     ],
   };
+}
+
+function siteLinkFooter() {
+  return {
+    type: 'box',
+    layout: 'vertical',
+    backgroundColor: '#FFFFFF',
+    contents: [
+      { type: 'separator', color: COLOR_LINE },
+      { type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label: '予約サイトを開く', uri: SITE_URL } },
+    ],
+  };
+}
+
+// 文字色を濃色で決め打ちしているため、背景もダークモードに依存しないよう白を明示
+function body(contents, extra = {}) {
+  return { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '4px', backgroundColor: '#FFFFFF', contents, ...extra };
 }
 
 // プッシュ通知バナーに出る要約(必須項目。上限400字)
@@ -183,8 +246,7 @@ function buildAltText(people, total) {
   let head = '';
   if (first) {
     const r = sortReservations(first.reservations)[0];
-    const [, m, d] = r.date ? r.date.split('-').map(Number) : [];
-    const date = r.date ? `${m}/${d}(${DOW_JA[toUtcDate(r.date).getUTCDay()]})` : '';
+    const date = r.date ? `${shortDate(r.date)}(${dowOf(r.date)})` : '';
     head = `: ${first.label} ${date} ${formatTime(r.start)}-${formatTime(r.end)} ${r.facility}`;
     if (total > 1) head += ' ほか';
   }
@@ -192,81 +254,147 @@ function buildAltText(people, total) {
 }
 
 // people: [{ label, reservations: [...] } | { label, error }]
+//   reservations の各要素に cancelData(署名付き postback data)があれば、その行に「キャンセル」ピルを付ける
 // 前提: 少なくとも1人は取得に成功している(全員失敗・全員0件はテキストで返す。index.js 参照)
 export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = jstNowHHMM() } = {}) {
   const total = people.reduce((n, p) => n + (p.error ? 0 : p.reservations.length), 0);
-  const body = [];
-  let shown = 0;
-  let hidden = 0;
+  const [, tm, td] = today.split('-').map(Number);
 
-  people.forEach((p, i) => {
-    if (i > 0) body.push({ type: 'separator', margin: 'xl', color: COLOR_LINE });
-    if (p.error) {
-      body.push(personHeader(p.label, '取得失敗', COLOR_ERROR, i === 0));
-      return;
-    }
-    if (p.reservations.length === 0) {
-      body.push(personHeader(p.label, '予約なし', COLOR_SUB, i === 0));
-      return;
-    }
-    body.push(personHeader(p.label, `${p.reservations.length}件`, COLOR_SUB, i === 0));
-    sortReservations(p.reservations).forEach((r, j) => {
-      if (shown >= MAX_ROWS) {
-        hidden++;
+  const render = (maxRows) => {
+    const rows = [];
+    let shown = 0;
+    let hidden = 0;
+    people.forEach((p, i) => {
+      if (i > 0) rows.push({ type: 'separator', margin: 'xl', color: COLOR_LINE });
+      if (p.error) {
+        rows.push(personHeader(p.label, '取得失敗', COLOR_ERROR, i === 0));
         return;
       }
-      // 行と行の間に薄い罫線(目が滑らないように)
-      if (j > 0) body.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
-      body.push(reservationRow(r, today, nowHHMM));
-      shown++;
+      if (p.reservations.length === 0) {
+        rows.push(personHeader(p.label, '予約なし', COLOR_SUB, i === 0));
+        return;
+      }
+      rows.push(personHeader(p.label, `${p.reservations.length}件`, COLOR_SUB, i === 0));
+      sortReservations(p.reservations).forEach((r, j) => {
+        if (shown >= maxRows) {
+          hidden++;
+          return;
+        }
+        // 行と行の間に薄い罫線(目が滑らないように)
+        if (j > 0) rows.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
+        rows.push(reservationRow(r, today, nowHHMM));
+        shown++;
+      });
     });
-  });
-  if (hidden > 0) {
-    body.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+    if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+    return {
+      type: 'bubble',
+      size: 'mega',
+      header: header('予約一覧', `${tm}/${td} 現在 ・ ${total}件`, COLOR_HEADER_BG),
+      body: body(rows),
+      footer: siteLinkFooter(),
+    };
+  };
+
+  // 10KB 制限: 収まるまで行数を減らす
+  let bubble = render(Math.min(total, MAX_ROWS));
+  for (let rows = Math.min(total, MAX_ROWS) - 1; rows >= 1 && bubbleBytes(bubble) > MAX_BUBBLE_BYTES; rows--) {
+    bubble = render(rows);
   }
 
-  const [, tm, td] = today.split('-').map(Number);
+  return { type: 'flex', altText: buildAltText(people, total), contents: bubble };
+}
+
+// ---- フェーズ1.6 キャンセル ----
+
+// 対象の予約を示すパネル(日付タイル + 時間 / 公園名)。確認カード・結果カードで共用
+function reservationPanel(r, { past = false, rel = null } = {}) {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    margin: 'lg',
+    alignItems: 'center',
+    backgroundColor: COLOR_PANEL_BG,
+    cornerRadius: 'lg',
+    paddingAll: '10px',
+    contents: [dateTile(r.date, past), detailText(r, { past, rel, timeSize: 'lg', strike: past })],
+  };
+}
+
+function metaLine(label, id) {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    margin: 'md',
+    alignItems: 'center',
+    contents: [personLabel(label), text(`予約番号 ${id}`, { size: 'xs', color: COLOR_SUB, margin: 'md', flex: 1, gravity: 'center' })],
+  };
+}
+
+const reservationText = (label, r) =>
+  `${label} ${r.date ? `${shortDate(r.date)}(${dowOf(r.date)})` : ''} ${formatTime(r.start)}-${formatTime(r.end)} ${r.facility}`.replace(/\s+/g, ' ').trim();
+
+// 確認カード: 「この予約をキャンセルしますか？」+ 対象 + (該当時)ペナルティ警告 + [いいえ][はい、キャンセルする]
+//   yesData: kind='y' の署名付きトークン(10分)。noData: 「いいえ」の postback data
+export function buildCancelConfirmFlex({ label, reservation: r, penalty = false, penaltyDay = 3, yesData, noData }, { today = jstTodayIso() } = {}) {
+  const rel = r.date ? relativeLabel(r.date, today) : null;
+  const contents = [
+    text('この予約をキャンセルしますか？', { size: 'md', weight: 'bold', color: COLOR_TEXT, margin: 'lg', wrap: true }),
+    reservationPanel(r, { rel }),
+    metaLine(label, r.id),
+  ];
+  if (penalty) {
+    contents.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'lg',
+      backgroundColor: COLOR_WARN_BG,
+      cornerRadius: 'md',
+      paddingAll: '10px',
+      contents: [text(`⚠ 利用日が${penaltyDay}日以内のため、キャンセルするとペナルティ(1点)が付きます`, { size: 'xs', color: COLOR_WARN_FG, wrap: true })],
+    });
+  }
   return {
     type: 'flex',
-    altText: buildAltText(people, total),
+    altText: `キャンセルの確認: ${reservationText(label, r)}`.slice(0, 400),
     contents: {
       type: 'bubble',
       size: 'mega',
-      header: {
-        type: 'box',
-        layout: 'horizontal',
-        backgroundColor: COLOR_HEADER_BG,
-        paddingAll: '14px',
-        paddingStart: '16px',
-        paddingEnd: '16px',
-        contents: [
-          text('予約一覧', { color: '#FFFFFF', weight: 'bold', size: 'lg', flex: 1, gravity: 'center' }),
-          text(`${tm}/${td} 現在`, { color: '#C7D2E5', size: 'xs', flex: 0, gravity: 'center', align: 'end' }),
-        ],
-      },
-      // 文字色を濃色で決め打ちしているため、背景もダークモードに依存しないよう白を明示
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        paddingAll: '16px',
-        paddingTop: '4px',
-        backgroundColor: '#FFFFFF',
-        contents: body,
-      },
+      header: header('キャンセルの確認', '10分以内に選択', COLOR_CONFIRM_BG),
+      body: body(contents),
+      // ボタンは縦積み・全幅(横並びだと「はい、キャンセル…」と省略された)。赤の「はい」を上、「いいえ」を下
       footer: {
         type: 'box',
         layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '12px',
         backgroundColor: '#FFFFFF',
         contents: [
-          { type: 'separator', color: COLOR_LINE },
-          {
-            type: 'button',
-            style: 'link',
-            height: 'sm',
-            action: { type: 'uri', label: '予約サイトを開く', uri: SITE_URL },
-          },
+          { type: 'button', style: 'primary', color: COLOR_PILL_FG, height: 'sm', action: { type: 'postback', label: 'はい、キャンセルする', data: yesData, displayText: 'はい' } },
+          { type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: 'いいえ', data: noData, displayText: 'いいえ' } },
         ],
       },
+    },
+  };
+}
+
+// 結果カード。ok=true: 緑「キャンセルしました」+ 取り消した予約(打ち消し線)。ok=false: グレー「キャンセルできませんでした」
+export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
+  const contents = ok
+    ? [reservationPanel(r, { past: true }), metaLine(label, r.id)]
+    : [
+        text('予約サイトで状態を確認してください。', { size: 'sm', color: COLOR_TEXT, margin: 'lg', wrap: true }),
+        text('既にキャンセル済みの場合は一覧に表示されません。', { size: 'sm', color: COLOR_TEXT, wrap: true }),
+      ];
+  return {
+    type: 'flex',
+    altText: (ok ? `キャンセルしました: ${reservationText(label, r)}` : `キャンセルできませんでした: ${reservationText(label, r)}`).slice(0, 400),
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      header: header(ok ? 'キャンセルしました' : 'キャンセルできませんでした', ok ? nowText : null, ok ? COLOR_OK_BG : COLOR_NG_BG),
+      body: body(contents),
+      footer: siteLinkFooter(),
     },
   };
 }

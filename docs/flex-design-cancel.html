@@ -1,0 +1,151 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<style>
+  body{margin:0;background:#fff;font-family:"Hiragino Sans","Noto Sans JP",-apple-system,sans-serif;color:#222}
+  .page{width:1600px;padding:28px 40px 36px;box-sizing:border-box}
+  h1{font-size:24px;margin:0 0 6px}
+  .lead{font-size:13px;color:#555;margin:0 0 18px}
+  .panes{display:flex;gap:28px;align-items:flex-start}
+  .pane{flex:0 0 360px}
+  .pane.w{flex:0 0 420px}
+  .pane h2{font-size:15px;margin:0 0 8px;color:#333}
+  .pane h2 small{font-weight:400;color:#777;font-size:12px;margin-left:8px}
+  .chat{background:#8CA6C9;border-radius:16px;padding:16px 14px;width:360px;box-sizing:border-box}
+  .chat.wide{width:420px}
+  .msg{display:flex;gap:8px;margin:10px 0;align-items:flex-start}
+  .msg.user{justify-content:flex-end}
+  .avatar{width:30px;height:30px;border-radius:50%;background:#1F2A44;color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .bub{background:#fff;border-radius:14px;padding:9px 12px;font-size:13.5px;max-width:270px;line-height:1.45}
+  .bub.me{background:#8DE055;color:#111}
+  .who{font-size:10.5px;color:#eef;margin:0 0 3px 40px}
+  .card{width:300px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+  .hd{background:#1F2A44;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+  .hd b{font-size:16px}.hd span{font-size:11px;color:#C7D2E5}
+  .hd.amber{background:#9A3412}.hd.ok{background:#15803D}.hd.ng{background:#6B7280}
+  .bd{padding:6px 16px 14px}
+  .person{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+  .person .lab{background:#E8EDF5;color:#1F2A44;font-weight:700;font-size:14px;padding:3px 10px;border-radius:6px}
+  .person .cnt{font-size:12.5px;color:#4B5563}.person .cnt.err{color:#B91C1C}
+  .row{display:flex;align-items:center;gap:10px;margin-top:12px}
+  .row + .row{border-top:1px solid #E5E7EB;padding-top:12px}
+  .tile{width:58px;flex:0 0 auto;border-radius:8px;text-align:center;padding:6px 0}
+  .tile b{display:block;font-size:17px;line-height:1.1}.tile small{font-size:10.5px}
+  .tile.sat{background:#E3EEFB;color:#1D4F91}.tile.sun{background:#FBE4E4;color:#9B2C2C}.tile.wd{background:#EEF0F3;color:#374151}.tile.past{background:#F3F4F6;color:#B0B5BD}
+  .mid{flex:1;min-width:0}
+  .time{font-size:15px;font-weight:700;color:#111827;line-height:1.25;white-space:nowrap}.rel{font-size:11px;font-weight:700;color:#DC2626;margin-left:6px}
+  .park{font-size:13px;color:#4B5563;margin-top:2px}
+  .past .time,.past .park,.past .rel{color:#B0B5BD}
+  .pill{flex:0 0 auto;background:#FDECEC;color:#B91C1C;font-size:10px;font-weight:700;padding:5px 8px;border-radius:12px;white-space:nowrap}
+  .sep{border-top:1px solid #E5E7EB;margin-top:14px}
+  .ft{border-top:1px solid #E5E7EB;padding:9px;text-align:center;color:#1F4E8C;font-size:13px}
+  .ft2{display:flex;flex-direction:column;gap:8px;padding:10px 12px 12px}
+  .btn{flex:1;text-align:center;border-radius:8px;padding:10px 0;font-size:13px;font-weight:700;white-space:nowrap}
+  .btn.danger{}
+  .btn.danger{background:#B91C1C;color:#fff}.btn.ghost{background:#F3F4F6;color:#374151}
+  .q{font-size:14.5px;font-weight:700;margin-top:12px}
+  .box{display:flex;gap:10px;align-items:center;margin-top:12px;padding:10px;border-radius:10px;background:#F8FAFC}
+  .box .time{font-size:17px}
+  .meta{font-size:12px;color:#4B5563;margin-top:8px}
+  .meta .lab{background:#E8EDF5;color:#1F2A44;font-weight:700;padding:1px 7px;border-radius:5px;margin-right:6px}
+  .warn{margin-top:10px;background:#FFF7E6;border:1px solid #F5C77A;color:#8A4B00;font-size:12px;padding:8px 10px;border-radius:8px;line-height:1.5}
+  .note{font-size:11px;color:#B91C1C;margin-top:10px}
+  .note2{font-size:11px;color:#6B7280;margin-top:3px}
+  .caption{font-size:12px;color:#555;margin:8px 0 0}
+  .notes{margin-top:22px;background:#fffaf5;border:1px solid #e0b38a;border-radius:12px;padding:14px 18px;font-size:13px;line-height:1.7}
+  .notes b{color:#7a3e00}
+  .cmp{display:flex;gap:16px}
+</style></head><body><div class="page">
+<h1>予約一覧カードのデザイン最適化(キャンセルボタン対応)</h1>
+<p class="lead">左: 現行カード / 中: 新デザイン(各行に「キャンセル」ピル、終了枠はグレーでボタン無し) / 右: 押した後の流れ(確認カード → 結果カード)。幅はスマホ実機の mega バブル相当(300px)</p>
+<div class="panes">
+
+<div class="pane"><h2>現行<small>1行 約0.9KB、最大9行</small></h2>
+<div class="chat">
+  <div class="msg user"><div class="bub me">よやく</div></div>
+  <div class="who">テニス予約ボット</div>
+  <div class="msg"><div class="avatar">🎾</div>
+  <div class="card">
+    <div class="hd"><b>予約一覧</b><span>9/6 現在</span></div>
+    <div class="bd">
+      <div class="person"><span class="lab">ゆうたそ</span><span class="cnt">3件</span></div>
+      <div class="row past"><div class="tile past"><b>9/6</b><small>日</small></div><div class="mid"><div class="time" style="font-size:17px">9:00 - 11:00<span class="rel">終了</span></div><div class="park">猿江恩賜公園</div></div></div>
+      <div class="row"><div class="tile wd"><b>9/7</b><small>月</small></div><div class="mid"><div class="time" style="font-size:17px">17:00 - 19:00<span class="rel">明日</span></div><div class="park">大島小松川公園</div></div></div>
+      <div class="row"><div class="tile sat"><b>9/13</b><small>土</small></div><div class="mid"><div class="time" style="font-size:17px">11:00 - 13:00</div><div class="park">亀戸中央公園</div></div></div>
+      <div class="sep"></div>
+      <div class="person"><span class="lab">B</span><span class="cnt">1件</span></div>
+      <div class="row"><div class="tile sun"><b>9/21</b><small>月</small></div><div class="mid"><div class="time" style="font-size:17px">19:00 - 21:00</div><div class="park">猿江恩賜公園</div></div></div>
+    </div>
+    <div class="ft">予約サイトを開く</div>
+  </div></div>
+</div>
+<p class="caption">日付タイル(土=青/日祝=赤/平日=グレー)、時間を太字、公園名。件数と「今日/明日」「終了」の補足。</p>
+</div>
+
+<div class="pane"><h2>新デザイン<small>1行 約1.1KB(ボタン込み)、最大7行</small></h2>
+<div class="chat">
+  <div class="msg user"><div class="bub me">よやく</div></div>
+  <div class="who">テニス予約ボット</div>
+  <div class="msg"><div class="avatar">🎾</div>
+  <div class="card">
+    <div class="hd"><b>予約一覧</b><span>9/6 現在 ・ 4件</span></div>
+    <div class="bd">
+      <div class="person"><span class="lab">ゆうたそ</span><span class="cnt">3件</span></div>
+      <div class="row past"><div class="tile past"><b>9/6</b><small>日</small></div><div class="mid"><div class="time">9:00 - 11:00</div><div class="park">猿江恩賜公園<span class="rel">終了</span></div></div></div>
+      <div class="row"><div class="tile wd"><b>9/7</b><small>月</small></div><div class="mid"><div class="time">17:00 - 19:00</div><div class="park">大島小松川公園<span class="rel">明日</span></div></div><div class="pill">キャンセル</div></div>
+      <div class="row"><div class="tile sat"><b>9/13</b><small>土</small></div><div class="mid"><div class="time">11:00 - 13:00</div><div class="park">亀戸中央公園</div></div><div class="pill">キャンセル</div></div>
+      <div class="sep"></div>
+      <div class="person"><span class="lab">B</span><span class="cnt">1件</span></div>
+      <div class="row"><div class="tile sun"><b>9/21</b><small>月</small></div><div class="mid"><div class="time">19:00 - 21:00</div><div class="park">猿江恩賜公園</div></div><div class="pill">キャンセル</div></div>
+    </div>
+    <div class="ft">予約サイトを開く</div>
+  </div></div>
+</div>
+<p class="caption">変更点: ①各行右端に小さな赤系の「キャンセル」ピル(押すと確認カード)。②終了枠にはピル無し。③ヘッダーに合計件数。④ピルの幅を確保するため時間の文字を一段小さく(lg→md)し、「今日/明日/終了」は公園名の行の右へ。⑤内部の JSON を軽量化(時間+公園名を span 1テキストに、ボタンデータを約 80 文字に)。日付タイルは実機で折れたため 2 テキストのまま。</p>
+</div>
+
+<div class="pane w"><h2>押した後の流れ<small>確認 → 実行 → 結果</small></h2>
+<div class="chat wide">
+  <div class="who" style="text-align:right;margin:0 6px 3px 0">ゆうたそ(ボタンを押すと自動で投稿される)</div>
+  <div class="msg user"><div class="bub me">9/7 17:00 大島小松川公園 をキャンセル</div></div>
+  <div class="who">テニス予約ボット</div>
+  <div class="msg"><div class="avatar">🎾</div>
+  <div class="card">
+    <div class="hd amber"><b>キャンセルの確認</b><span>10分以内に選択</span></div>
+    <div class="bd">
+      <div class="q">この予約をキャンセルしますか？</div>
+      <div class="box"><div class="tile wd"><b>9/7</b><small>月</small></div><div class="mid"><div class="time">17:00 - 19:00<span class="rel">明日</span></div><div class="park">大島小松川公園 テニス(人工芝)</div></div></div>
+      <div class="meta"><span class="lab">ゆうたそ</span>予約番号 2026000123</div>
+      <div class="warn">⚠ 利用日が3日以内のため、キャンセルするとペナルティ(1点)が付きます</div>
+    </div>
+    <div class="ft2"><div class="btn danger">はい、キャンセルする</div><div class="btn ghost">いいえ</div></div>
+  </div></div>
+  <div class="msg user"><div class="bub me">はい</div></div>
+  <div class="who">テニス予約ボット</div>
+  <div class="msg"><div class="avatar">🎾</div>
+  <div class="card">
+    <div class="hd ok"><b>キャンセルしました</b><span>9/6 12:49</span></div>
+    <div class="bd">
+      <div class="box"><div class="tile past"><b>9/7</b><small>月</small></div><div class="mid past"><div class="time" style="text-decoration:line-through">17:00 - 19:00</div><div class="park">大島小松川公園</div></div></div>
+      <div class="meta"><span class="lab">ゆうたそ</span>予約番号 2026000123</div>
+    </div>
+    <div class="ft">予約サイトを開く</div>
+  </div></div>
+  <div class="who">(失敗したとき)</div>
+  <div class="msg"><div class="avatar">🎾</div>
+  <div class="card">
+    <div class="hd ng"><b>キャンセルできませんでした</b></div>
+    <div class="bd">
+      <div class="meta" style="margin-top:10px;font-size:13px;color:#222">予約サイトで状態を確認してください。<br>既にキャンセル済みの場合は一覧に表示されません。</div>
+    </div>
+    <div class="ft">予約サイトを開く</div>
+  </div></div>
+</div>
+<p class="caption">ボタンの押下は本人の発言として残る(displayText)。確認カードは琥珀色、成功は緑、失敗はグレーのヘッダーで一目で区別。ボタンは縦積み(横並びだと実機で省略された)。ペナルティ警告は該当時のみ表示。</p>
+</div>
+
+</div>
+<div class="notes">
+<b>サイズ設計(バブル 10KB 制限):</b> 固定部 約1.8KB + 1行 約1.1KB(ボタン込み)→ 7行で約9.3KB。表示件数は固定値ではなく「9.8KB に収まる行数」で自動的に決め、超過分は「…ほかN件」。終了済みの行はボタンが無いので 0.6KB と軽い。<br>
+<b>ボタンのデータ:</b> <code>c|A|予約番号|20260907|1700|1900|公園名|3|期限.署名</code> の約 80 文字(上限 300)。署名は HMAC-SHA256 の先頭 16 バイト。行の並び順は含めない(実行時に予約番号で探し直す)。<br>
+<b>据え置き:</b> 日付タイルの配色、時間の太字、人ごとのラベルと件数、「今日/明日/終了」の補足、フッターのサイトリンク。利用者が慣れている見た目は変えない。
+</div>
+</div></body></html>

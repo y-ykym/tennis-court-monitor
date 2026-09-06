@@ -8,6 +8,9 @@
 //   node scripts/send-test-event.mjs --other-group      別グループから(無視されるはず)
 //   node scripts/send-test-event.mjs --bad-signature    署名を壊して送る(401になるはず)
 //   node scripts/send-test-event.mjs --url https://xxx.workers.dev/webhook   デプロイ先に送る
+//   node scripts/send-test-event.mjs --postback n                          postback(「いいえ」)を送る
+//   node scripts/send-test-event.mjs --postback 'c|A|...'                  一覧カードのボタンと同じ data を送る(署名は wrangler tail のログでは見えないので、
+//                                                                          `node -e` で cancel-token.js の signCancelToken を使って作る)
 //
 // LINE_CHANNEL_SECRET / LINE_GROUP_ID は環境変数、無ければ worker/.dev.vars から読む。
 // ============================================================
@@ -48,21 +51,20 @@ if (!channelSecret || !groupId) {
 
 const url = opt('--url', 'http://localhost:8787/webhook');
 const text = opt('--text', 'よやく');
-const body = JSON.stringify({
-  destination: 'Udummydestination000000000000000000',
-  events: [
-    {
-      type: 'message',
-      mode: 'active',
-      timestamp: Date.now(),
-      webhookEventId: '01TESTEVENT0000000000000000',
-      deliveryContext: { isRedelivery: false },
-      source: { type: 'group', groupId: flag('--other-group') ? 'Cotherdummygroup0000000000000000' : groupId, userId: 'Udummyuser00000000000000000000000' },
-      replyToken: 'dummyreplytoken0000000000000000',
-      message: { id: '1', type: 'text', quoteToken: 'q', text },
-    },
-  ],
-});
+const postback = opt('--postback', null);
+const source = { type: 'group', groupId: flag('--other-group') ? 'Cotherdummygroup0000000000000000' : groupId, userId: 'Udummyuser00000000000000000000000' };
+const common = {
+  mode: 'active',
+  timestamp: Date.now(),
+  webhookEventId: '01TESTEVENT0000000000000000',
+  deliveryContext: { isRedelivery: false },
+  source,
+  replyToken: 'dummyreplytoken0000000000000000',
+};
+const event = postback
+  ? { type: 'postback', ...common, postback: { data: postback } }
+  : { type: 'message', ...common, message: { id: '1', type: 'text', quoteToken: 'q', text } };
+const body = JSON.stringify({ destination: 'Udummydestination000000000000000000', events: [event] });
 
 let signature = await computeSignature(channelSecret, body);
 if (flag('--bad-signature')) signature = 'x' + signature.slice(1);
@@ -72,5 +74,5 @@ const res = await fetch(url, {
   headers: { 'content-type': 'application/json', 'x-line-signature': signature },
   body,
 });
-console.log(`→ ${url}\n   本文: "${text}" ${flag('--other-group') ? '(別グループ)' : ''}${flag('--bad-signature') ? '(署名を破損)' : ''}`);
+console.log(`→ ${url}\n   ${postback ? `postback: "${postback}"` : `本文: "${text}"`} ${flag('--other-group') ? '(別グループ)' : ''}${flag('--bad-signature') ? '(署名を破損)' : ''}`);
 console.log(`← HTTP ${res.status} ${await res.text()}`);
