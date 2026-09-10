@@ -98,8 +98,9 @@ worker/                      フェーズ1.5 予約確認ボット + 1.6 予約�
 - **定期起動の仕組み**: GitHubのschedule(cron)はこのアカウントで極端に間引かれる
   (5分指定で実効3〜4時間。最小構成の検証リポジトリ y-ykym/cron-canary でも同様)ため、
   cron-job.org から3分おきに workflow_dispatch API を叩いて起動している。
-  canaryの実行間隔が5分に正常化したら、monitor.ymlにscheduleトリガーを復活させて
-  cron-job.org側を停止し、一本化する
+  ※ 観測用の cron-canary は観測を終了し、2026-09-10 にリポジトリを削除済み。
+  GitHub cronの実行間隔が正常化したことを確認できた場合は、monitor.ymlにscheduleトリガーを
+  復活させて cron-job.org 側を停止し、一本化する
 - **60日ルール**: scheduleトリガーを復活させた場合、publicリポジトリは活動が60日ないと
   定期実行が自動停止する点に注意(state.jsonの自動コミットで通常は維持される)
 - **サイトメンテナンス**: 毎月27日12:00〜28日8:45と年末年始(12/28 12:00〜1/4 8:45)はスキップ
