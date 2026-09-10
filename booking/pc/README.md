@@ -137,7 +137,7 @@ docker compose logs -f registrar  # 「登録しました: xxxx.trycloudflare.co
 | キー | 値 |
 |---|---|
 | `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A` | 予約サイトの利用者番号・パスワード・呼び名(B は任意) |
-| `BOOKING_SIGNING_SECRET` | GitHub Secrets / Worker と同じ署名鍵(GCP Secret Manager `booking-signing-secret`) |
+| `BOOKING_SIGNING_SECRET` | GitHub Secrets / Worker と同じ署名鍵。手元に値が無ければ `openssl rand -base64 32` で作り直し、GitHub Secrets(`gh secret set BOOKING_SIGNING_SECRET`)・Worker(`npx wrangler secret put BOOKING_SIGNING_SECRET`)・この `.env` の 3 か所に同じ値を入れる(GCP は撤去済み) |
 | `WORKER_URL` | 玄関の Worker の URL(既定値のまま) |
 | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_USER_ID` | 結果を LINE に push したいとき(任意。GitHub Secrets と同じ値) |
 
