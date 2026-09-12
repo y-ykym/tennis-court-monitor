@@ -276,7 +276,7 @@ npx wrangler tail --format pretty
 - `取消 POST の応答が完了画面ではありません (xxx.jsp)` → サイト改修の可能性。応答画面名を手がかりに `worker/src/site.js` の `isCancelDone` / `buildCancelForm` を見直す
 - `取消 POST に失敗(成否不明)` → 通信断。サイトで状態を確認する(自動では再送しない)
 
-## フェーズ2 予約支援(自宅 Raspberry Pi で自動予約。ハード到着待ち)
+## フェーズ2 予約支援(自宅 Raspberry Pi で自動予約。2026-09-13 稼働開始)
 
 通知カードの各枠に「予約」ボタンが付き、押すと自宅の予約支援サーバーが **ログイン〜枠の選択〜「予約」確定まで自動で行い**、
 結果(予約番号・料金)を画面と LINE に返します。方針・経緯・調査結果は `docs/フェーズ2_予約支援_引き継ぎ.md`、
@@ -286,9 +286,12 @@ npx wrangler tail --format pretty
   画像問題が出て自動化できない**(実予約 0/3)。自宅回線からは画像問題なしで成立する(実測 4/4)。v2 が出たときだけ noVNC でスマホに画面を映して人間が解く
 - 経路: LINE ボタン(署名付き URL)→ Cloudflare Worker `tennis-reservation-bot`(固定 URL の玄関。署名検証と中継)→ Cloudflare Tunnel →
   Raspberry Pi 5 上の Docker(予約サーバー + cloudflared + URL 登録)。Pi が落ちているときは「サーバーに繋がりません。手動で」と案内
-- 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET`(登録済み)と `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev`
-  (Pi が動くまで未登録 = ボタンは出ない)。通知と同時に `/warmup` を叩く
-- 状態(2026-09-06): コード・Worker は配置済み。Raspberry Pi 5 一式を購入(9/9 着見込み)。到着後は `booking/pc/README.md` §1〜§8 の順に進める
+- 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET` と `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev`(どちらも登録済み。
+  両方あるときだけ通知カードに「予約」ボタンが付く)。通知と同時に `/warmup` を叩く
+- 状態(2026-09-13): **稼働中**。自宅の Raspberry Pi 5(ホスト名 `homepi`、NVMe 起動)で Docker 3 サービスが常時動作。
+  2026-09-13 02:29 に実枠(亀戸中央 9/30 13:00)で LINE ボタン → 予約成立まで **40 秒・完全自動(reCAPTCHA v3 のみ)** を確認し、テスト予約はキャンセル済み。
+  運用・確認コマンドは `booking/pc/README.md` §8。深夜は SoftBank Air が不安定で Tunnel が切れやすい(見張り役 `tunnel-watchdog.timer` が自動復旧)。
+  スマホの待機画面が「つながりません」になっても Pi 側の処理は続き、結果は LINE に届く
 - 検証に使った Cloud Run と GitHub Actions からの予約は **2026-09-07 に撤去済み**: GCP プロジェクト `tennis-booking-c46c52c5` を削除(30 日以内なら `gcloud projects undelete` で復元可)、
   `booking/deploy.sh`・`.github/workflows/reserve.yml`・`booking/scripts/notify-result.mjs` を削除、GitHub Secrets の `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A`(Actions 専用)を削除。
   `booking/src/profile-store.js` の GCS 保存は Pi では使わない(`PROFILE_LOCAL=1` で docker volume に保存)

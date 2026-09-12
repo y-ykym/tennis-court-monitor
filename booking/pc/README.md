@@ -35,14 +35,45 @@ LINE「予約」ボタン → Worker(固定URL) → Cloudflare Tunnel → Pi 上
 
 ---
 
-## §1 OS の書き込み(Mac、Raspberry Pi Imager)
+## §1 OS の書き込み(Raspberry Pi Imager)
 
-- デバイス: Raspberry Pi 5 / OS: **Raspberry Pi OS Lite (64-bit)** / ストレージ: microSD(KIOXIA 32GB)
-- 「設定を編集」で:
-  - ホスト名 `tennis-pi`、ユーザー名 `yu`(パスワードも設定)
-  - Wi-Fi: SoftBank Air の SSID/パスワード、国 `JP`(有線 LAN で繋ぐなら省略可)
-  - ロケール: タイムゾーン `Asia/Tokyo`、キーボード `jp`
-  - サービス: **SSH を有効化 → 公開鍵認証のみ**。公開鍵は `~/.ssh/id_ed25519.pub` の内容(`pbcopy < ~/.ssh/id_ed25519.pub`)
+会社 Mac は記録メディアの接続がポリシーで禁止されているため、書き込みは**個人の Windows PC**で行う(Imager は Windows 版でよい)。以降の作業はすべて Mac から SSH。
+
+Imager v2.0 系はステップ形式のウィザード。順に:
+
+| 画面 | 入力 |
+|---|---|
+| Device / OS / Storage | Raspberry Pi 5 / **Raspberry Pi OS Lite (64-bit)**(「OS (other)」の中) / SDHC Card(32GB) |
+| Hostname | `homepi` |
+| Localisation | Capital city `Tokyo`(Time zone が `Asia/Tokyo` になる)、Keyboard `jp` |
+| User | `yu` / パスワード(非常用。必ずメモ) |
+| Wi-Fi | 有線 LAN なので空欄で Next |
+| Remote access | Enable SSH → **「Use password authentication」** |
+| Raspberry Pi Connect | Sign in して ON(個人利用は無料。外出先からブラウザでシェルが開ける) |
+
+**公開鍵は Imager では登録しない。** v2.0.11 時点で「公開鍵認証のみ」を選ぶと SSH 鍵と Connect の設定が反映されないことがあった(2026-09-12 に実際に踏んだ。ホスト名は反映されるのに `Permission denied (publickey)` になる)。
+鍵は初回 SSH 後に Mac から登録する:
+
+```bash
+ssh-copy-id yu@homepi.local        # Pi のパスワードを聞かれる(本人が入力)
+ssh yu@homepi.local                # パスワード無しで入れれば OK
+```
+
+鍵で入れることを確認したら、**`sudo` をパスワード無しにする**(Pi 上で。パスワードを 1 回聞かれる)。
+新しい Raspberry Pi OS は最初のユーザーにも sudo パスワードを要求するため、これを入れないと `pi-init.sh` や以降の管理コマンドを SSH 越しに流せない。鍵認証のみの家庭内サーバーなので、昔の Raspberry Pi OS の既定に戻す判断:
+
+```bash
+echo 'yu ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/010_yu-nopasswd && sudo chmod 440 /etc/sudoers.d/010_yu-nopasswd && sudo -n true && echo OK
+```
+
+続けてパスワード認証を閉じる:
+
+```bash
+echo 'PasswordAuthentication no' | sudo tee /etc/ssh/sshd_config.d/10-no-password.conf
+sudo sshd -t && sudo systemctl restart ssh
+```
+
+Raspberry Pi Connect は Imager で Sign in しておけば初回起動で紐づく(`rpi-connect status` で `Signed in: yes`)。connect.raspberrypi.com の Devices に `homepi` が出る。
 
 ## §2 組み立てと初回起動(ケース無し)
 
@@ -53,7 +84,7 @@ LINE「予約」ボタン → Worker(固定URL) → Cloudflare Tunnel → Pi 上
 5. 1〜2 分待って Mac から接続。`.local` が引けない場合はルーターの DHCP 一覧で IP を確認
 
 ```bash
-ssh yu@tennis-pi.local
+ssh yu@homepi.local
 ```
 
 ## §3 初期化スクリプト
@@ -73,7 +104,7 @@ bash pi-init.sh
 
 ```bash
 exit
-ssh yu@tennis-pi.local
+ssh yu@homepi.local
 docker run --rm hello-world
 ```
 
@@ -100,16 +131,21 @@ sudo rpi-eeprom-update -a          # 更新が入ったら sudo reboot してか
 # 1. SSD が見えていることを確認
 lsblk                              # nvme0n1 が 238.5G で見えること
 
-# 2. 複製ツール(rpi-clone)を入れて、SD → NVMe に複製(数分。NVMe の中身は消える)
-git clone https://github.com/geerlingguy/rpi-clone.git ~/rpi-clone
-sudo install -m 755 ~/rpi-clone/rpi-clone /usr/local/sbin/
-sudo rpi-clone nvme0n1 -f
+# 2. 複製ツール(rpi-clone)を入れて、SD → NVMe に複製(約 1 分。NVMe の中身は消える)
+#    git clone は回線の瞬断で落ちたので、1 ファイルを再試行付きで取る
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/rpi-clone https://raw.githubusercontent.com/geerlingguy/rpi-clone/master/rpi-clone
+sudo install -m 755 /tmp/rpi-clone /usr/local/sbin/rpi-clone
+sudo apt-get install -y rsync      # Lite には入っていない
+sudo rpi-clone nvme0n1 -f          # 「Initialize and clone ...? (yes/no)」に yes、ラベルは Enter。-q は初期化時に使えない
 
-# 3. 起動順を「NVMe → SD」にする
-sudo raspi-config                  # Advanced Options → Boot Order → NVMe/USB Boot(NVMe を SD より先に)→ Finish → 再起動
+# 3. 起動順を「NVMe → SD」にする(非対話。raspi-config でも可)
+sudo rpi-eeprom-config > /tmp/boot.conf
+sed -i 's/^BOOT_ORDER=.*/BOOT_ORDER=0xf416/' /tmp/boot.conf   # 行が無ければ echo 'BOOT_ORDER=0xf416' >> /tmp/boot.conf
+sudo rpi-eeprom-config --apply /tmp/boot.conf
+sudo reboot
 ```
 
-`raspi-config` の代わりに `sudo rpi-eeprom-config --edit` で `BOOT_ORDER=0xf416` と書いても同じです(6 = NVMe, 4 = USB, 1 = SD の順に試す)。
+`BOOT_ORDER=0xf416` は 6 = NVMe, 4 = USB, 1 = SD の順に試す設定(右から読む)。SSH から流すときは `/usr/local/sbin` が PATH に無いので `sudo /usr/local/sbin/rpi-clone` のようにフルパスで呼ぶ。2026-09-12 実測: 複製 1 分、再起動から SSH 復帰まで約 40 秒。
 
 再起動後に、SSD から起動していることを確認:
 
@@ -164,4 +200,5 @@ docker compose ps                                                      # 3 サ�
 - **状態確認**: `docker compose ps` / `docker compose logs -f booking` / `./pi-check.sh`
 - **止める**: `docker compose down`(Worker の登録は 5 分で消え、ボタンは「繋がりません」を案内)
 - Tunnel の URL は起動ごとに変わるが Worker が最新へ中継するので、LINE 側の設定変更は不要
+- **Tunnel の見張り**: 回線の瞬断が長引くと quick tunnel が `Unauthorized: Tunnel not found` のまま自力で戻れない(2026-09-12 に発生。Worker 側の登録も 5 分で消え、ボタンは「繋がりません」になる)。`tunnel-watchdog.timer`(1 分ごと)が、ログにその文言が出るか `/ready` が 3 分連続で失敗したら `docker compose restart tunnel` する。状態は `./pi-check.sh` の「Tunnel」欄と `journalctl -u tunnel-watchdog --since today`
 - 予約サイトのセッションは約 10 分で切れる。noVNC 画面(reCAPTCHA v2 が出たときだけ)は数分以内に操作

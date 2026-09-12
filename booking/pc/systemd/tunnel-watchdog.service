@@ -1,0 +1,10 @@
+[Unit]
+Description=Cloudflare Tunnel watchdog (restart quick tunnel when it cannot recover)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=yu
+WorkingDirectory=/home/yu/tennis-court-monitor/booking/pc
+ExecStart=/home/yu/tennis-court-monitor/booking/pc/tunnel-watchdog.sh

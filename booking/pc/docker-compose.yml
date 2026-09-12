@@ -15,6 +15,8 @@ services:
     env_file: .env
     environment:
       AUTO_CONFIRM: '1'        # 「予約」まで自動で押す。reCAPTCHA v2 が出たときだけ人間に渡す
+      STEP_TIMEOUT_MS: '90000' # 1 ステップの待ち上限。自宅回線が遅い時間帯(深夜)に 30 秒では足りなかったため延長(2026-09-13)
+      APPLY_TIMEOUT_MS: '90000'
       PROFILE_LOCAL: '1'       # ブラウザプロファイルを下の volume に持ち越す
       SCREEN_W: '600'
       SCREEN_H: '1000'
@@ -29,6 +31,8 @@ services:
     restart: unless-stopped
     # --protocol http2: 既定の QUIC(UDP)は家庭用回線(SoftBank Air 等)で不安定なことがあるため、TCP の http2 で張る
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 --url http://booking:8080
+    ports:
+      - '127.0.0.1:2000:2000' # metrics(/ready, /quicktunnel)。tunnel-watchdog.sh と pi-check.sh が Pi 自身から見る
     depends_on:
       - booking
 

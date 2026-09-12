@@ -6,6 +6,7 @@
 #   3. Docker Engine + compose plugin の導入、実行ユーザーを docker グループへ
 #   4. リポジトリの取得(既にあれば git pull)
 #   5. booking/pc/.env の雛形作成(値の入力は手動)
+#   6. Tunnel 見張り(tunnel-watchdog.timer)の導入
 #
 # 使い方(Pi に SSH して。一度保存して中身を確認してから実行する):
 #   curl -fsSLo pi-init.sh https://raw.githubusercontent.com/y-ykym/tennis-court-monitor/main/booking/pc/pi-init.sh
@@ -32,21 +33,36 @@ if [ "$(uname -m)" != "aarch64" ]; then
   exit 1
 fi
 
-step "1/5 パッケージの更新と必要ツール(毎回実行。既に最新なら何も変わらない)"
+# 新しい Raspberry Pi OS は sudo にパスワードを要求する。SSH 越しの nohup 実行では入力できないので先に確認する
+if ! sudo -n true 2>/dev/null; then
+  cat >&2 <<'EOS'
+sudo にパスワードが必要な設定です。このスクリプトは sudo を多数回使うため、先に次を実行してください(パスワードを 1 回聞かれます):
+  echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/010_$USER-nopasswd && sudo chmod 440 /etc/sudoers.d/010_$USER-nopasswd
+詳細は booking/pc/README.md §1
+EOS
+  exit 1
+fi
+
+step "1/6 パッケージの更新と必要ツール(毎回実行。既に最新なら何も変わらない)"
+# 自宅回線(SoftBank Air)は一瞬切れることがあるので、apt のダウンロードは自動で再試行させる
+echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates smartmontools nvme-cli
 sudo apt-get autoremove -y
 
-step "2/5 EEPROM(ブートローダー)の更新(最新なら up to date と出るだけ)"
+step "2/6 EEPROM(ブートローダー)の更新(最新なら up to date と出るだけ)"
 if command -v rpi-eeprom-update >/dev/null 2>&1; then
   sudo rpi-eeprom-update -a || true
   echo "※ 「UPDATE AVAILABLE」や「reboot」と出ていたら、このスクリプトの後に sudo reboot する"
 fi
 
-step "3/5 Docker(入っていれば飛ばす)"
+step "3/6 Docker(入っていれば飛ばす)"
 if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
+  # 回線の瞬断で curl が途中で切れることがあった(52, 35)ため、再試行付きで一度ファイルに落としてから実行する
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/get-docker.sh https://get.docker.com
+  sh /tmp/get-docker.sh
+  rm -f /tmp/get-docker.sh
 else
   echo "docker は既に入っています: $(docker --version)"
 fi
@@ -56,14 +72,14 @@ if ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
 fi
 sudo systemctl enable --now docker >/dev/null 2>&1 || true
 
-step "4/5 リポジトリ(あれば git pull、無ければ clone)"
+step "4/6 リポジトリ(あれば git pull、無ければ clone)"
 if [ -d "$REPO_DIR/.git" ]; then
   git -C "$REPO_DIR" pull --ff-only
 else
   git clone "$REPO_URL" "$REPO_DIR"
 fi
 
-step "5/5 .env の雛形(既にあれば触らない)"
+step "5/6 .env の雛形(既にあれば触らない)"
 PC_DIR="$REPO_DIR/booking/pc"
 if [ ! -f "$PC_DIR/.env" ]; then
   cp "$PC_DIR/.env.example" "$PC_DIR/.env"
@@ -74,10 +90,16 @@ else
 fi
 chmod +x "$PC_DIR"/*.sh 2>/dev/null || true
 
+step "6/6 Tunnel の見張り(systemd timer。quick tunnel が自力で戻れないときに再起動する)"
+sudo install -m 644 "$PC_DIR/systemd/tunnel-watchdog.service" "$PC_DIR/systemd/tunnel-watchdog.timer" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tunnel-watchdog.timer
+echo "tunnel-watchdog.timer: $(systemctl is-active tunnel-watchdog.timer)(ログは journalctl -u tunnel-watchdog)"
+
 trap - ERR
 cat <<EOF
 
-初期化が終わりました(全 5 ステップ完了)。次にやること:
+初期化が終わりました(全 6 ステップ完了)。次にやること:
   1. exit して再ログイン(docker グループ反映)。EEPROM 更新があれば sudo reboot
   2. SSD の確認:            $PC_DIR/pi-check.sh --smart
   3. NVMe 起動へ切替:        booking/pc/README.md §5
