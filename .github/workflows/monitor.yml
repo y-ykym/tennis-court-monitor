@@ -45,6 +45,12 @@ jobs:
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          # フェーズ2 予約ボタン(両方あるときだけ付く)。BOOKING_BASE_URL は玄関の Worker の URL
+          BOOKING_BASE_URL: ${{ secrets.BOOKING_BASE_URL }}
+          BOOKING_SIGNING_SECRET: ${{ secrets.BOOKING_SIGNING_SECRET }}
+          # 予約者の呼び名。設定した人の分だけ「<呼び名>で予約」ボタンが出る(Pi の .env の LABEL_A / LABEL_B と同じ値)
+          LABEL_A: ${{ secrets.LABEL_A }}
+          LABEL_B: ${{ secrets.LABEL_B }}
           # mock-test時はサイトにアクセスせず、モックデータで実際にLINEへ送信する
           MOCK_SLOTS_FILE: ${{ inputs.mode == 'mock-test' && 'test/mock-slots.json' || '' }}
         run: node check.js

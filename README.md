@@ -278,8 +278,10 @@ npx wrangler tail --format pretty
 
 ## フェーズ2 予約支援(自宅 Raspberry Pi で自動予約。2026-09-13 稼働開始)
 
-通知カードの各枠に「予約」ボタンが付き、押すと自宅の予約支援サーバーが **ログイン〜枠の選択〜「予約」確定まで自動で行い**、
-結果(予約番号・料金)を画面と LINE に返します。方針・経緯・調査結果は `docs/フェーズ2_予約支援_引き継ぎ.md`、
+通知カードの各枠に **「<呼び名>で予約」ボタンが予約者(A/B)ごとに**付き、押すと自宅の予約支援サーバーがその人として
+**ログイン〜枠の選択〜「予約」確定まで自動で行い**、結果(予約番号・料金)を LINE のカードで返します(画面にも出ます)。
+途中でロボット確認(reCAPTCHA v2 の画像問題)が出たときだけ、LINE に「確認が必要です」カードが届き、そのボタンから
+予約サイトの確認画面を開いてチェックを押す(8 分以内)。それ以外に人の操作はありません。方針・経緯・調査結果は `docs/フェーズ2_予約支援_引き継ぎ.md`、
 自宅サーバーの選定と手順は `docs/ラズパイ_自宅サーバー_引き継ぎ_自己完結版.md` と `booking/pc/README.md` を参照。
 
 - なぜ自宅で動かすか: 予約サイトは確定時に reCAPTCHA v3 で採点し、**データセンターの IP(Cloud Run / GitHub Actions)からは毎回 v2 の
@@ -287,7 +289,9 @@ npx wrangler tail --format pretty
 - 経路: LINE ボタン(署名付き URL)→ Cloudflare Worker `tennis-reservation-bot`(固定 URL の玄関。署名検証と中継)→ Cloudflare Tunnel →
   Raspberry Pi 5 上の Docker(予約サーバー + cloudflared + URL 登録)。Pi が落ちているときは「サーバーに繋がりません。手動で」と案内
 - 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET` と `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev`(どちらも登録済み。
-  両方あるときだけ通知カードに「予約」ボタンが付く)。通知と同時に `/warmup` を叩く
+  両方あるときだけ通知カードに予約ボタンが付く)、`LABEL_A` / `LABEL_B`(予約者の呼び名。設定した人の分だけ「<呼び名>で予約」が出る。
+  どちらも無ければ「予約」1つで、押した後に予約者を選ぶ画面になる)。ボタン付きは1通に約6枠しか入らないので、多いときは最大5通に分けて送る。
+  通知と同時に `/warmup` を叩く
 - 状態(2026-09-13): **稼働中**。自宅の Raspberry Pi 5(ホスト名 `homepi`、NVMe 起動)で Docker 3 サービスが常時動作。
   2026-09-13 02:29 に実枠(亀戸中央 9/30 13:00)で LINE ボタン → 予約成立まで **40 秒・完全自動(reCAPTCHA v3 のみ)** を確認し、テスト予約はキャンセル済み。
   運用・確認コマンドは `booking/pc/README.md` §8。深夜は SoftBank Air が不安定で Tunnel が切れやすい(見張り役 `tunnel-watchdog.timer` が自動復旧)。

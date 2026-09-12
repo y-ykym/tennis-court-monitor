@@ -4,7 +4,9 @@
 このディレクトリの `docker-compose.yml` で、サーバー本体・Cloudflare Tunnel・URL 登録の3つをまとめて起こします。
 
 ```
-LINE「予約」ボタン → Worker(固定URL) → Cloudflare Tunnel → Pi 上の予約サーバー → 予約サイト(自宅IPで v3 通過)
+LINE「<呼び名>で予約」ボタン → Worker(固定URL) → Cloudflare Tunnel → Pi 上の予約サーバー → 予約サイト(自宅IPで v3 通過)
+                                                                          └ v2(画像問題)が出たら LINE に「確認が必要です」カード → ボタンで noVNC 画面
+                                                                          └ 終わったら結果カードを LINE へ
                                    ↑ registrar が Tunnel の現在の URL を 2 分ごとに登録
 ```
 
