@@ -37,6 +37,15 @@ hr "予約サーバー(ローカル)"
 curl -s -m 10 http://localhost:8080/warmup || echo "応答なし"
 echo
 
+hr "Tunnel(ready なら Cloudflare と繋がっている)"
+if curl -sf -m 5 http://127.0.0.1:2000/ready >/dev/null; then
+  echo "ready: $(curl -s -m 5 http://127.0.0.1:2000/quicktunnel)"
+else
+  echo "not ready(回線断か quick tunnel 失効。tunnel-watchdog が 3 分以内に再起動する)"
+fi
+systemctl is-active --quiet tunnel-watchdog.timer && echo "watchdog timer: active" || echo "watchdog timer: 未導入(pi-init.sh を再実行)"
+journalctl -u tunnel-watchdog --since "-24h" --no-pager -o cat 2>/dev/null | grep -E "再起動|復帰" | tail -3 || true
+
 hr "Worker の登録状況(registered が true なら外から届く)"
 curl -s -m 15 "$WORKER_URL/booking/status" || echo "応答なし"
 echo
