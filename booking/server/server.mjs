@@ -18,7 +18,9 @@
 //   DISPLAY, SCREEN_W, SCREEN_H, PORT
 //   AUTO_CONFIRM=1          「予約」までサーバーが押す(自宅回線用)。reCAPTCHA v2 が出たときだけ noVNC で人間に渡す
 //   PROFILE_LOCAL=1 / PROFILE_BUCKET  ブラウザプロファイルの持ち越し(ローカル volume / GCS)
-//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  あれば結果を LINE に push
+//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  あれば結果を LINE に push。reCAPTCHA v2 で人間の操作が必要になったときも
+//                           「確認が必要です」カード(noVNC 画面へのボタン付き)を push する
+//   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker。無ければ Host ヘッダから推定)
 //
 // 方針:
 //   - 同時に扱う予約は1件だけ(画面が1つしかない)。Cloud Run も max-instances=1 で運用する
@@ -34,7 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { reserve } from '../src/reserve.js';
 import { restoreProfile, saveProfile } from '../src/profile-store.js';
-import { buildResultFlex, pushResult } from '../src/result-flex.js';
+import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { verify } from '../src/token.js';
 
 const PORT = Number(process.env.PORT || 8080);
@@ -59,6 +61,8 @@ const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
 const AUTO_CONFIRM = process.env.AUTO_CONFIRM === '1';
 // 結果を LINE に push する(両方あるとき)
 const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
+// LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
+const PUBLIC_BASE = (process.env.BOOKING_PUBLIC_URL || process.env.WORKER_URL || '').replace(/\/$/, '');
 
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 
@@ -99,11 +103,18 @@ function startSession(token, payload) {
 
   // 人間に画面を渡す。半自動では予約内容確認画面で、自動確定では reCAPTCHA v2 が出たときだけ呼ばれる。
   // 人間の操作が終わる(画面が変わる)か、時間切れ/中止まで待つ
-  const handoff = ({ page }) =>
+  const handoff = ({ page, facility }) =>
     new Promise((resolve) => {
       s.status = 'ready';
       s.readyAt = Date.now();
       s.message = '画面を表示しています';
+      // ボタンを押した人がもう待機画面を閉じていても気づけるよう、LINE に「確認が必要です」カードを送る(失敗しても続行)
+      if (LINE.token && LINE.to && PUBLIC_BASE) {
+        const url = `${PUBLIC_BASE}/vnc?token=${encodeURIComponent(token)}`;
+        pushResult(buildChallengeFlex({ slot, facility, label: s.label, url, minutes: HANDOFF_TIMEOUT_MS / 60000 }), LINE)
+          .then(() => log('  reCAPTCHA の確認依頼を LINE に送りました'))
+          .catch((e) => log(`  LINE への確認依頼に失敗(無視): ${e.message}`));
+      }
       let finished = false;
       const finish = (reason) => {
         if (finished) return;
