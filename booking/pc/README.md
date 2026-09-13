@@ -202,7 +202,17 @@ docker compose ps                                                      # 3 サ�
   **`docker compose up -d` などの作り直しは毎時 0 分前後を避ける**(初回 2026-09-13 21:00 はデプロイの瞬間に当たって誤報した)
 - **ケース到着後**: 電源を切って P579 に組み込む(Active Cooler と HAT+ をそのまま収める。スペーサーは付属の 16mm)
 - **更新**: `cd ~/tennis-court-monitor/booking/pc && git pull && docker compose up -d --build`
-- **OS の更新**: `sudo apt update && sudo apt full-upgrade -y`(手動。`unattended-upgrades` を入れる場合も自動再起動はさせない)
+- **OS の更新(方針 2026-09-13)**: **Debian のセキュリティ更新だけ毎朝 6〜7 時に自動**で入る(`unattended-upgrades`。設定は `apt/` にあり pi-init.sh §7 が置く)。
+  Docker 本体・Raspberry Pi のカーネル/ファームウェア・通常の機能更新は自動では入れない(コンテナ再起動や OS 再起動が要るため)。
+  **自動再起動はしない**。月 1 回くらい、予約が動いていない時間(毎時 0 分は避ける)に手動で:
+  ```bash
+  ./pi-check.sh                              # 「再起動要求」「手動更新の保留」を見る
+  sudo apt update && sudo apt full-upgrade   # Docker やカーネルも含めて更新(コンテナは一度再起動する)
+  sudo rpi-eeprom-update -a                  # ブートローダー
+  sudo reboot                                # 「再起動が必要です」と出ていたら
+  ./pi-check.sh                              # 復帰後に全項目 OK を確認
+  ```
+  自動更新の様子: `sudo unattended-upgrade --dry-run --debug`(何が対象か) / `less /var/log/unattended-upgrades/unattended-upgrades.log`
 - **状態確認**: `docker compose ps` / `docker compose logs -f booking` / `./pi-check.sh`
 - **止める**: `docker compose down`(Worker の登録は 5 分で消え、ボタンは「繋がりません」を案内)
 - Tunnel の URL は起動ごとに変わるが Worker が最新へ中継するので、LINE 側の設定変更は不要
