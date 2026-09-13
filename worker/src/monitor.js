@@ -4,7 +4,8 @@
 //   見るもの: (1) Pi が Worker に登録した URL が KV にあるか(registrar が 2 分ごとに登録、TTL 5 分。無い = Pi か Docker が止まっている、
 //                 または Pi から外に出られない)
 //             (2) あれば、その URL の /warmup がトンネル越しに応答するか(トンネルが死んでいないか)。
-//                 トンネルは数秒〜10 秒の切断がよくあるので、5 秒おきに 3 回試して全部ダメなら失敗とする
+//                 トンネルの数秒〜10 秒の切断や、コンテナの作り直し(20〜30 秒)で鳴らさないよう、20 秒おきに 4 回(約 1 分幅)試して
+//                 全部ダメなら失敗とする(2026-09-13 21:00 の初回は 10 秒幅でデプロイの瞬間に当たり誤報した)
 //   知らせ方: 失敗したら LINE グループに 1 回だけ「止まっています」を push(1 時間間隔なので初回で知らせる)。
 //             復帰したら「復帰しました」を 1 回 push。連続失敗中に毎回鳴らさない
 //   状態:     KV の monitor_state に { fails, alerted, since } を保存(Worker は毎回まっさらで起きるため)
@@ -18,8 +19,8 @@ const KV_STATE_KEY = 'monitor_state';
 // 何回連続で失敗したら知らせるか(1 時間間隔なので初回。一時的な切断は probe 内の再試行で吸収する)
 export const ALERT_AFTER_FAILS = 1;
 const WARMUP_TIMEOUT_MS = 8000;
-export const PROBE_ATTEMPTS = 3;
-const PROBE_RETRY_MS = 5000;
+export const PROBE_ATTEMPTS = 4;
+const PROBE_RETRY_MS = 20000;
 
 const jst = (ms) => new Date(ms + 9 * 3600 * 1000).toISOString().slice(5, 16).replace('T', ' ').replace(/^0/, '').replace('-', '/');
 
