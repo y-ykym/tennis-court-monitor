@@ -15,9 +15,10 @@ services:
     env_file: .env
     environment:
       AUTO_CONFIRM: '1'        # 「予約」まで自動で押す。reCAPTCHA v2 が出たときだけ人間に渡す
-      # 高速経路(ページ内 fetch でログイン〜枠選択)を止め、最初から UI 操作(人間らしいクリック・遷移)で進める。
-      # 2026-09-13: 深夜の連続アクセスで reCAPTCHA の点数が下がり v2 が毎回出たため。数日様子を見て v2 が減ったら '1' に戻して速度を取り戻す
-      FAST_PATH: '0'
+      # 高速経路(ページ内 fetch でログイン〜枠選択。約 40 秒)。'0' にすると最初から UI 操作(人間らしいクリック・遷移。約 90 秒)。
+      # 2026-09-13: v2 が頻発したとき '0' で試し、自動操作の目印(下の IGNORE_DEFAULT_ARGS)を消したうえで '1' に戻して検証中。
+      # v2 が再び頻発したら '0' に
+      FAST_PATH: '1'
       # 自動操作の痕跡を消す(2026-09-13)。Playwright 既定の --enable-automation は navigator.webdriver=true にし、
       # reCAPTCHA はこれを機械の印として見る(同じ回線から人が操作すると v2 は出なかった)。外すと false になる
       IGNORE_DEFAULT_ARGS: '--enable-automation'
