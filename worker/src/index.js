@@ -9,6 +9,8 @@
 //   一覧カードの「キャンセル」(postback) → 署名・期限を検証 → 確認カードを reply(サイトへは行かない)
 //   確認カードの「はい」(postback)       → 署名・期限を検証 → その人でログイン → 一覧から予約番号で行を探し
 //                                         日付・時刻・公園を照合 → 取消 POST(1回だけ)→ 結果を reply
+//   空き通知の「<呼び名>で予約」(postback, data='book|<署名トークン>') → 自宅 PC の /book を叩いて予約フローを開始
+//                                         → 「受け付けました」を reply(ブラウザは開かない。結果は PC が LINE にカードで push)
 //
 // 必要な Secrets(`wrangler secret put`。値はコードや設定ファイルに書かない):
 //   LINE_CHANNEL_SECRET        Webhook署名の検証用
@@ -34,7 +36,7 @@ import { fetchReservations, cancelReservation, AuthError } from './site.js';
 import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS, jstTodayIso } from './format.js';
 import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, isPast, jstNowHHMM } from './flex.js';
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
-import { handleBooking } from './booking.js';
+import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX } from './booking.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -51,6 +53,22 @@ export const MSG_CANCEL_NOT_FOUND = 'この予約は見つかりませんでし�
 export const MSG_CANCEL_MISMATCH = '予約の内容が一覧と一致しないため中止しました。「よやく」で確認してください';
 export const MSG_CANCEL_DECLINED = 'キャンセルしませんでした';
 export const MSG_CANCEL_DISABLED = 'キャンセル機能は現在停止しています。予約サイトから操作してください';
+
+// 予約ボタン(postback)への返信
+const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
+export const MSG_BOOK = {
+  started: (who, slot) => `🎾 受け付けました\n${who}: ${slot}\n自動で予約を進めています(1分ほど)。結果はこのグループにカードで届きます。ロボット確認が必要になったときもカードでお知らせします。`,
+  already: (who, slot) => `この枠(${slot})は ${who} で既に予約が成立しています。「よやく」で確認してください`,
+  busy: () => 'いま別の予約を処理中です。1〜2分待ってから、もう一度ボタンを押してください',
+  offline: () => '予約サーバーに繋がりませんでした(自宅のサーバーが止まっているか、回線が不安定です)。少し待ってもう一度押すか、予約サイトで手動で予約してください',
+  invalid: () => 'このボタンは期限切れか無効です。新しい通知のボタンから押してください',
+  error: () => '予約サーバーがエラーを返しました。少し待ってもう一度押してください',
+};
+function bookSlotText(p) {
+  const [y, m, d] = String(p.date).split('-').map(Number);
+  const dow = '日月火水木金土'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${m}/${d}(${dow}) ${p.startHour}:00-${Number(p.startHour) + 2}:00 ${PARK_NAMES[p.park] || p.park}`;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -238,6 +256,14 @@ async function handlePostback(env, replyToken, data) {
 // postback data から返信内容を決める。戻り値: { text } | { flex, text } | null(無視)
 export async function buildPostbackReply(env, data, { deferLogout, now = Date.now(), budgetMs = FETCH_BUDGET_MS } = {}) {
   if (data === POSTBACK_NO) return { text: MSG_CANCEL_DECLINED };
+  // 空き通知の予約ボタン(フェーズ2)。キャンセル機能の ON/OFF とは独立
+  if (data.startsWith(BOOK_POSTBACK_PREFIX)) {
+    if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) return { text: MSG_BOOK.offline() };
+    const { status, payload } = await startBooking(env, data.slice(BOOK_POSTBACK_PREFIX.length));
+    const who = payload ? env[`LABEL_${payload.person}`] || payload.person || '' : '';
+    console.log(`[book] ${status}${payload ? `: ${payload.date} ${payload.startHour}時 park=${payload.park}` : ''}`);
+    return { text: (MSG_BOOK[status] || MSG_BOOK.error)(who, payload ? bookSlotText(payload) : '') };
+  }
   if (!cancelEnabled(env)) {
     console.warn('[cancel] 停止中のため postback を無視せず案内を返します');
     return { text: MSG_CANCEL_DISABLED };

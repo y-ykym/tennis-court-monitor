@@ -5,6 +5,7 @@
 // そこで固定 URL のこの Worker を LINE の「予約」ボタンの宛先にし、PC が登録した現在の URL へ転送する。
 //
 //   GET  /book?token=…&person=…   署名トークンを検証 → PC の URL が登録されていれば PC へ中継(プロキシ)。無ければ「繋がりません」画面
+//                                  (旧: URI ボタン用。今の通知ボタンは postback で、index.js が startBooking() を呼ぶ。ブラウザは開かない)
 //   GET  /wait /status /result /vnc /abort /novnc/rfb.js, WS /websockify
 //                                  PC の画面・API・noVNC の WebSocket を中継。スマホは常にこの Worker(固定 URL)だけと通信し、
 //                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する
@@ -196,4 +197,45 @@ async function proxyToServer(request, target, env) {
     '自宅の予約サーバーへの中継が一時的に失敗しました。数秒待ってから、ブラウザで再読み込みしてください(処理は裏で続いています)。',
     503
   );
+}
+
+// ---- LINE の postback ボタン(ブラウザを開かない予約開始) ----
+// 通知カードの「<呼び名>で予約」は postback で、data = 'book|<署名トークン>'。index.js が受け取り、ここで PC の /book を叩いて
+// 予約フローを始める。PC は 302 で待機画面へ誘導するが、ブラウザは無いのでその Location だけ見て結果を判定する。
+//   started  … 予約フローが始まった(結果は PC が LINE にカードで push する)
+//   already  … 同じ枠の予約が既に成立している(PC が /result へ誘導した)
+//   busy     … 別の枠を処理中(PC が 409)
+//   invalid  … 署名不正・期限切れ
+//   offline  … PC の URL が未登録、または中継が全部失敗
+//   error    … PC がそれ以外を返した
+export const BOOK_POSTBACK_PREFIX = 'book|';
+
+export async function startBooking(env, token) {
+  const payload = await verifyBookingToken(token, env.BOOKING_SIGNING_SECRET);
+  if (!payload) return { status: 'invalid' };
+  const registered = await env.BOOKING_KV.get(KV_KEY);
+  if (!registered) return { status: 'offline', payload };
+  const target = `${registered}/book?token=${encodeURIComponent(token)}`;
+  let last = null;
+  for (let n = 1; n <= PROXY_RETRIES; n++) {
+    try {
+      last = await fetch(target, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10000) });
+      if (![502, 503, 504, 530].includes(last.status)) break;
+    } catch {
+      last = null;
+    }
+    if (n < PROXY_RETRIES) await new Promise((r) => setTimeout(r, PROXY_RETRY_MS));
+  }
+  if (!last || [502, 503, 504, 530].includes(last.status)) {
+    console.warn('予約開始の中継が全部失敗');
+    return { status: 'offline', payload };
+  }
+  if (last.status === 302 || last.status === 301) {
+    const loc = last.headers.get('location') || '';
+    return { status: loc.startsWith('/result') ? 'already' : 'started', payload };
+  }
+  if (last.status === 409) return { status: 'busy', payload };
+  if (last.status === 403) return { status: 'invalid', payload };
+  console.warn(`予約開始: PC が HTTP ${last.status} を返した`);
+  return { status: 'error', payload };
 }

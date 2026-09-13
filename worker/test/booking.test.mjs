@@ -113,3 +113,46 @@ test('扱わないパスは null(既存の /webhook を邪魔しない)', async 
   const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV() };
   assert.equal(await handleBooking(new Request('https://w.example/webhook', { method: 'POST' }), env, ctx), null);
 });
+
+test('startBooking: 未登録なら offline、302→/wait なら started、302→/result なら already、409 なら busy、署名不正なら invalid', async () => {
+  const { startBooking } = await import('../src/booking.js');
+  const token = sign({ ...payload, person: 'A' }, SECRET);
+  const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV() };
+  assert.equal((await startBooking(env, token)).status, 'offline');
+  assert.equal((await startBooking(env, 'abc.def')).status, 'invalid');
+
+  env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
+  const realFetch = globalThis.fetch;
+  const withResponse = async (res, fn) => {
+    const calls = [];
+    globalThis.fetch = async (target, init) => {
+      calls.push({ target: String(target), redirect: init.redirect });
+      return typeof res === 'function' ? res() : res;
+    };
+    try {
+      return await fn(calls);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  };
+  await withResponse(new Response(null, { status: 302, headers: { location: `/wait?token=${token}` } }), async (calls) => {
+    const r = await startBooking(env, token);
+    assert.equal(r.status, 'started');
+    assert.equal(r.payload.person, 'A');
+    const t = new URL(calls[0].target);
+    assert.equal(t.origin + t.pathname, 'https://abc.trycloudflare.com/book');
+    assert.equal(t.searchParams.get('token'), token);
+    assert.equal(calls[0].redirect, 'manual', 'リダイレクトは追わずに Location を見る');
+  });
+  await withResponse(new Response(null, { status: 302, headers: { location: `/result?token=${token}` } }), async () => {
+    assert.equal((await startBooking(env, token)).status, 'already');
+  });
+  await withResponse(new Response('busy', { status: 409 }), async () => {
+    assert.equal((await startBooking(env, token)).status, 'busy');
+  });
+  // トンネルの一時エラーが続いたら offline
+  await withResponse(() => new Response('error 1033', { status: 530 }), async (calls) => {
+    assert.equal((await startBooking(env, token)).status, 'offline');
+    assert.equal(calls.length, 4, '4 回やり直す');
+  });
+});
