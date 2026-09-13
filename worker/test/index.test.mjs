@@ -94,3 +94,29 @@ test('attachCancelData: 終了済み以外の予約に署名付き data を付�
   await attachCancelData({ ...env, CANCEL_ENABLED: '0' }, off, { today: '2026-09-06', nowHHMM: '12:00', now: NOW });
   assert.equal(off[0].reservations[0].cancelData, undefined);
 });
+
+test('postback: 予約ボタン(book|トークン)は自宅サーバーの /book を叩いて「受け付けました」を返す', async () => {
+  const { sign, slotExpiry } = await import('../../booking/src/token.js');
+  const { MSG_BOOK } = await import('../src/index.js');
+  const SECRET = 'test-secret';
+  const token = sign({ park: '1050', date: '2026-09-30', startHour: 13, people: 2, person: 'A', exp: slotExpiry('2026-09-30', 13) }, SECRET);
+  const store = new Map([['booking_url', 'https://abc.trycloudflare.com']]);
+  const env = {
+    BOOKING_SIGNING_SECRET: SECRET,
+    LABEL_A: 'ゆうたそ',
+    CANCEL_ENABLED: '0', // キャンセル機能が止まっていても予約ボタンは動く
+    BOOKING_KV: { get: async (k) => store.get(k) ?? null, put: async () => {}, delete: async () => {} },
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: '/wait?token=x' } });
+  try {
+    const reply = await buildPostbackReply(env, `book|${token}`, { now: Date.UTC(2026, 8, 13) });
+    assert.equal(reply.text, MSG_BOOK.started('ゆうたそ', '9/30(水) 13:00-15:00 亀戸中央公園'));
+    assert.match(reply.text, /受け付けました/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  // 署名が不正なら「期限切れか無効」
+  const bad = await buildPostbackReply(env, 'book|abc.def', { now: Date.UTC(2026, 8, 13) });
+  assert.equal(bad.text, MSG_BOOK.invalid());
+});
