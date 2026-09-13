@@ -14,6 +14,24 @@
 // ============================================================
 import { pushText } from './line.js';
 
+// 月初(1 日 9:00 JST = 0:00 UTC)に届く手動メンテのお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける
+export const MAINTENANCE_CRON = '0 0 1 * *';
+export const MAINTENANCE_TEXT = [
+  '🛠 月初のお知らせ: 自宅の予約サーバー(homepi)のメンテ',
+  'OS・カーネル・Docker は毎朝自動で更新されていますが、予約サイトを開くブラウザ(Chromium)だけは手動で入れ直す必要があります(数か月に 1 回で十分)。',
+  '',
+  'Mac から:',
+  'ssh yu@homepi.local',
+  'cd ~/tennis-court-monitor/booking/pc && git pull && docker compose build --pull booking && docker compose up -d && ./pi-check.sh',
+  '',
+  '毎時 0 分前後は避けてください(監視と重なって「繋がりません」が誤って届きます)。',
+].join('\n');
+
+export async function sendMaintenanceReminder(env, { push = pushText } = {}) {
+  await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, MAINTENANCE_TEXT);
+  console.log('[monitor] 月初のメンテのお知らせを LINE に送りました');
+}
+
 const KV_URL_KEY = 'booking_url'; // booking.js と同じキー
 const KV_STATE_KEY = 'monitor_state';
 // 何回連続で失敗したら知らせるか(1 時間間隔なので初回。一時的な切断は probe 内の再試行で吸収する)

@@ -7,7 +7,7 @@
 #   4. リポジトリの取得(既にあれば git pull)
 #   5. booking/pc/.env の雛形作成(値の入力は手動)
 #   6. Tunnel 見張り(tunnel-watchdog.timer)の導入
-#   7. OS のセキュリティ更新を毎朝自動で入れる(unattended-upgrades。再起動はしない)
+#   7. OS・カーネル・Docker の自動更新(unattended-upgrades。毎朝 4 時、必要なら 4:30 に再起動)
 #
 # 使い方(Pi に SSH して。一度保存して中身を確認してから実行する):
 #   curl -fsSLo pi-init.sh https://raw.githubusercontent.com/y-ykym/tennis-court-monitor/main/booking/pc/pi-init.sh
@@ -97,10 +97,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tunnel-watchdog.timer
 echo "tunnel-watchdog.timer: $(systemctl is-active tunnel-watchdog.timer)(ログは journalctl -u tunnel-watchdog)"
 
-step "7/7 OS の自動更新(Debian のセキュリティ更新だけ。再起動は人が行う)"
+step "7/7 OS の自動更新(OS・カーネル・Docker を毎朝 4 時に。必要なら 4:30 に再起動)"
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades >/dev/null
 sudo install -m 644 "$PC_DIR/apt/20auto-upgrades" "$PC_DIR/apt/52unattended-upgrades-local" /etc/apt/apt.conf.d/
+sudo install -d -m 755 /etc/systemd/system/apt-daily-upgrade.timer.d
+sudo install -m 644 "$PC_DIR/systemd/apt-daily-upgrade-override.conf" /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf
+sudo systemctl daemon-reload
 sudo systemctl enable --now apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1
+sudo systemctl restart apt-daily-upgrade.timer
 echo "apt-daily-upgrade.timer: $(systemctl is-active apt-daily-upgrade.timer)(次回: $(systemctl show apt-daily-upgrade.timer -p NextElapseUSecRealtime --value | cut -d' ' -f1-3))"
 
 trap - ERR

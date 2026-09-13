@@ -1,35 +1,30 @@
-// Raspberry Pi(homepi)の自動更新方針(2026-09-13)。pi-init.sh が /etc/apt/apt.conf.d/ に置く。
-// 「Debian のセキュリティ更新だけを毎朝自動で入れ、再起動は人が行う」。
+// Raspberry Pi(homepi)の自動更新方針(2026-09-13 決定)。pi-init.sh §7 が /etc/apt/apt.conf.d/ に置く。
+// 「OS・カーネル・Docker を毎朝 4 時に自動で更新し、再起動が必要なら 4:30 に再起動する」。
 //
-//   入れる: Debian の trixie-security(脆弱性の修正)
-//   入れない: Docker 本体(download.docker.com。更新するとコンテナが再起動し、予約中の処理が止まる)、
-//            Raspberry Pi のカーネル・ファームウェア(archive.raspberrypi.com。再起動が必要)、通常の機能更新(trixie / trixie-updates)
-//            → これらは月 1 回の手動メンテで(booking/pc/README.md §8)
-//   再起動: 自動では絶対にしない。必要になったら /var/run/reboot-required ができ、pi-check.sh が表示する
+//   入れる: Debian(通常・updates・security)、Raspberry Pi のカーネル/ファームウェア(archive.raspberrypi.com)、Docker(download.docker.com)
+//           Docker の更新でコンテナは 20〜30 秒再起動する。4 時台に予約ボタンを押すことは無い前提で受け入れる(利用者判断)
+//   再起動: /var/run/reboot-required ができていれば 04:30 に無条件で再起動(ログイン中でも)。予約処理中かどうかは見ない
+//   時刻:   apt-daily-upgrade.timer を 04:00(±10 分)に変更している(systemd/apt-daily-upgrade-override.conf)。
+//           既定の 06:00 だと再起動が翌日の 04:30 まで持ち越されるため
+//   入らないもの: 予約サイトを開くブラウザ(Chromium)は Docker イメージの中なので、apt では更新されない。
+//           数か月に 1 回 `docker compose build --pull` で入れ直す(月初に LINE でお知らせが届く。README §8)
 //
 // 確認: sudo unattended-upgrade --dry-run --debug   /  ログ: /var/log/unattended-upgrades/
 
-// 既定(50unattended-upgrades)の取得元一覧は「足し合わせ」になるので、いったん空にしてから書く
+// 既定(50unattended-upgrades)の一覧は「足し合わせ」になるので、いったん空にしてから書く
 #clear Unattended-Upgrade::Origins-Pattern;
 Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian";
+    "origin=Debian,codename=${distro_codename}-updates,label=Debian";
     "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+    "origin=Raspberry Pi Foundation,label=Raspberry Pi Foundation";
+    "origin=Docker,label=Docker CE";
 };
 
-// 念のための除外(取得元で既に対象外だが、将来の設定変更で巻き込まないように)
-Unattended-Upgrade::Package-Blacklist {
-    "docker-ce";
-    "docker-ce-cli";
-    "docker-compose-plugin";
-    "docker-buildx-plugin";
-    "containerd.io";
-    "raspberrypi-kernel";
-    "raspberrypi-bootloader";
-    "linux-image-.*";
-    "rpi-eeprom";
-};
-
-Unattended-Upgrade::Automatic-Reboot "false";
-Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::MinimalSteps "true";
 // メール送信の仕組みは無いので通知は使わない。結果はログと pi-check.sh で見る

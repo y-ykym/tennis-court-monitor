@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runMonitor, probeBookingServer, ALERT_AFTER_FAILS, PROBE_ATTEMPTS } from '../src/monitor.js';
+import { runMonitor, probeBookingServer, sendMaintenanceReminder, MAINTENANCE_TEXT, ALERT_AFTER_FAILS, PROBE_ATTEMPTS } from '../src/monitor.js';
 
 function fakeKV(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -69,4 +69,14 @@ test('probe: 登録なし → down、/warmup 200 → ok、一時エラー後に 
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('月初のお知らせ: グループに手順つきのテキストを 1 通', async () => {
+  const pushed = [];
+  await sendMaintenanceReminder({ LINE_CHANNEL_ACCESS_TOKEN: 't', LINE_GROUP_ID: 'C1' }, { push: async (_t, to, text) => pushed.push({ to, text }) });
+  assert.equal(pushed.length, 1);
+  assert.equal(pushed[0].to, 'C1');
+  assert.equal(pushed[0].text, MAINTENANCE_TEXT);
+  assert.match(pushed[0].text, /docker compose build --pull booking/);
+  assert.ok(pushed[0].text.length <= 5000);
 });
