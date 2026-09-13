@@ -7,11 +7,17 @@
 #   cp .env.example .env   →  .env に値を書く(パスワード等。ファイルは gitignore 済み)
 #   docker compose up -d --build
 #   docker compose logs -f registrar   # 「登録しました: xxx.trycloudflare.com」が出れば外から届く
+# コンテナのログ上限(既定は無制限で、tunnel は切断ログが多く数か月で GB 単位になる)。1 ファイル 10MB × 3 世代 = 最大 30MB/サービス
+x-logging: &default-logging
+  driver: json-file
+  options: { max-size: '10m', max-file: '3' }
+
 services:
   booking:
     build: ..
     image: tennis-booking:local
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       AUTO_CONFIRM: '1'        # 「予約」まで自動で押す。reCAPTCHA v2 が出たときだけ人間に渡す
@@ -37,6 +43,7 @@ services:
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    logging: *default-logging
     # --protocol http2: 既定の QUIC(UDP)は家庭用回線(SoftBank Air 等)で不安定なことがあるため、TCP の http2 で張る
     command: tunnel --no-autoupdate --protocol http2 --metrics 0.0.0.0:2000 --url http://booking:8080
     ports:
@@ -47,6 +54,7 @@ services:
   registrar:
     image: tennis-booking:local
     restart: unless-stopped
+    logging: *default-logging
     command: node server/register.mjs
     env_file: .env
     environment:

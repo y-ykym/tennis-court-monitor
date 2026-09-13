@@ -75,6 +75,20 @@ test('中継: トンネルの一時エラー(530)はやり直し、成功した�
   }
 });
 
+test('中継: 全部失敗しても PC の登録は消さない(瞬断で直後の予約を巻き込まない)', async () => {
+  const kv = fakeKV({ booking_url: 'https://abc.trycloudflare.com' });
+  const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: kv };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('error 1033', { status: 530 });
+  try {
+    const r = await handleBooking(new Request('https://w.example/status?token=x'), env, ctx);
+    assert.equal(r.status, 503);
+    assert.equal(kv.store.get('booking_url'), 'https://abc.trycloudflare.com', '登録が残っている');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('/book: 署名が不正なら 403', async () => {
   const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV({ booking_url: 'https://abc.trycloudflare.com' }) };
   const r = await handleBooking(new Request('https://w.example/book?token=abc.def'), env, ctx);
