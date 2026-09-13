@@ -8,7 +8,8 @@
 //                                  (旧: URI ボタン用。今の通知ボタンは postback で、index.js が startBooking() を呼ぶ。ブラウザは開かない)
 //   GET  /wait /status /result /vnc /abort /novnc/rfb.js, WS /websockify
 //                                  PC の画面・API・noVNC の WebSocket を中継。スマホは常にこの Worker(固定 URL)だけと通信し、
-//                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する
+//                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する。
+//                                  全部失敗しても登録は消さない(瞬断で消すと直後の予約まで巻き込む。TTL 5 分で自然に消える)
 //   POST /booking/register         PC 側(server/register.mjs)が自分の URL を登録。ヘッダ x-booking-auth = HMAC(secret, url)
 //                                  KV に TTL 付きで保存(PC が落ちると自然に消える)
 //   GET  /warmup                   登録先の /warmup を叩く(通知と同時にブラウザを起こす)
@@ -188,9 +189,9 @@ async function proxyToServer(request, target, env) {
     if (n < PROXY_RETRIES) await new Promise((r) => setTimeout(r, PROXY_RETRY_MS));
   }
   console.warn(`PC への中継が ${PROXY_RETRIES} 回とも失敗: ${new URL(target).pathname}`);
-  // 登録されている URL が死んでいる(PC 再起動で URL が変わった等)。登録を消して、次からは「繋がりません」の案内にする。
-  // PC 側の registrar が生きていれば 2 分以内に新しい URL を登録し直す
-  if (!isWs) await env.BOOKING_KV.delete(KV_KEY).catch(() => {});
+  // 登録は消さない。以前はここで KV を消していたが、自宅回線の数秒の瞬断でも消えてしまい、
+  // 直後の予約まで「繋がりません」になっていた(2026-09-13)。URL が本当に死んでいれば 5 分の TTL で自然に消え、
+  // PC 側の registrar が生きていれば 2 分以内に新しい URL で上書きされる
   if (isWs) return last;
   return html(
     '予約サーバーに繋がりませんでした',
