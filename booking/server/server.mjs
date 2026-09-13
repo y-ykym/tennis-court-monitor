@@ -23,7 +23,8 @@
 //   DISPLAY, SCREEN_W, SCREEN_H, PORT
 //   PROFILE_LOCAL=1         ブラウザプロファイル(Cookie 等)を docker volume に持ち越す
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
-//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する
+//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
+//                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
 //   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)
 //
 // 方針:
@@ -40,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { reserve } from '../src/reserve.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
+import { createLineQueue } from '../src/line-queue.js';
 import { verify } from '../src/token.js';
 
 const PORT = Number(process.env.PORT || 8080);
@@ -64,6 +66,13 @@ const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.e
 const PUBLIC_BASE = (process.env.BOOKING_PUBLIC_URL || process.env.WORKER_URL || '').replace(/\/$/, '');
 
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+
+// LINE への push は「届くまで持ち越す」(回線断の間に送れなかった結果カードを取りこぼさない)。保存先は docker volume
+const lineQueue = createLineQueue({
+  file: process.env.PENDING_LINE_FILE || '/var/lib/booking/pending-line.json',
+  push: (message) => pushResult(message, LINE),
+  log,
+}).start();
 
 function credentialsFor(person) {
   const p = person === 'B' ? 'B' : 'A';
@@ -108,9 +117,7 @@ function startSession(token, payload) {
       // ボタンを押した人がもう待機画面を閉じていても気づけるよう、LINE に「確認が必要です」カードを送る(失敗しても続行)
       if (LINE.token && LINE.to && PUBLIC_BASE) {
         const url = `${PUBLIC_BASE}/vnc?token=${encodeURIComponent(token)}`;
-        pushResult(buildChallengeFlex({ slot, facility, label: s.label, url, minutes: HANDOFF_TIMEOUT_MS / 60000 }), LINE)
-          .then(() => log('  reCAPTCHA の確認依頼を LINE に送りました'))
-          .catch((e) => log(`  LINE への確認依頼に失敗(無視): ${e.message}`));
+        lineQueue.send(buildChallengeFlex({ slot, facility, label: s.label, url, minutes: HANDOFF_TIMEOUT_MS / 60000 }), '  reCAPTCHA の確認依頼');
       }
       let finished = false;
       const finish = (reason) => {
@@ -167,12 +174,7 @@ function startSession(token, payload) {
       log(`予約フロー終了: ${result.status} ${result.message}`);
       // 結果を LINE にも送る(ボタンを押した本人以外にも分かるように)。失敗しても結果表示には影響させない
       if (LINE.token && LINE.to && result.status !== 'dry_run') {
-        try {
-          await pushResult(buildResultFlex({ slot, ...result }, s.label), LINE);
-          log('結果を LINE に通知しました');
-        } catch (e) {
-          log(`LINE 通知に失敗(無視): ${e.message}`);
-        }
+        await lineQueue.send(buildResultFlex({ slot, ...result }, s.label), '結果カード');
       }
     })
     .catch((e) => {
