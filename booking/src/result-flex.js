@@ -160,12 +160,27 @@ export function buildChallengeFlex({ slot, facility, label = '', url, minutes = 
   };
 }
 
-export async function pushResult(message, { token, to }) {
-  const res = await fetch('https://api.line.me/v2/bot/message/push', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ to, messages: [message] }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!res.ok) throw new Error(`LINE通知に失敗: HTTP ${res.status} ${await res.text()}`);
+// 自宅回線は数秒の瞬断が多く、1 回の fetch が "fetch failed" で落ちることがある(2026-09-13 に予約成功の結果カードが届かなかった)。
+// 通信エラーと 5xx は間を置いて最大 retries 回やり直す。4xx(形式不備・認証)はやり直しても無駄なので即エラー
+export async function pushResult(message, { token, to }, { retries = 3, delayMs = 3000 } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ to, messages: [message] }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) return;
+      const err = new Error(`LINE通知に失敗: HTTP ${res.status} ${await res.text()}`);
+      if (res.status < 500) throw err;
+      lastError = err;
+    } catch (e) {
+      if (/HTTP 4\d\d/.test(e.message)) throw e;
+      lastError = e;
+    }
+    if (attempt < retries) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw lastError;
 }
