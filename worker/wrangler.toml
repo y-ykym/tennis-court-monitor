@@ -27,6 +27,7 @@ id = "97e0d8dae665476797bae9dc168c560b"
 [vars]
 CANCEL_ENABLED = "1"
 
-# 自宅の予約サーバー(Pi)の生存監視(src/monitor.js)。毎時 0 分。止まっていたら LINE に知らせる(復帰も)
+# src/monitor.js: 毎時 0 分 = 自宅の予約サーバー(Pi)の生存監視(止まっていたら LINE に知らせる、復帰も)。
+#                 毎月 1 日 0:00 UTC(9:00 JST) = 手動メンテ(ブラウザのイメージ再ビルド)のお知らせ
 [triggers]
-crons = ["0 * * * *"]
+crons = ["0 * * * *", "0 0 1 * *"]

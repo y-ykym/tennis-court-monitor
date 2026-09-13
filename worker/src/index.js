@@ -12,6 +12,7 @@
 //   空き通知の「<呼び名>で予約」(postback, data='book|<署名トークン>') → 自宅 PC の /book を叩いて予約フローを開始
 //                                         → 「受け付けました」を reply(ブラウザは開かない。結果は PC が LINE にカードで push)
 //   Cron(1 時間ごと)                    → 自宅 PC の生存確認。止まっていたら LINE に 1 回知らせ、復帰も知らせる(src/monitor.js)
+//   Cron(毎月 1 日 9:00 JST)             → 手動メンテ(ブラウザのイメージ再ビルド)のお知らせを LINE に
 //
 // 必要な Secrets(`wrangler secret put`。値はコードや設定ファイルに書かない):
 //   LINE_CHANNEL_SECRET        Webhook署名の検証用
@@ -40,7 +41,7 @@ import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-tok
 import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotText } from './booking.js';
 
 export { MSG_BOOK };
-import { runMonitor } from './monitor.js';
+import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -82,6 +83,10 @@ export default {
   async scheduled(event, env, ctx) {
     if (!env.BOOKING_KV || !env.LINE_CHANNEL_ACCESS_TOKEN || !env.LINE_GROUP_ID) {
       console.error('[monitor] BOOKING_KV / LINE_CHANNEL_ACCESS_TOKEN / LINE_GROUP_ID が未設定です');
+      return;
+    }
+    if (event.cron === MAINTENANCE_CRON) {
+      ctx.waitUntil(sendMaintenanceReminder(env).catch((e) => console.error(`[monitor] お知らせの送信に失敗: ${e.message}`)));
       return;
     }
     ctx.waitUntil(runMonitor(env).catch((e) => console.error(`[monitor] 失敗: ${e.message}`)));
