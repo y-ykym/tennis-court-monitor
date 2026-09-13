@@ -204,3 +204,8 @@ docker compose ps                                                      # 3 サ�
 - Tunnel の URL は起動ごとに変わるが Worker が最新へ中継するので、LINE 側の設定変更は不要
 - **Tunnel の見張り**: 回線の瞬断が長引くと quick tunnel が `Unauthorized: Tunnel not found` のまま自力で戻れない(2026-09-12 に発生。Worker 側の登録も 5 分で消え、ボタンは「繋がりません」になる)。`tunnel-watchdog.timer`(1 分ごと)が、ログにその文言が出るか `/ready` が 3 分連続で失敗したら `docker compose restart tunnel` する。状態は `./pi-check.sh` の「Tunnel」欄と `journalctl -u tunnel-watchdog --since today`
 - 予約サイトのセッションは約 10 分で切れる。noVNC 画面(reCAPTCHA v2 が出たときだけ)は数分以内に操作
+- **reCAPTCHA v2(画像問題)が毎回出るようになったら**: 同じ回線・同じブラウザ Cookie からの自動アクセスが続いて v3 の点数が下がった状態。
+  (1) 実サイトへの自動アクセス(dry-run・探針を含む)を数日控える、(2) ブラウザプロファイルを捨てる:
+  `docker compose stop booking registrar && docker compose rm -f booking registrar && docker volume rm pc_profile && docker compose up -d`、
+  (3) `docker-compose.yml` の `FAST_PATH: '0'`(UI 操作で人間らしさを与える。成功まで 40 秒 → 60〜90 秒)。落ち着いたら `'1'` に戻す。
+  2026-09-13 に (2)(3) を実施
