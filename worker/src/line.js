@@ -6,6 +6,7 @@
 // ============================================================
 
 const LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
+const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 
 // グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)
 export const COMMAND_TEXT = 'よやく';
@@ -112,4 +113,19 @@ export async function replyMessages(accessToken, replyToken, messages) {
 // テキスト1件を返す
 export function replyText(accessToken, replyToken, text) {
   return replyMessages(accessToken, replyToken, [{ type: 'text', text }]);
+}
+
+// push API でテキスト 1 件を送る(replyToken 不要。Cron からの監視通知などボットが自発的に送るとき)
+export async function pushText(accessToken, to, text) {
+  const res = await fetch(LINE_PUSH_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ to, messages: [{ type: 'text', text }] }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) {
+    const err = new Error(`LINE push失敗: HTTP ${res.status} ${await res.text()}`);
+    err.status = res.status;
+    throw err;
+  }
 }
