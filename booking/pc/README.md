@@ -208,4 +208,7 @@ docker compose ps                                                      # 3 サ�
   (1) 実サイトへの自動アクセス(dry-run・探針を含む)を数日控える、(2) ブラウザプロファイルを捨てる:
   `docker compose stop booking registrar && docker compose rm -f booking registrar && docker volume rm pc_profile && docker compose up -d`、
   (3) `docker-compose.yml` の `FAST_PATH: '0'`(UI 操作で人間らしさを与える。成功まで 40 秒 → 60〜90 秒)。落ち着いたら `'1'` に戻す。
-  2026-09-13 に (2)(3) を実施
+  (4) 自動操作の痕跡: 既定の Playwright は `navigator.webdriver=true`(機械の印)。`IGNORE_DEFAULT_ARGS: '--enable-automation'` と
+  `CHROME_ARGS: '--disable-blink-features=AutomationControlled'` で false になる(compose に設定済み)。
+  残る機械らしさは WebGL が SwiftShader(ソフト描画)なこと。GPU をコンテナに渡せば消えるが未着手。
+  2026-09-13 に (2)(3)(4) を実施。同じ回線から人が手で予約すると v2 は出なかった → 回線ではなくブラウザの痕跡が原因
