@@ -1,0 +1,33 @@
+// Raspberry Pi(homepi)の自動更新方針(2026-09-13)。pi-init.sh が /etc/apt/apt.conf.d/ に置く。
+// 「Debian のセキュリティ更新だけを毎朝自動で入れ、再起動は人が行う」。
+//
+//   入れる: Debian の trixie-security(脆弱性の修正)
+//   入れない: Docker 本体(download.docker.com。更新するとコンテナが再起動し、予約中の処理が止まる)、
+//            Raspberry Pi のカーネル・ファームウェア(archive.raspberrypi.com。再起動が必要)、通常の機能更新(trixie / trixie-updates)
+//            → これらは月 1 回の手動メンテで(booking/pc/README.md §8)
+//   再起動: 自動では絶対にしない。必要になったら /var/run/reboot-required ができ、pi-check.sh が表示する
+//
+// 確認: sudo unattended-upgrade --dry-run --debug   /  ログ: /var/log/unattended-upgrades/
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+// 念のための除外(取得元で既に対象外だが、将来の設定変更で巻き込まないように)
+Unattended-Upgrade::Package-Blacklist {
+    "docker-ce";
+    "docker-ce-cli";
+    "docker-compose-plugin";
+    "docker-buildx-plugin";
+    "containerd.io";
+    "raspberrypi-kernel";
+    "raspberrypi-bootloader";
+    "linux-image-.*";
+    "rpi-eeprom";
+};
+
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::MinimalSteps "true";
+// メール送信の仕組みは無いので通知は使わない。結果はログと pi-check.sh で見る
+Unattended-Upgrade::Mail "";

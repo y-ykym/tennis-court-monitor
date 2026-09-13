@@ -1,0 +1,5 @@
+// apt の定期処理を有効にする(systemd の apt-daily.timer / apt-daily-upgrade.timer が毎日動く)
+// 1 = 毎日。一覧の更新とセキュリティ更新の適用(内容は 52unattended-upgrades-local)。古いキャッシュは週 1 で掃除
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";

@@ -29,6 +29,17 @@ if [ "${1:-}" = "--smart" ]; then
   sudo lspci -vv 2>/dev/null | grep -E "Non-Volatile|LnkSta:" | head -2 || true
 fi
 
+hr "OS の更新(セキュリティ更新は毎朝自動。それ以外と再起動は手動: README §8)"
+if [ -f /var/run/reboot-required ]; then
+  echo "再起動が必要です: $(tr -d '\n' < /var/run/reboot-required.pkgs 2>/dev/null | cut -c1-80)"
+else
+  echo "再起動要求: なし"
+fi
+n=$(apt list --upgradable 2>/dev/null | grep -vc "^Listing")
+echo "手動更新の保留: ${n} 件$( [ "$n" -gt 0 ] && echo '(sudo apt update && sudo apt full-upgrade で適用)' )"
+last=$(ls -t /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null | head -1)
+[ -n "$last" ] && grep -E "Packages that will be upgraded|No packages found|All upgrades installed" "$last" | tail -1 | sed 's/^/直近の自動更新: /' || true
+
 hr "Docker とコンテナ"
 docker --version 2>/dev/null || echo "docker が無い(pi-init.sh を実行)"
 docker compose ps 2>/dev/null || echo "compose が起動していない(docker compose up -d --build)"
