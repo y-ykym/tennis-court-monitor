@@ -38,14 +38,21 @@ docs/予約空き監視_要件定義書.md  要件定義書(§11 がフェーズ
 docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(記録用)
 
 booking/                     フェーズ2 予約支援(自宅の Raspberry Pi 5 で動かす Docker コンテナ。lib/ とは独立)
-  src/reserve.js             Playwright で ログイン→検索→枠選択→予約内容確認→(人間へ引き渡し or 予約)→完了画面の解析
-  src/token.js               LINE ボタン用の署名付きトークン(枠情報+有効期限、HMAC)
-  server/server.mjs          Web アプリ(/book → 自動遷移 → 待機画面 → noVNC 画面 → 結果)。noVNC の WebSocket 橋渡しも内蔵
-  scripts/reserve-cli.mjs    予約実行を手元/Actions から動かす CLI(--dry-run で予約直前まで)
+  src/reserve.js             Playwright で ログイン→検索→枠選択→予約内容確認→「予約」→完了画面の解析。v2 が出たら人間へ引き渡し。
+                             完了画面に到達しなくても予約一覧で成立を確かめる(verifyByList)
+  src/site-inpage.js         高速経路: ブラウザ内 fetch でログイン〜枠選択(UI 操作を省く)
+  src/reservation-list.js    予約の確認一覧(prwha1000)の解析と照合(Worker の parseReservations と同じ)
+  src/token.js               LINE ボタン用の署名付きトークン(枠情報+予約者+有効期限、HMAC)
+  src/result-flex.js         LINE に push するカード(予約結果 / 🔐 確認が必要です)
+  src/line-queue.js          回線断で送れなかった LINE カードを保存して 1 分ごとに再送(最長 6 時間)
+  server/server.mjs          Web アプリ(/book は Worker 向け JSON、/vnc は reCAPTCHA 時の noVNC 画面、/status /result /abort)。WebSocket 橋渡しも内蔵
+  server/register.mjs        Tunnel の現在の URL を 2 分ごとに Worker へ登録
+  scripts/reserve-cli.mjs    予約実行を手元から動かす CLI(--dry-run で予約直前まで)
   scripts/explore-flow.mjs   予約フローの調査スクリプト(本人ログイン。確定は押さない)
   Dockerfile / docker-entrypoint.sh  Playwright 公式イメージ + Xvfb + x11vnc。noVNC クライアントは esbuild で束ねる
-  pc/                        自宅 Pi 用: docker-compose.yml(本体+Cloudflare Tunnel+URL登録)、README.md(手順)、pi-init.sh(初期化)、pi-check.sh(確認)
-  test/                      node --test(トークン署名)
+  pc/                        自宅 Pi 用: docker-compose.yml(本体+Tunnel+URL登録)、README.md(構築・運用手順)、pi-init.sh(初期化)、pi-check.sh(確認)、
+                             tunnel-watchdog.sh + systemd/(Tunnel の見張り)、apt/(OS 自動更新の方針)
+  test/                      node --test(トークン署名・カード・持ち越し・一覧の解析)
 
 worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル(Cloudflare Workers。lib/ とは独立)
   src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply。postback→確認カード/取消実行)
@@ -54,7 +61,8 @@ worker/                      フェーズ1.5 予約確認ボット + 1.6 予約�
   src/cancel-token.js        「キャンセル」「はい」ボタンに載せる署名付き postback data(HMAC、期限付き)とペナルティ判定
   src/format.js              テキスト整形(0件・失敗時の文言)
   src/flex.js                予約一覧(人ごとのカルーセル)・キャンセル確認・結果のFlex Message。30KB/50KB制限に収まるよう行数を自動調整
-  src/booking.js             フェーズ2 予約支援の玄関(署名検証・自宅サーバーへの中継)
+  src/booking.js             フェーズ2 予約支援の玄関(予約ボタンの postback → 自宅サーバーの /book を叩く。noVNC の中継、URL 登録)
+  src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初のメンテのお知らせ
   scripts/probe-site.mjs     ローカルからログイン確認(パスワード変更後の疎通確認にも)
   scripts/send-test-event.mjs 署名付きの模擬Webhookを wrangler dev に送る
   test/                      node --test のユニットテスト(fixturesは個人情報をダミー化済み)
@@ -287,16 +295,16 @@ npx wrangler tail --format pretty
 
 - なぜ自宅で動かすか: 予約サイトは確定時に reCAPTCHA v3 で採点し、**データセンターの IP(Cloud Run / GitHub Actions)からは毎回 v2 の
   画像問題が出て自動化できない**(実予約 0/3)。自宅回線からは画像問題なしで成立する(実測 4/4)。v2 が出たときだけ noVNC でスマホに画面を映して人間が解く
-- 経路: LINE ボタン(署名付き URL)→ Cloudflare Worker `tennis-reservation-bot`(固定 URL の玄関。署名検証と中継)→ Cloudflare Tunnel →
-  Raspberry Pi 5 上の Docker(予約サーバー + cloudflared + URL 登録)。Pi が落ちているときは「サーバーに繋がりません。手動で」と案内
+- 経路: LINE ボタン(postback。署名付きトークン)→ Cloudflare Worker `tennis-reservation-bot`(固定 URL の玄関。署名検証して Pi の `/book` を叩く)→ Cloudflare Tunnel →
+  Raspberry Pi 5 上の Docker(予約サーバー + cloudflared + URL 登録)。Pi に届かないときは「繋がりませんでした。1〜2分後にもう一度」と返信
 - 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET` と `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev`(どちらも登録済み。
   両方あるときだけ通知カードに予約ボタンが付く)、`LABEL_A` / `LABEL_B`(予約者の呼び名。設定した人の分だけ「<呼び名>で予約」が出る。
-  どちらも無ければ「予約」1つで、押した後に予約者を選ぶ画面になる)。ボタン付きは1通に約6枠しか入らないので、多いときは最大5通に分けて送る。
-  通知と同時に `/warmup` を叩く
+  どちらも無ければボタン無し)。ボタン付きは1通 12 枠まで、多いときは最大 5 通に分けて送る。通知と同時に `/warmup` を叩く
 - 状態(2026-09-13): **稼働中**。自宅の Raspberry Pi 5(ホスト名 `homepi`、NVMe 起動)で Docker 3 サービスが常時動作。
-  2026-09-13 02:29 に実枠(亀戸中央 9/30 13:00)で LINE ボタン → 予約成立まで **40 秒・完全自動(reCAPTCHA v3 のみ)** を確認し、テスト予約はキャンセル済み。
-  運用・確認コマンドは `booking/pc/README.md` §8。深夜は SoftBank Air が不安定で Tunnel が切れやすい(見張り役 `tunnel-watchdog.timer` が自動復旧)。
-  スマホの待機画面が「つながりません」になっても Pi 側の処理は続き、結果は LINE に届く
+  実枠で 3 回成立(最速 40 秒・完全自動)。**現在の状態・運用・残 TODO は `docs/引き継ぎ_フェーズ2運用.md`**。
+  同日に追加した仕組み: Pi の生存監視(毎時、LINE に ⚠️/✅)、OS・Docker の自動更新(毎朝 4:00、必要なら 4:30 再起動)、
+  月初のメンテのお知らせ、結果カードの持ち越し再送、「予約」後に一覧で成立を確かめる判定、Tunnel の見張り役。
+  自宅回線(SoftBank Air)は夜に切れやすく、その間のボタンは「繋がりません」になる(1〜2 分後に押し直す。2026-09-26 に回線が安定する予定)
 - 検証に使った Cloud Run と GitHub Actions からの予約は **2026-09-07 に撤去済み**: GCP プロジェクト `tennis-booking-c46c52c5` を削除(30 日以内なら `gcloud projects undelete` で復元可)、
   `booking/deploy.sh`・`.github/workflows/reserve.yml`・`booking/scripts/notify-result.mjs` を削除、GitHub Secrets の `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A`(Actions 専用)を削除。
   2026-09-13 に GCS 保存(`profile-store.js`・`@google-cloud/storage`)と Node HTTP 版の高速経路(`site-http.js`)、ブラウザ向けの待機画面・予約者選択画面も削除

@@ -189,8 +189,9 @@ docker compose ps                                                      # 3 サ�
 
 ## §7 実枠で通し → 運用開始
 
-1. 署名付きの予約 URL(Mac 側で発行。`booking/src/token.js` の `sign()`)をスマホで開く → 予約者を選ぶ → 30〜60 秒で自動予約 → 結果画面と LINE
-2. 予約サイトでテスト予約をキャンセル(テニスは利用日の 4 日前まで無料)
+1. (構築時の方法)署名付きの予約 URL を Pi 上で発行してスマホで開く: `docker compose exec booking node --input-type=module -e "import {sign,slotExpiry} from './src/token.js'; ..."`
+   → 自動予約 → 結果。**運用開始後は LINE 通知カードの「<呼び名>で予約」ボタン(postback)がこの代わり**
+2. 予約サイトでテスト予約をキャンセル(テニスは利用日の 4 日前まで無料。LINE の「よやく」→「キャンセル」でも可)
 3. GitHub Secrets に `BOOKING_BASE_URL=https://tennis-reservation-bot.y-ykym.workers.dev` を登録 → 次の空き通知から「予約」ボタンが付く
 
 ## §8 運用
