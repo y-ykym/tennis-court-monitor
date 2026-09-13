@@ -8,6 +8,9 @@
 //   再起動: 自動では絶対にしない。必要になったら /var/run/reboot-required ができ、pi-check.sh が表示する
 //
 // 確認: sudo unattended-upgrade --dry-run --debug   /  ログ: /var/log/unattended-upgrades/
+
+// 既定(50unattended-upgrades)の取得元一覧は「足し合わせ」になるので、いったん空にしてから書く
+#clear Unattended-Upgrade::Origins-Pattern;
 Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
 };
