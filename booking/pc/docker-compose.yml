@@ -18,6 +18,7 @@ services:
     image: tennis-booking:local
     restart: unless-stopped
     logging: *default-logging
+    init: true               # 終わったブラウザのゾンビプロセスを回収する(node が PID 1 だと残る)
     env_file: .env
     environment:
       # 高速経路(ページ内 fetch でログイン〜枠選択。約 40 秒)。'0' にすると最初から UI 操作(人間らしいクリック・遷移。約 90 秒)。
@@ -35,6 +36,7 @@ services:
       SCREEN_H: '1000'
     volumes:
       - profile:/tmp/profile
+      - state:/var/lib/booking # 回線断で送れなかった LINE カードの持ち越し(src/line-queue.js)
     ports:
       - '127.0.0.1:8080:8080' # PC 自身からの確認用(http://localhost:8080/warmup)。外からは tunnel 経由
     shm_size: 1g
@@ -63,3 +65,4 @@ services:
 
 volumes:
   profile:
+  state:
