@@ -196,9 +196,10 @@ docker compose ps                                                      # 3 サ�
 ## §8 運用
 
 - **自動復帰**: 各サービスは `restart: unless-stopped`。Pi が再起動すれば Docker と一緒に上がる。`sudo reboot` で一度確認しておく
-- **止まったときの知らせ**: Worker が毎時 0 分に Pi の生存を確認し(`worker/src/monitor.js`。登録の有無 + トンネル越しの `/warmup` を 3 回試行)、
+- **止まったときの知らせ**: Worker が毎時 0 分に Pi の生存を確認し(`worker/src/monitor.js`。登録の有無 + トンネル越しの `/warmup` を 20 秒おきに 4 回試行)、
   届かなければ LINE グループに「⚠️ 自宅の予約サーバーに繋がりません」を 1 回、復帰したら「✅ 復帰しました」を 1 回送る。
-  最長 1 時間気づかない代わりに、トンネルの一時的な切断では鳴らない。状態は KV の `monitor_state`
+  最長 1 時間気づかない代わりに、トンネルの一時的な切断やコンテナの作り直しでは鳴らない。状態は KV の `monitor_state`。
+  **`docker compose up -d` などの作り直しは毎時 0 分前後を避ける**(初回 2026-09-13 21:00 はデプロイの瞬間に当たって誤報した)
 - **ケース到着後**: 電源を切って P579 に組み込む(Active Cooler と HAT+ をそのまま収める。スペーサーは付属の 16mm)
 - **更新**: `cd ~/tennis-court-monitor/booking/pc && git pull && docker compose up -d --build`
 - **OS の更新**: `sudo apt update && sudo apt full-upgrade -y`(手動。`unattended-upgrades` を入れる場合も自動再起動はさせない)

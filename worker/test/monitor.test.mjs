@@ -61,11 +61,11 @@ test('probe: 登録なし → down、/warmup 200 → ok、一時エラー後に 
     let n = 0;
     globalThis.fetch = async () => (++n < 3 ? new Response('error', { status: 530 }) : new Response('ok', { status: 200 }));
     assert.equal((await probeBookingServer(env, { retryMs: 0 })).ok, true, '3 回目で成功');
-    assert.equal(PROBE_ATTEMPTS, 3);
+    assert.equal(PROBE_ATTEMPTS, 4);
     globalThis.fetch = async () => new Response('error', { status: 530 });
     const r = await probeBookingServer(env, { retryMs: 0 });
     assert.equal(r.ok, false);
-    assert.match(r.reason, /HTTP 530\(3 回試行\)/);
+    assert.match(r.reason, /HTTP 530\(4 回試行\)/);
   } finally {
     globalThis.fetch = realFetch;
   }
