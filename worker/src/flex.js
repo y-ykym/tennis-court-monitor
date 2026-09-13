@@ -22,18 +22,21 @@
 // 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
 // 「今日/明日/明後日/終了」の補足は公園名の右(ピルの幅を確保するため時間の行には置かない)。
 //
-// Flex Message はバブルあたり 10KB の制限がある。JSON を軽くするため「時間+公園名+補足」は span 付きの 1 テキストに
-// まとめる。表示行数は固定せず、MAX_BUBBLE_BYTES に収まるまで行を減らす(超過分は「…ほかN件」)。
-// 実測: 固定部 約1.8KB、1行 約1.1KB(ボタン込み)→ 7行で約9.5KB。
+// Flex Message はバブルあたり 30KB の制限がある(Messaging API リファレンス「バブル」。以前は 10KB だった)。
+// JSON を軽くするため「時間+公園名+補足」は span 付きの 1 テキストにまとめる。表示行数は固定せず、
+// MAX_BUBBLE_BYTES に収まるまで行を減らす(超過分は「…ほかN件」)。実測: 固定部 約1.8KB、1行 約1.1KB(ボタン込み)→ 24行で約28KB。
+// フッターの「一覧を更新」はメッセージアクション(押すとその人が「よやく」と送った扱いになり、この Worker が一覧を返す)。
 // ============================================================
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso } from './format.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
-// バブル JSON の上限(LINE の 10KB 制限に余裕を持たせる)
-export const MAX_BUBBLE_BYTES = 9800;
+// バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)
+export const MAX_BUBBLE_BYTES = 28000;
 // 上限を試す最大行数(これ以上はバイト数で必ず溢れる)
-const MAX_ROWS = 9;
+const MAX_ROWS = 24;
+// 「よやく」コマンド(line.js の COMMAND_TEXT と同じ。循環 import を避けて直書き)
+const COMMAND_TEXT = 'よやく';
 
 const DOW_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -223,17 +226,20 @@ function header(title, right, bg) {
   };
 }
 
-function siteLinkFooter() {
+const siteLinkButton = () => ({ type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label: '予約サイトを開く', uri: SITE_URL } });
+// 押した人が「よやく」と送った扱いになり、最新の一覧が返る
+const refreshButton = (label = '一覧を更新') => ({ type: 'button', style: 'link', height: 'sm', action: { type: 'message', label, text: COMMAND_TEXT } });
+
+// フッター: 区切り線 + リンク風ボタンを横並び(2つまで)
+function linkFooter(buttons) {
   return {
     type: 'box',
     layout: 'vertical',
     backgroundColor: '#FFFFFF',
-    contents: [
-      { type: 'separator', color: COLOR_LINE },
-      { type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label: '予約サイトを開く', uri: SITE_URL } },
-    ],
+    contents: [{ type: 'separator', color: COLOR_LINE }, { type: 'box', layout: 'horizontal', contents: buttons }],
   };
 }
+const siteLinkFooter = () => linkFooter([siteLinkButton()]);
 
 // 文字色を濃色で決め打ちしているため、背景もダークモードに依存しないよう白を明示
 function body(contents, extra = {}) {
@@ -292,11 +298,11 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
       size: 'mega',
       header: header('予約一覧', `${tm}/${td} 現在 ・ ${total}件`, COLOR_HEADER_BG),
       body: body(rows),
-      footer: siteLinkFooter(),
+      footer: linkFooter([siteLinkButton(), refreshButton()]),
     };
   };
 
-  // 10KB 制限: 収まるまで行数を減らす
+  // 30KB 制限: 収まるまで行数を減らす
   let bubble = render(Math.min(total, MAX_ROWS));
   for (let rows = Math.min(total, MAX_ROWS) - 1; rows >= 1 && bubbleBytes(bubble) > MAX_BUBBLE_BYTES; rows--) {
     bubble = render(rows);
@@ -394,7 +400,8 @@ export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
       size: 'mega',
       header: header(ok ? 'キャンセルしました' : 'キャンセルできませんでした', ok ? nowText : null, ok ? COLOR_OK_BG : COLOR_NG_BG),
       body: body(contents),
-      footer: siteLinkFooter(),
+      // 成功したら残りの予約をすぐ確かめられるように「一覧を見る」、失敗はサイトで確認してもらう
+      footer: ok ? linkFooter([refreshButton('一覧を見る'), siteLinkButton()]) : siteLinkFooter(),
     },
   };
 }
