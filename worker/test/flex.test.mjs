@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, jstNowHHMM, bubbleBytes, MAX_BUBBLE_BYTES } from '../src/flex.js';
+import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, jstNowHHMM, bubbleBytes, MAX_BUBBLE_BYTES, MAX_CAROUSEL_BYTES } from '../src/flex.js';
 
 const A = [
   { id: '2026000001', date: '2026-09-13', start: '11:00', end: '13:00', facility: '亀戸中央公園', status: '支払前' },
@@ -31,18 +31,28 @@ function find(node, pred, out = []) {
 const tiles = (msg) => find(msg.contents, (n) => n.width === '58px').map((n) => [texts(n).join(' '), n.backgroundColor]);
 const pills = (msg) => find(msg.contents, (n) => n.action?.type === 'postback');
 
-test('flex: ヘッダー件数・人ごとの見出し・行の並び(日付昇順)', () => {
+test('flex: 人ごとに 1 枚のカルーセル。ヘッダーは名前 + 現在日・件数、行は日付昇順', () => {
   const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations: A }, { label: 'B', reservations: B }], opts);
   assert.equal(msg.type, 'flex');
   assert.equal(msg.altText, '📅 予約一覧 3件: ゆうたそ 9/6(日) 9:00-11:00 猿江恩賜公園 ほか');
-  const t = texts(msg.contents);
-  assert.equal(t[0], '予約一覧');
-  assert.equal(t[1], '9/2 現在 ・ 3件');
+  assert.equal(msg.contents.type, 'carousel');
+  assert.equal(msg.contents.contents.length, 2, '1 人 1 枚');
+  const [a, b] = msg.contents.contents;
+  assert.deepEqual(texts(a.header), ['ゆうたそ', '9/2 現在 ・ 2件']);
+  assert.deepEqual(texts(b.header), ['B', '9/2 現在 ・ 1件']);
+  const t = texts(a.body);
   assert.ok(t.indexOf('9:00 - 11:00') < t.indexOf('11:00 - 13:00'), '日付昇順(9/6 → 9/13)');
-  assert.ok(t.includes('ゆうたそ') && t.includes('2件') && t.includes('B') && t.includes('1件'));
   assert.equal(t.includes('支払前') || t.includes('支払済'), false, '支払状況は表示しない');
   assert.deepEqual(tiles(msg)[0], ['9/6 日', '#FBE4E4'], '日付タイル');
   assert.equal(pills(msg).length, 0, 'cancelData が無ければボタンは出ない');
+  for (const bubble of msg.contents.contents) {
+    assert.equal(bubble.size, 'mega', 'カルーセル内のバブルは同じ幅');
+    assert.deepEqual(find(bubble.footer, (n) => n.type === 'button').map((x) => x.action.type), ['uri', 'message'], '各カードにサイトリンクと更新');
+  }
+  // 1 人だけならカルーセルにせずバブルそのまま
+  const single = buildReservationFlex([{ label: 'A', reservations: A }], opts);
+  assert.equal(single.contents.type, 'bubble');
+  assert.deepEqual(texts(single.contents.header), ['A', '9/2 現在 ・ 2件']);
 });
 
 test('flex: 日付タイルの色(日=赤 / 土=青 / 祝日=赤 / 平日=グレー)', () => {
@@ -61,12 +71,14 @@ test('flex: 日付タイルの色(日=赤 / 土=青 / 祝日=赤 / 平日=グレ
   ]);
 });
 
-test('flex: 片方失敗・片方0件の表示', () => {
+test('flex: 片方0件・片方失敗は、それぞれのカードに表示', () => {
   const msg = buildReservationFlex([{ label: 'A', reservations: [] }, { label: 'B', error: new Error('x') }], opts);
-  const t = texts(msg.contents);
-  assert.ok(t.includes('予約なし'));
-  assert.ok(t.includes('取得失敗'));
-  assert.equal(t[0], '予約一覧');
+  const [a, b] = msg.contents.contents;
+  assert.deepEqual(texts(a.header), ['A', '9/2 現在 ・ 0件']);
+  assert.ok(texts(a.body).includes('予約はありません'));
+  assert.deepEqual(texts(b.header), ['B', '取得失敗']);
+  assert.equal(b.header.backgroundColor, '#6B7280', '失敗はグレーのヘッダー');
+  assert.ok(texts(b.body).some((s) => s.includes('繋がりませんでした')));
   assert.equal(msg.altText, '📅 予約一覧 0件');
 });
 
@@ -98,7 +110,7 @@ test('flex: キャンセルボタン(postback ピル)は cancelData がある行
   assert.ok(texts(msg.contents).includes('  終了'));
 });
 
-test('flex: バブルは 28,000 バイト以内に収める(ボタン付き 9 行は全部載る / 30 行は減らして「…ほかN件」)', () => {
+test('flex: 各カード 28,000 バイト・全体 49,000 バイト以内(15+15 行は全部載る / 26+26 行は減らして「…ほかN件」)', () => {
   const mk = (n) =>
     Array.from({ length: n }, (_, i) => ({
       id: String(2026000100 + i),
@@ -108,20 +120,18 @@ test('flex: バブルは 28,000 バイト以内に収める(ボタン付き 9 �
       facility: ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'][i % 3],
       cancelData: DATA,
     }));
-  // 9 行(以前の 10KB 制限では 7 行に減っていた)は全部載る
-  const nine = mk(9);
-  const msg9 = buildReservationFlex([{ label: 'ゆうたそ', reservations: nine.slice(0, 5) }, { label: 'B', reservations: nine.slice(5) }], opts);
-  assert.equal(pills(msg9).length, 9);
+  const total = (msg) => msg.contents.contents.reduce((n, b) => n + bubbleBytes(b), 0);
+  const msg9 = buildReservationFlex([{ label: 'ゆうたそ', reservations: mk(15) }, { label: 'B', reservations: mk(15) }], opts);
+  assert.equal(pills(msg9).length, 30, '15+15 行は全部載る(以前の 1 枚 24 行の上限より増えた)');
   assert.equal(texts(msg9.contents).some((s) => s.startsWith('…ほか')), false);
-  assert.ok(bubbleBytes(msg9.contents) <= MAX_BUBBLE_BYTES);
-  // 30 行は上限で減らす
-  const many = mk(30);
-  const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations: many.slice(0, 15) }, { label: 'B', reservations: many.slice(15) }], opts);
-  const bytes = bubbleBytes(msg.contents);
-  assert.ok(bytes <= MAX_BUBBLE_BYTES, `${bytes} bytes`);
-  const shown = pills(msg).length;
-  assert.ok(shown >= 20 && shown < 30, `表示行数 ${shown}`);
-  assert.ok(texts(msg.contents).includes(`…ほか${30 - shown}件`));
+  assert.ok(total(msg9) <= MAX_CAROUSEL_BYTES, `${total(msg9)} bytes`);
+
+  const msg30 = buildReservationFlex([{ label: 'ゆうたそ', reservations: mk(26) }, { label: 'B', reservations: mk(26) }], opts);
+  for (const b of msg30.contents.contents) assert.ok(bubbleBytes(b) <= MAX_BUBBLE_BYTES, `${bubbleBytes(b)} bytes`);
+  assert.ok(total(msg30) <= MAX_CAROUSEL_BYTES, `${total(msg30)} bytes`);
+  const shown = pills(msg30).length;
+  assert.ok(shown >= 30 && shown < 52, `表示行数 ${shown}`);
+  assert.ok(texts(msg30.contents).some((s) => /^…ほか\d+件$/.test(s)));
 });
 
 test('flex: フッターに「一覧を更新」(メッセージアクション「よやく」)がある', () => {

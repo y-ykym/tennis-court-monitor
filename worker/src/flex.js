@@ -1,39 +1,42 @@
 // ============================================================
-// 予約一覧の Flex Message(カード型)と、キャンセル確認・結果のカード。スマホで一目で読めることを優先した設計。
+// 予約一覧の Flex Message と、キャンセル確認・結果のカード。スマホで一目で読めることを優先した設計。
 //
-//   ┌──────────────────────────────────────────┐
-//   │ 予約一覧                 9/6 現在 ・ 4件  │  ← ヘッダー(濃紺・白文字)
-//   ├──────────────────────────────────────────┤
-//   │ ゆうたそ                            3件  │  ← 人ごとの見出し
-//   │ ┌────┐ 9:00 - 11:00                      │  ← 終了済み: 全体グレー、ボタン無し
-//   │ │9/6 │ 猿江恩賜公園  終了                 │
-//   │ │ 日 │                                   │
-//   │ └────┘                                   │
-//   │ ┌────┐ 17:00 - 19:00           (キャンセル)│  ← 右端: 「キャンセル」ピル(postback。フェーズ1.6)
-//   │ │9/7 │ 大島小松川公園  明日                │
-//   │ │ 月 │                                   │
-//   │ └────┘                                   │
-//   │ ───────────────────────────────────────  │
-//   │ B                             取得失敗   │
-//   ├──────────────────────────────────────────┤
-//   │             予約サイトを開く              │  ← フッター(リンク)
-//   └──────────────────────────────────────────┘
+// 予約一覧は「人ごとに 1 枚」のカードを横に並べたカルーセル(2026-09-13 変更。人が 1 人なら 1 枚のバブル):
+//
+//   ┌──────────────────────────────┐ ┌──────────────────────────────┐
+//   │ ゆうたそ          9/6 現在 ・ 3件 │ │ B                9/6 現在 ・ 1件 │  ← ヘッダー(濃紺・白文字)。名前が見出し
+//   ├──────────────────────────────┤ ├──────────────────────────────┤
+//   │ ┌────┐ 9:00 - 11:00            │ │ ┌────┐ 19:00 - 21:00          │
+//   │ │9/6 │ 猿江恩賜公園  終了       │ │ │9/21│ 猿江恩賜公園   (キャンセル)│  ← 終了済み: 全体グレー、ボタン無し
+//   │ │ 日 │                         │ │ │ 月 │                         │     右端: 「キャンセル」ピル(postback。フェーズ1.6)
+//   │ └────┘                         │ │ └────┘                         │
+//   │ ┌────┐ 17:00 - 19:00 (キャンセル)│ │                               │
+//   │ │9/7 │ 大島小松川公園  明日     │ │                               │
+//   │ └────┘                         │ │                               │
+//   ├──────────────────────────────┤ ├──────────────────────────────┤
+//   │ 予約サイトを開く   一覧を更新  │ │ 予約サイトを開く   一覧を更新  │  ← フッター
+//   └──────────────────────────────┘ └──────────────────────────────┘
+//      ←── 横にスワイプで切り替え ──→
+//
+// 取得に失敗した人のカードはグレーのヘッダー「取得失敗」、0 件は「予約なし」と本文に 1 行。
 //
 // 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
 // 「今日/明日/明後日/終了」の補足は公園名の右(ピルの幅を確保するため時間の行には置かない)。
 //
-// Flex Message はバブルあたり 30KB の制限がある(Messaging API リファレンス「バブル」。以前は 10KB だった)。
+// Flex Message はバブルあたり 30KB、カルーセル全体で 50KB の制限がある(Messaging API リファレンス)。
 // JSON を軽くするため「時間+公園名+補足」は span 付きの 1 テキストにまとめる。表示行数は固定せず、
-// MAX_BUBBLE_BYTES に収まるまで行を減らす(超過分は「…ほかN件」)。実測: 固定部 約1.8KB、1行 約1.1KB(ボタン込み)→ 24行で約28KB。
+// 各カードが MAX_BUBBLE_BYTES、全体が MAX_CAROUSEL_BYTES に収まるまで 1 人あたりの行数を減らす(超過分は「…ほかN件」)。
+// 実測: 固定部 約1.8KB、1行 約1.1KB(ボタン込み)→ 2 人 × 20 行で約 48KB。
 // フッターの「一覧を更新」はメッセージアクション(押すとその人が「よやく」と送った扱いになり、この Worker が一覧を返す)。
 // ============================================================
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso } from './format.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
-// バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)
+// バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
 export const MAX_BUBBLE_BYTES = 28000;
-// 上限を試す最大行数(これ以上はバイト数で必ず溢れる)
+export const MAX_CAROUSEL_BYTES = 49000;
+// 1 人あたりで試す最大行数(これ以上はバイト数で必ず溢れる)
 const MAX_ROWS = 24;
 // 「よやく」コマンド(line.js の COMMAND_TEXT と同じ。循環 import を避けて直書き)
 const COMMAND_TEXT = 'よやく';
@@ -200,17 +203,6 @@ function personLabel(label) {
   };
 }
 
-// 人ごとの見出し行: 名前ラベル + 右に件数(または「取得失敗」「予約なし」)
-function personHeader(label, right, rightColor, first) {
-  return {
-    type: 'box',
-    layout: 'horizontal',
-    margin: first ? 'lg' : 'xl',
-    alignItems: 'center',
-    contents: [personLabel(label), text(right, { size: 'sm', color: rightColor, flex: 1, align: 'end', gravity: 'center' })],
-  };
-}
-
 function header(title, right, bg) {
   return {
     type: 'box',
@@ -262,53 +254,58 @@ function buildAltText(people, total) {
 // people: [{ label, reservations: [...] } | { label, error }]
 //   reservations の各要素に cancelData(署名付き postback data)があれば、その行に「キャンセル」ピルを付ける
 // 前提: 少なくとも1人は取得に成功している(全員失敗・全員0件はテキストで返す。index.js 参照)
+// 戻り値の contents は、人が 2 人以上ならカルーセル(1 人 1 枚)、1 人ならそのバブル
 export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = jstNowHHMM() } = {}) {
   const total = people.reduce((n, p) => n + (p.error ? 0 : p.reservations.length), 0);
   const [, tm, td] = today.split('-').map(Number);
+  const asOf = `${tm}/${td} 現在`;
 
-  const render = (maxRows) => {
+  // 1 人分のカード。maxRows を超える分は「…ほかN件」
+  const personBubble = (p, maxRows) => {
     const rows = [];
-    let shown = 0;
-    let hidden = 0;
-    people.forEach((p, i) => {
-      if (i > 0) rows.push({ type: 'separator', margin: 'xl', color: COLOR_LINE });
-      if (p.error) {
-        rows.push(personHeader(p.label, '取得失敗', COLOR_ERROR, i === 0));
-        return;
-      }
-      if (p.reservations.length === 0) {
-        rows.push(personHeader(p.label, '予約なし', COLOR_SUB, i === 0));
-        return;
-      }
-      rows.push(personHeader(p.label, `${p.reservations.length}件`, COLOR_SUB, i === 0));
+    let right = '';
+    let bg = COLOR_HEADER_BG;
+    if (p.error) {
+      right = '取得失敗';
+      bg = COLOR_NG_BG;
+      rows.push(text('予約サイトに繋がりませんでした。少し待って「一覧を更新」を押してください', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'lg' }));
+    } else if (p.reservations.length === 0) {
+      right = `${asOf} ・ 0件`;
+      rows.push(text('予約はありません', { size: 'sm', color: COLOR_SUB, margin: 'lg' }));
+    } else {
+      right = `${asOf} ・ ${p.reservations.length}件`;
+      let hidden = 0;
       sortReservations(p.reservations).forEach((r, j) => {
-        if (shown >= maxRows) {
+        if (j >= maxRows) {
           hidden++;
           return;
         }
         // 行と行の間に薄い罫線(目が滑らないように)
         if (j > 0) rows.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
         rows.push(reservationRow(r, today, nowHHMM));
-        shown++;
       });
-    });
-    if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+      if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+    }
     return {
       type: 'bubble',
       size: 'mega',
-      header: header('予約一覧', `${tm}/${td} 現在 ・ ${total}件`, COLOR_HEADER_BG),
+      header: header(p.label, right, bg),
       body: body(rows),
       footer: linkFooter([siteLinkButton(), refreshButton()]),
     };
   };
 
-  // 30KB 制限: 収まるまで行数を減らす
-  let bubble = render(Math.min(total, MAX_ROWS));
-  for (let rows = Math.min(total, MAX_ROWS) - 1; rows >= 1 && bubbleBytes(bubble) > MAX_BUBBLE_BYTES; rows--) {
-    bubble = render(rows);
-  }
+  const render = (maxRows) => people.map((p) => personBubble(p, maxRows));
+  const fits = (bubbles) => bubbles.every((b) => bubbleBytes(b) <= MAX_BUBBLE_BYTES) && bubbles.reduce((n, b) => n + bubbleBytes(b), 0) <= MAX_CAROUSEL_BYTES;
 
-  return { type: 'flex', altText: buildAltText(people, total), contents: bubble };
+  // 30KB/50KB 制限: 収まるまで 1 人あたりの行数を減らす
+  const most = Math.max(1, ...people.map((p) => (p.error ? 0 : p.reservations.length)));
+  let rows = Math.min(most, MAX_ROWS);
+  let bubbles = render(rows);
+  while (rows > 1 && !fits(bubbles)) bubbles = render(--rows);
+
+  const contents = bubbles.length === 1 ? bubbles[0] : { type: 'carousel', contents: bubbles };
+  return { type: 'flex', altText: buildAltText(people, total), contents };
 }
 
 // ---- フェーズ1.6 キャンセル ----
