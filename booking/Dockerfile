@@ -1,4 +1,4 @@
-# フェーズ2 予約支援サーバー(半自動 noVNC 方式)。Cloud Run で動かす1コンテナ。
+# フェーズ2 予約支援サーバー。自宅の Raspberry Pi 上の Docker で動かす1コンテナ(booking/pc/docker-compose.yml)。
 #   Node Webアプリ(server/server.mjs) + Xvfb(仮想ディスプレイ) + headful Chromium(Playwright) + x11vnc + noVNC(自前の WebSocket 橋渡し)
 # Playwright 公式イメージ(Chromium と依存ライブラリ入り)に Xvfb と x11vnc を足す。
 # バージョンは package.json の playwright と揃える(ずれると「ブラウザが見つからない」になる)。

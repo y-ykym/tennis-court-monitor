@@ -108,7 +108,7 @@ test('postback: 予約ボタン(book|トークン)は自宅サーバーの /book
     BOOKING_KV: { get: async (k) => store.get(k) ?? null, put: async () => {}, delete: async () => {} },
   };
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 302, headers: { location: '/wait?token=x' } });
+  globalThis.fetch = async () => Response.json({ status: 'started' }, { status: 202 });
   try {
     const reply = await buildPostbackReply(env, `book|${token}`, { now: Date.UTC(2026, 8, 13) });
     assert.equal(reply.text, MSG_BOOK.started('ゆうたそ', '9/30(水) 13:00-15:00 亀戸中央公園'));

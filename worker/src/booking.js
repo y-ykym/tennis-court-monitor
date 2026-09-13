@@ -4,10 +4,11 @@
 // 自宅 PC で動く予約支援サーバーは、Cloudflare Tunnel(quick tunnel)の URL が起動ごとに変わる。
 // そこで固定 URL のこの Worker を LINE の「予約」ボタンの宛先にし、PC が登録した現在の URL へ転送する。
 //
-//   GET  /book?token=…&person=…   署名トークンを検証 → PC の URL が登録されていれば PC へ中継(プロキシ)。無ければ「繋がりません」画面
-//                                  (旧: URI ボタン用。今の通知ボタンは postback で、index.js が startBooking() を呼ぶ。ブラウザは開かない)
-//   GET  /wait /status /result /vnc /abort /novnc/rfb.js, WS /websockify
-//                                  PC の画面・API・noVNC の WebSocket を中継。スマホは常にこの Worker(固定 URL)だけと通信し、
+//   (LINE postback 'book|<token>')   index.js から startBooking(): PC の /book を叩いて予約フローを開始し、結果コードを返す。ブラウザは開かない
+//   GET  /book?token=…               ブラウザから開かれたとき(古い通知の URL ボタン): 同じく startBooking() して結果を画面で返す
+//   GET  /status /result /vnc /abort /novnc/rfb.js, WS /websockify
+//                                  PC の noVNC 画面・API・WebSocket を中継(reCAPTCHA の「確認が必要です」カードのボタンが /vnc を開く)。
+//                                  スマホは常にこの Worker(固定 URL)だけと通信し、
 //                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する。
 //                                  全部失敗しても登録は消さない(瞬断で消すと直後の予約まで巻き込む。TTL 5 分で自然に消える)
 //   POST /booking/register         PC 側(server/register.mjs)が自分の URL を登録。ヘッダ x-booking-auth = HMAC(secret, url)
@@ -24,7 +25,7 @@
 
 const KV_KEY = 'booking_url';
 // PC(トンネル)へ中継するパス。これ以外(/webhook など)は触らない
-const PROXY_PATHS = new Set(['/book', '/wait', '/status', '/result', '/vnc', '/abort', '/websockify', '/novnc/rfb.js']);
+const PROXY_PATHS = new Set(['/book', '/status', '/result', '/vnc', '/abort', '/websockify', '/novnc/rfb.js']);
 // トンネルの一時エラー時のやり直し(回数・間隔)
 const PROXY_RETRIES = 4;
 const PROXY_RETRY_MS = 1500;
@@ -146,21 +147,15 @@ export async function handleBooking(request, env, ctx) {
     return new Response(registered ? 'ok' : 'no server', { status: 200 });
   }
 
-  // /book だけは Worker 側でも署名を検証する(PC が無いときの案内を出すため。PC 側でも検証する)
+  // ブラウザから /book を開かれた(古い通知の URL 型ボタン)。postback と同じ処理をして結果を画面で返す
   if (p === '/book') {
-    const token = url.searchParams.get('token') || '';
-    const payload = await verifyBookingToken(token, env.BOOKING_SIGNING_SECRET);
-    if (!payload) {
-      return html('このリンクは使えません', 'リンクの期限が切れているか、正しくありません。新しい通知のボタンから開いてください。', 403);
-    }
-    if (!registered) {
-      return html(
-        '予約サーバーに繋がりません',
-        `自宅の予約サーバー(PC)が起動していないようです。お手数ですが予約サイトで手動で予約してください。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`,
-        503
-      );
-    }
+    const { status, payload } = await startBooking(env, url.searchParams.get('token') || '');
+    const who = payload ? env[`LABEL_${payload.person}`] || payload.person || '' : '';
+    const text = (MSG_BOOK[status] || MSG_BOOK.error)(who, payload ? bookSlotText(payload) : '');
+    const ok = status === 'started';
+    return html(ok ? '受け付けました' : '予約を始められませんでした', `${esc(text).replace(/\n/g, '<br>')}<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`, ok ? 200 : status === 'offline' ? 503 : status === 'invalid' ? 403 : 409);
   }
+
   if (!registered) return html('予約サーバーに繋がりません', `自宅の予約サーバー(PC)が起動していないようです。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`, 503);
 
   return proxyToServer(request, `${registered}${p}${url.search}`, env);
@@ -200,13 +195,14 @@ async function proxyToServer(request, target, env) {
   );
 }
 
-// ---- LINE の postback ボタン(ブラウザを開かない予約開始) ----
-// 通知カードの「<呼び名>で予約」は postback で、data = 'book|<署名トークン>'。index.js が受け取り、ここで PC の /book を叩いて
-// 予約フローを始める。PC は 302 で待機画面へ誘導するが、ブラウザは無いのでその Location だけ見て結果を判定する。
-//   started  … 予約フローが始まった(結果は PC が LINE にカードで push する)
-//   already  … 同じ枠の予約が既に成立している(PC が /result へ誘導した)
-//   busy     … 別の枠を処理中(PC が 409)
-//   invalid  … 署名不正・期限切れ
+// ---- 予約開始(LINE の postback ボタン / 古い URL ボタン) ----
+// PC の /book を叩いて予約フローを始める。PC は JSON で答える(server/server.mjs):
+//   202 started / 200 already(同じ枠が成立済み) / 409 busy(別の枠を処理中) / 400 no_person / 403 invalid
+// ここでの結果コード:
+//   started  … 始めた(結果は PC が LINE にカードで push する)
+//   already  … 同じ枠の予約が既に成立している
+//   busy     … 別の枠を処理中
+//   invalid  … 署名不正・期限切れ・予約者なし
 //   offline  … PC の URL が未登録、または中継が全部失敗
 //   error    … PC がそれ以外を返した
 export const BOOK_POSTBACK_PREFIX = 'book|';
@@ -220,7 +216,7 @@ export async function startBooking(env, token) {
   let last = null;
   for (let n = 1; n <= PROXY_RETRIES; n++) {
     try {
-      last = await fetch(target, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10000) });
+      last = await fetch(target, { method: 'GET', signal: AbortSignal.timeout(10000) });
       if (![502, 503, 504, 530].includes(last.status)) break;
     } catch {
       last = null;
@@ -231,12 +227,27 @@ export async function startBooking(env, token) {
     console.warn('予約開始の中継が全部失敗');
     return { status: 'offline', payload };
   }
-  if (last.status === 302 || last.status === 301) {
-    const loc = last.headers.get('location') || '';
-    return { status: loc.startsWith('/result') ? 'already' : 'started', payload };
-  }
+  const body = await last.json().catch(() => ({}));
+  if (last.status === 202) return { status: 'started', payload };
+  if (last.status === 200 && body.status === 'already') return { status: 'already', payload };
   if (last.status === 409) return { status: 'busy', payload };
-  if (last.status === 403) return { status: 'invalid', payload };
-  console.warn(`予約開始: PC が HTTP ${last.status} を返した`);
+  if (last.status === 400 || last.status === 403) return { status: 'invalid', payload };
+  console.warn(`予約開始: PC が HTTP ${last.status} ${body.status || ''} を返した`);
   return { status: 'error', payload };
+}
+
+// 予約ボタンへの返信文(postback の reply と、ブラウザ向け画面で共用)
+const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
+export const MSG_BOOK = {
+  started: (who, slot) => `🎾 受け付けました\n${who}: ${slot}\n自動で予約を進めています(1分ほど)。結果はこのグループにカードで届きます。ロボット確認が必要になったときもカードでお知らせします。`,
+  already: (who, slot) => `この枠(${slot})は ${who} で既に予約が成立しています。「よやく」で確認してください`,
+  busy: () => 'いま別の予約を処理中です。1〜2分待ってから、もう一度ボタンを押してください',
+  offline: () => '予約サーバーに繋がりませんでした(自宅のサーバーが止まっているか、回線が不安定です)。少し待ってもう一度押すか、予約サイトで手動で予約してください',
+  invalid: () => 'このボタンは期限切れか無効です。新しい通知のボタンから押してください',
+  error: () => '予約サーバーがエラーを返しました。少し待ってもう一度押してください',
+};
+export function bookSlotText(p) {
+  const [y, m, d] = String(p.date).split('-').map(Number);
+  const dow = '日月火水木金土'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${m}/${d}(${dow}) ${p.startHour}:00-${Number(p.startHour) + 2}:00 ${PARK_NAMES[p.park] || p.park}`;
 }

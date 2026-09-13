@@ -37,7 +37,9 @@ import { fetchReservations, cancelReservation, AuthError } from './site.js';
 import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS, jstTodayIso } from './format.js';
 import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, isPast, jstNowHHMM } from './flex.js';
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
-import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX } from './booking.js';
+import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotText } from './booking.js';
+
+export { MSG_BOOK };
 import { runMonitor } from './monitor.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
@@ -55,22 +57,6 @@ export const MSG_CANCEL_NOT_FOUND = 'この予約は見つかりませんでし�
 export const MSG_CANCEL_MISMATCH = '予約の内容が一覧と一致しないため中止しました。「よやく」で確認してください';
 export const MSG_CANCEL_DECLINED = 'キャンセルしませんでした';
 export const MSG_CANCEL_DISABLED = 'キャンセル機能は現在停止しています。予約サイトから操作してください';
-
-// 予約ボタン(postback)への返信
-const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
-export const MSG_BOOK = {
-  started: (who, slot) => `🎾 受け付けました\n${who}: ${slot}\n自動で予約を進めています(1分ほど)。結果はこのグループにカードで届きます。ロボット確認が必要になったときもカードでお知らせします。`,
-  already: (who, slot) => `この枠(${slot})は ${who} で既に予約が成立しています。「よやく」で確認してください`,
-  busy: () => 'いま別の予約を処理中です。1〜2分待ってから、もう一度ボタンを押してください',
-  offline: () => '予約サーバーに繋がりませんでした(自宅のサーバーが止まっているか、回線が不安定です)。少し待ってもう一度押すか、予約サイトで手動で予約してください',
-  invalid: () => 'このボタンは期限切れか無効です。新しい通知のボタンから押してください',
-  error: () => '予約サーバーがエラーを返しました。少し待ってもう一度押してください',
-};
-function bookSlotText(p) {
-  const [y, m, d] = String(p.date).split('-').map(Number);
-  const dow = '日月火水木金土'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
-  return `${m}/${d}(${dow}) ${p.startHour}:00-${Number(p.startHour) + 2}:00 ${PARK_NAMES[p.park] || p.park}`;
-}
 
 export default {
   async fetch(request, env, ctx) {

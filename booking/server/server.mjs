@@ -1,30 +1,34 @@
 // ============================================================
-// 予約支援サーバー(半自動 noVNC 方式)。Cloud Run の1コンテナで動く Node Web アプリ。
+// 予約支援サーバー(自宅の Raspberry Pi 上の Docker で動く Node Web アプリ。booking/pc/docker-compose.yml)
 //
-//   GET /book?token=…    署名付きトークンを検証し、予約フローを開始(ログイン→枠選択→予約内容確認画面→人数入力)。
-//                        完了したら待機画面へ。すでに別の枠を処理中なら「使用中」
-//   GET /wait?token=…    待機画面(数秒ごとに /status を見て、準備できたら /vnc へ)
-//   GET /status?token=…  進行状況 JSON
-//   GET /vnc?token=…     noVNC 画面。人間が「予約」→ reCAPTCHA v2 のチェック → 再度「予約」を行う
+//   GET /book?token=…    署名付きトークン(予約者 person 入り)を検証し、予約フローを開始。ブラウザ向けの画面は返さず、
+//                        呼び出し元(Cloudflare Worker。LINE の postback ボタンから)が読む JSON を返す:
+//                          202 {status:'started'}  始めた(結果は LINE にカードで push する)
+//                          200 {status:'already'}  同じ枠の予約が既に成立している(二重予約防止)
+//                          409 {status:'busy'}     別の枠を処理中
+//                          400 {status:'no_person'} トークンに予約者が無い / 403 {status:'invalid'} 署名不正・期限切れ
+//   GET /status?token=…  進行状況 JSON(noVNC 画面が数秒ごとに見る)
+//   GET /vnc?token=…     noVNC 画面。reCAPTCHA v2 が出たときだけ、LINE の「確認が必要です」カードのボタンから開く。
+//                        人間がチェック → 画像問題 → 再度「予約」を行う。準備前に開いたら「準備中」を返して数秒後に再読み込み
 //   WS  /websockify?token=…  noVNC と x11vnc(localhost:5900)の橋渡し(websockify 相当を Node で実装)
+//   GET /result?token=…  結果画面(noVNC 画面が完了を検知して遷移する)
 //   GET /abort?token=…   人間が「やめる」を押した(予約せず終了)
-//   GET /warmup          コールドスタート対策の空叩き(監視側が通知と同時に呼ぶ)
+//   GET /warmup          監視・生存確認の空叩き
 //   GET /healthz
 //
-// 環境変数(Cloud Run では Secret Manager から注入):
-//   BOOKING_SIGNING_SECRET  トークン署名鍵(通知側と同じ値)
+// 環境変数(.env と docker-compose.yml から):
+//   BOOKING_SIGNING_SECRET  トークン署名鍵(通知側・Worker と同じ値)
 //   SITE_USER_A / SITE_PASS_A / LABEL_A(/ _B)  予約サイトの利用者番号・パスワード・呼び名
 //   VNC_PASSWORD            x11vnc のパスワード(entrypoint が生成して渡す)
 //   DISPLAY, SCREEN_W, SCREEN_H, PORT
-//   AUTO_CONFIRM=1          「予約」までサーバーが押す(自宅回線用)。reCAPTCHA v2 が出たときだけ noVNC で人間に渡す
-//   PROFILE_LOCAL=1 / PROFILE_BUCKET  ブラウザプロファイルの持ち越し(ローカル volume / GCS)
-//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  あれば結果を LINE に push。reCAPTCHA v2 で人間の操作が必要になったときも
-//                           「確認が必要です」カード(noVNC 画面へのボタン付き)を push する
-//   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker。無ければ Host ヘッダから推定)
+//   PROFILE_LOCAL=1         ブラウザプロファイル(Cookie 等)を docker volume に持ち越す
+//   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
+//   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する
+//   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)
 //
 // 方針:
-//   - 同時に扱う予約は1件だけ(画面が1つしかない)。Cloud Run も max-instances=1 で運用する
-//   - 「予約」ボタンと reCAPTCHA は人間が操作する。サーバーは押さない(reserve.js の onConfirm フック)
+//   - 「予約」まで自動で押す(自宅回線なら reCAPTCHA v3 で通る)。v2 のチェックが出たときだけ noVNC で人間に渡す
+//   - 同時に扱う予約は1件だけ(画面が1つしかない)
 //   - セッションは予約サイト側で約10分で切れるため、人間に渡してから HANDOFF_TIMEOUT_MS で打ち切る
 //   - 利用者番号・パスワード・Cookie・VNC パスワードはログに出さない
 // ============================================================
@@ -35,7 +39,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { reserve } from '../src/reserve.js';
-import { restoreProfile, saveProfile } from '../src/profile-store.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { verify } from '../src/token.js';
 
@@ -52,13 +55,9 @@ const DONE_KEEP_MS = 10 * 60 * 1000;
 // noVNC クライアント(npm の lib は CommonJS なので、esbuild でブラウザ用 ESM に束ねたもの。npm run build:novnc)
 const NOVNC_BUNDLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'rfb.js');
 const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
-// ブラウザプロファイルの保存先(GCS バケット名。無ければ持ち越さない)と、コンテナ内の置き場所
-const PROFILE_BUCKET = process.env.PROFILE_BUCKET || '';
+// ブラウザプロファイル(Cookie 等)の置き場所。PROFILE_LOCAL=1 のとき docker volume として持ち越す
 const PROFILE_DIR = '/tmp/profile';
-// PROFILE_LOCAL=1: GCS ではなくローカルの PROFILE_DIR(docker volume)にプロファイルを持ち越す(自宅 PC 用)
 const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
-// AUTO_CONFIRM=1: 「予約」までサーバーが押す(自宅回線で reCAPTCHA v3 が通る前提)。v2 のチェックが出たときだけ人間に渡す
-const AUTO_CONFIRM = process.env.AUTO_CONFIRM === '1';
 // 結果を LINE に push する(両方あるとき)
 const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
 // LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
@@ -97,12 +96,10 @@ function startSession(token, payload) {
     startedAt: Date.now(),
     readyAt: null,
     finish: null,
-    mode: AUTO_CONFIRM ? 'challenge' : 'confirm', // noVNC 画面の案内文の切り替え用
   };
   session = s;
 
-  // 人間に画面を渡す。半自動では予約内容確認画面で、自動確定では reCAPTCHA v2 が出たときだけ呼ばれる。
-  // 人間の操作が終わる(画面が変わる)か、時間切れ/中止まで待つ
+  // 人間に画面を渡す(reCAPTCHA v2 が出たときだけ呼ばれる)。人間の操作が終わる(画面が変わる)か、時間切れ/中止まで待つ
   const handoff = ({ page, facility }) =>
     new Promise((resolve) => {
       s.status = 'ready';
@@ -144,19 +141,13 @@ function startSession(token, payload) {
     headless: false,
     launchArgs: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'],
     viewport: null,
-    ...(AUTO_CONFIRM ? { onChallenge: handoff } : { onConfirm: handoff }),
+    onChallenge: handoff,
     debugDir: '/tmp/debug-out',
     log: (m) => log(`  ${m}`),
   };
   (async () => {
     // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
-    if (PROFILE_BUCKET) {
-      s.message = 'ブラウザを準備しています…';
-      await restoreProfile(PROFILE_BUCKET, PROFILE_DIR, (m) => log(`  ${m}`));
-      browserOptions.userDataDir = PROFILE_DIR;
-    } else if (PROFILE_LOCAL) {
-      browserOptions.userDataDir = PROFILE_DIR;
-    }
+    if (PROFILE_LOCAL) browserOptions.userDataDir = PROFILE_DIR;
     // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す。
     // 環境変数 FAST_PATH=0 で高速経路を使わず、最初から UI 操作(人間らしい操作)で進める(reCAPTCHA の重さの比較用)
     const useFast = process.env.FAST_PATH !== '0';
@@ -190,8 +181,7 @@ function startSession(token, payload) {
       s.message = e.message;
       log(`予約フロー例外: ${e.message}`);
     })
-    .finally(async () => {
-      if (PROFILE_BUCKET) await saveProfile(PROFILE_BUCKET, PROFILE_DIR, (m) => log(`  ${m}`));
+    .finally(() => {
       setTimeout(() => {
         if (session === s) session = null;
       }, DONE_KEEP_MS);
@@ -216,29 +206,17 @@ const page = (title, body) => `<!doctype html><html lang="ja"><head><meta charse
   a.btn.gray{background:#888}
 </style></head><body>${body}</body></html>`;
 
-function waitPage(token, s) {
+// noVNC 画面や結果画面を、準備が整う前に開いたときの表示(数秒後に自動で再読み込み)
+function preparingPage(s) {
   return page(
-    '予約の準備中',
-    `<div class="card">
-      <h1><span class="spinner"></span>予約の準備をしています</h1>
-      <div class="slot">${esc(slotText(s.payload))}<br><span class="muted">予約者: ${esc(s.label)} / 人数: ${esc(s.payload.people || 2)}</span></div>
-      <div class="muted" id="msg">${esc(s.message)}</div>
-      <div class="muted" style="margin-top:12px">ログイン〜枠の選択まで自動で進めています(30〜60秒)。
-      準備ができたら予約サイトの確認画面が表示されます。<br><b>表示後は数分以内に</b>「予約」を押してください(サイトの制限時間があります)。</div>
-    </div>
-    <script>
-      const token=${JSON.stringify(token)};
-      async function tick(){
-        try{
-          const r=await fetch('/status?token='+encodeURIComponent(token),{cache:'no-store'}); const j=await r.json();
-          document.getElementById('msg').textContent=j.message||'';
-          if(j.status==='ready'){location.replace('/vnc?token='+encodeURIComponent(token));return;}
-          if(j.status==='done'){location.replace('/result?token='+encodeURIComponent(token));return;}
-        }catch(e){}
-        setTimeout(tick,1500);
-      }
-      tick();
-    </script>`
+    '準備中',
+    `<meta http-equiv="refresh" content="3">
+    <div class="card">
+      <h1><span class="spinner"></span>予約を進めています</h1>
+      <div class="slot">${esc(slotText(s.payload))}<br><span class="muted">予約者: ${esc(s.label)}</span></div>
+      <div class="muted">${esc(s.message)}</div>
+      <div class="muted" style="margin-top:12px">この画面は数秒ごとに自動で更新されます。結果は LINE にも届きます。</div>
+    </div>`
   );
 }
 
@@ -278,11 +256,7 @@ function vncPage(token, s) {
 </style></head><body>
 <div id="bar"><b>${esc(slotText(s.payload))}</b><span class="st" id="st">接続中…</span><a href="/abort?token=${encodeURIComponent(token)}">やめる</a></div>
 <div id="screen"></div>
-<div id="hint">${
-    s.mode === 'challenge'
-      ? '「予約」は押しました。<b>チェックボックス</b>を押し、画像問題が出たら解いてから、もう一度<b>「予約」</b>を押してください。完了画面になると自動で結果に進みます。'
-      : '人数は入力済みです。<b>「予約」</b>を押してください。「チェックを入れてから…」と出たら<b>チェックボックス</b>を押し、もう一度「予約」。完了画面になると自動で結果に進みます。'
-  }</div>
+<div id="hint">「予約」は押しました。<b>チェックボックス</b>を押し、画像問題が出たら解いてから、もう一度<b>「予約」</b>を押してください。完了画面になると自動で結果に進みます。</div>
 <script type="module">
   // esbuild で CommonJS を束ねたため、既定エクスポートが { default: RFB } の形になることがある
   import mod from '/novnc/rfb.js';
@@ -319,9 +293,7 @@ function send(res, status, body, type = 'text/html; charset=utf-8') {
 
 function tokenOf(url) {
   const token = url.searchParams.get('token') || '';
-  if (token === 'smoke' && process.env.BOOKING_SMOKE === '1') return { token, payload: session?.payload || null };
-  const payload = verify(token, SECRET);
-  return { token, payload };
+  return { token, payload: verify(token, SECRET) };
 }
 
 const server = http.createServer((req, res) => {
@@ -330,32 +302,6 @@ const server = http.createServer((req, res) => {
 
   if (p === '/healthz' || p === '/warmup') return send(res, 200, 'ok\n', 'text/plain');
 
-  // 動作確認用(環境変数 BOOKING_SMOKE=1 のときだけ): 認証情報なしで Chromium を仮想ディスプレイに出し、
-  // 予約サイトのトップページを noVNC で見られる状態にする(Xvfb・x11vnc・WebSocket 橋渡しの疎通確認)
-  if (p === '/smoke' && process.env.BOOKING_SMOKE === '1') {
-    const token = 'smoke';
-    if (!session) {
-      const s = { token, payload: { park: '1050', date: '2026-09-17', startHour: 15, people: 2 }, label: 'テスト', status: 'starting', message: 'ブラウザを起動中', result: null, startedAt: Date.now(), readyAt: null, finish: null };
-      session = s;
-      import('playwright').then(async ({ chromium }) => {
-        const browser = await chromium.launch({ headless: false, args: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'] });
-        const pg = await (await browser.newContext({ viewport: null, locale: 'ja-JP' })).newPage();
-        await pg.goto('https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp', { waitUntil: 'domcontentloaded' }).catch(() => {});
-        s.status = 'ready';
-        s.readyAt = Date.now();
-        s.finish = async () => {
-          s.status = 'done';
-          s.result = { status: 'abandoned', message: '動作確認を終了しました' };
-          await browser.close().catch(() => {});
-          setTimeout(() => { if (session === s) session = null; }, 5000);
-        };
-        setTimeout(() => s.finish && s.finish(), HANDOFF_TIMEOUT_MS);
-      }).catch((e) => { s.status = 'done'; s.result = { status: 'error', message: e.message }; s.message = e.message; });
-    }
-    res.writeHead(302, { location: `/wait?token=smoke` });
-    return res.end();
-  }
-
   // noVNC のクライアント JS(単一バンドル)
   if (p === '/novnc/rfb.js') {
     if (!fs.existsSync(NOVNC_BUNDLE)) return send(res, 500, 'noVNC bundle がありません(npm run build:novnc)', 'text/plain');
@@ -363,65 +309,39 @@ const server = http.createServer((req, res) => {
     return fs.createReadStream(NOVNC_BUNDLE).pipe(res);
   }
 
-  if (!['/book', '/wait', '/status', '/vnc', '/abort', '/result'].includes(p)) return send(res, 404, 'not found', 'text/plain');
+  if (!['/book', '/status', '/vnc', '/abort', '/result'].includes(p)) return send(res, 404, 'not found', 'text/plain');
 
   const { token, payload } = tokenOf(url);
+  const json = (status, body) => send(res, status, JSON.stringify(body), 'application/json');
   if (!payload) {
-    if (p === '/status') return send(res, 403, JSON.stringify({ status: 'invalid' }), 'application/json');
+    if (p === '/status' || p === '/book') return json(403, { status: 'invalid' });
     return send(res, ...simplePage('このリンクは使えません', 'リンクの期限が切れているか、正しくありません。新しい通知のボタンから開いてください。', 403));
   }
 
   if (p === '/book') {
-    // 通知のボタンは「誰が押したか」が分からないので、予約者(A/B)をここで選ぶ。B の認証情報が無ければ A だけ
-    const person = payload.person || url.searchParams.get('person');
-    if (!person || !['A', 'B'].includes(person)) {
-      const hasB = !!process.env.SITE_USER_B;
-      const link = (who) => `/book?token=${encodeURIComponent(token)}&person=${who}`;
-      return send(
-        res,
-        200,
-        page(
-          '誰の予約にしますか',
-          `<div class="card"><h1>誰の予約にしますか?</h1>
-           <div class="slot">${esc(slotText(payload))}<br><span class="muted">人数: ${esc(payload.people || 2)}</span></div>
-           <a class="btn" href="${link('A')}">${esc(process.env.LABEL_A || 'A')} で予約</a>
-           ${hasB ? `&nbsp; <a class="btn" href="${link('B')}">${esc(process.env.LABEL_B || 'B')} で予約</a>` : ''}
-           <div class="muted" style="margin-top:14px">押すとログイン〜枠の選択まで自動で進み、最後の「予約」ボタンだけ自分で押します。</div></div>`
-        )
-      );
-    }
-    payload.person = person;
-    // 同じ枠で終わった処理があるとき: 予約が成立していれば結果を見せる(二重予約防止)。それ以外(中止・失敗)はやり直せる
+    // 予約者はトークンに入っている(通知側が「<呼び名>で予約」ボタンごとに署名)。無いトークンは受け付けない
+    if (!['A', 'B'].includes(payload.person)) return json(400, { status: 'no_person' });
+    // 同じ枠で終わった処理があるとき: 予約が成立していれば「済み」(二重予約防止)。それ以外(中止・失敗)はやり直せる
     if (session && session.token === token && session.status === 'done') {
-      if (session.result?.status === 'success') {
-        res.writeHead(302, { location: `/result?token=${encodeURIComponent(token)}` });
-        return res.end();
-      }
+      if (session.result?.status === 'success') return json(200, { status: 'already' });
       session = null;
     }
-    if (session && session.token !== token && session.status !== 'done') {
-      return send(
-        res,
-        ...simplePage('ほかの予約を処理中です', `いま「${esc(slotText(session.payload))}」(${esc(session.label)})を処理しています。終わってから、もう一度ボタンを押してください。`, 409)
-      );
-    }
+    if (session && session.token !== token && session.status !== 'done') return json(409, { status: 'busy' });
     if (!session || session.token !== token) startSession(token, payload);
-    res.writeHead(302, { location: `/wait?token=${encodeURIComponent(token)}` });
-    return res.end();
+    return json(202, { status: 'started' });
   }
 
   const s = session && session.token === token ? session : null;
   if (!s) {
-    if (p === '/status') return send(res, 200, JSON.stringify({ status: 'none' }), 'application/json');
+    if (p === '/status') return json(200, { status: 'none' });
     return send(res, ...simplePage('処理が見つかりません', 'この予約の処理は始まっていないか、終了しています。通知のボタンからもう一度開いてください。', 404));
   }
-  if (p === '/status') return send(res, 200, JSON.stringify({ status: s.status, message: s.message }), 'application/json');
-  if (p === '/wait') return send(res, 200, s.status === 'done' ? resultPage(s) : s.status === 'ready' ? vncPage(token, s) : waitPage(token, s));
-  if (p === '/vnc') return send(res, 200, s.status === 'ready' ? vncPage(token, s) : waitPage(token, s));
-  if (p === '/result') return send(res, 200, s.status === 'done' ? resultPage(s) : waitPage(token, s));
+  if (p === '/status') return json(200, { status: s.status, message: s.message });
+  if (p === '/vnc') return send(res, 200, s.status === 'ready' ? vncPage(token, s) : s.status === 'done' ? resultPage(s) : preparingPage(s));
+  if (p === '/result') return send(res, 200, s.status === 'done' ? resultPage(s) : preparingPage(s));
   if (p === '/abort') {
     if (s.finish) s.finish('人間が中止');
-    res.writeHead(302, { location: `/wait?token=${encodeURIComponent(token)}` });
+    res.writeHead(302, { location: `/result?token=${encodeURIComponent(token)}` });
     return res.end();
   }
 });
