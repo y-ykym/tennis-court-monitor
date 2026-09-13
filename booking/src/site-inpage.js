@@ -5,7 +5,7 @@
 //   page.evaluate(inPageFlow, { slot, credentials }) → { ok: true, applyFields, facility, vacant }
 //                                                    | { ok: false, status: 'auth_error'|'taken'|'error', message }
 //
-// Node 側の HTTP(src/site-http.js)ではなくブラウザ内で行う理由:
+// Node 側の HTTP ではなくブラウザ内で行う理由:
 //   Cloud Run では Node の HTTP とブラウザの通信が別の出口(IP)になり得て、予約サイトのロードバランサが
 //   セッションを別ノードに振ってしまう(「システム異常が発生しました」)。ブラウザ1つに通信主体をまとめると、
 //   実機で成功している全ブラウザ方式と同じ条件になる。
