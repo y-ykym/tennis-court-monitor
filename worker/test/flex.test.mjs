@@ -98,25 +98,37 @@ test('flex: キャンセルボタン(postback ピル)は cancelData がある行
   assert.ok(texts(msg.contents).includes('  終了'));
 });
 
-test('flex: バブルは 9,800 バイト以内に収める(ボタン付き 9 行 → 行を減らして「…ほかN件」)', () => {
-  const many = Array.from({ length: 9 }, (_, i) => ({
-    id: String(2026000100 + i),
-    date: `2026-09-${String(10 + i).padStart(2, '0')}`,
-    start: '17:00',
-    end: '19:00',
-    facility: ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'][i % 3],
-    cancelData: DATA,
-  }));
-  const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations: many.slice(0, 5) }, { label: 'B', reservations: many.slice(5) }], opts);
+test('flex: バブルは 28,000 バイト以内に収める(ボタン付き 9 行は全部載る / 30 行は減らして「…ほかN件」)', () => {
+  const mk = (n) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: String(2026000100 + i),
+      date: `2026-${String(10 + Math.floor(i / 28)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`,
+      start: '17:00',
+      end: '19:00',
+      facility: ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'][i % 3],
+      cancelData: DATA,
+    }));
+  // 9 行(以前の 10KB 制限では 7 行に減っていた)は全部載る
+  const nine = mk(9);
+  const msg9 = buildReservationFlex([{ label: 'ゆうたそ', reservations: nine.slice(0, 5) }, { label: 'B', reservations: nine.slice(5) }], opts);
+  assert.equal(pills(msg9).length, 9);
+  assert.equal(texts(msg9.contents).some((s) => s.startsWith('…ほか')), false);
+  assert.ok(bubbleBytes(msg9.contents) <= MAX_BUBBLE_BYTES);
+  // 30 行は上限で減らす
+  const many = mk(30);
+  const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations: many.slice(0, 15) }, { label: 'B', reservations: many.slice(15) }], opts);
   const bytes = bubbleBytes(msg.contents);
   assert.ok(bytes <= MAX_BUBBLE_BYTES, `${bytes} bytes`);
   const shown = pills(msg).length;
-  assert.ok(shown >= 6 && shown <= 8, `表示行数 ${shown}(7行前後)`);
-  assert.ok(texts(msg.contents).includes(`…ほか${9 - shown}件`));
-  // ボタン無し(現行相当)なら 9 行とも載る
-  const plain = buildReservationFlex([{ label: 'A', reservations: many.map(({ cancelData, ...r }) => r) }], opts);
-  assert.equal(texts(plain.contents).some((s) => s.startsWith('…ほか')), false);
-  assert.ok(bubbleBytes(plain.contents) <= MAX_BUBBLE_BYTES);
+  assert.ok(shown >= 20 && shown < 30, `表示行数 ${shown}`);
+  assert.ok(texts(msg.contents).includes(`…ほか${30 - shown}件`));
+});
+
+test('flex: フッターに「一覧を更新」(メッセージアクション「よやく」)がある', () => {
+  const msg = buildReservationFlex([{ label: 'A', reservations: A }], opts);
+  const actions = find(msg.contents.footer, (n) => n.type === 'button').map((b) => b.action);
+  assert.deepEqual(actions.map((a) => a.type), ['uri', 'message']);
+  assert.equal(actions[1].text, 'よやく');
 });
 
 test('flex: 確認カード(ペナルティ警告あり/なし・ボタン2つ)', () => {
@@ -152,6 +164,7 @@ test('flex: 結果カード(成功=緑・打ち消し線 / 失敗=グレー・�
   assert.ok(t.includes('予約番号 2026000123'));
   assert.equal(ok.contents.header.backgroundColor, '#15803D');
   assert.equal(find(ok.contents, (n) => n.decoration === 'line-through').length, 1);
+  assert.deepEqual(find(ok.contents.footer, (n) => n.type === 'button').map((b) => b.action.type), ['message', 'uri'], '成功時は「一覧を見る」が先');
   const ng = buildCancelResultFlex({ ok: false, label: 'ゆうたそ', reservation: r });
   const t2 = texts(ng.contents);
   assert.equal(t2[0], 'キャンセルできませんでした');

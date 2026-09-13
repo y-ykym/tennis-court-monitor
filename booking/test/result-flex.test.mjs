@@ -14,6 +14,7 @@ test('確認依頼カード: 開く URL がボタンに入り、予約者・期�
   assert.match(text, /ゆう/);
   assert.match(text, /9\/30\(水\) 13:00-15:00/);
   assert.match(text, /8分以内/);
+  assert.equal(JSON.stringify(m.contents).match(/"type":"span"/g).length, 8, '手順4つ × 番号+本文の span');
   assert.ok(m.altText.length <= 400);
   assert.ok(bytes(m) < 10000, 'バブルは 10KB 未満');
 });
@@ -21,8 +22,10 @@ test('確認依頼カード: 開く URL がボタンに入り、予約者・期�
 test('結果カード: 成功は予約番号と料金、失敗は理由と手動リンク', () => {
   const ok = buildResultFlex({ slot, status: 'success', reservationNo: '2026260562', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう');
   assert.match(JSON.stringify(ok.contents), /2026260562/);
-  assert.equal(ok.contents.footer, undefined);
+  const okActions = ok.contents.footer.contents[1].contents.map((b) => b.action);
+  assert.deepEqual(okActions.map((a) => a.type), ['message', 'uri'], '成功時は「予約一覧を見る」(よやく)とサイトリンク');
+  assert.equal(okActions[0].text, 'よやく');
   const ng = buildResultFlex({ slot, status: 'taken', message: '満員', facility: '亀戸中央公園' }, 'ゆう');
   assert.match(JSON.stringify(ng.contents), /先に予約されていました/);
-  assert.equal(ng.contents.footer.contents[0].action.type, 'uri');
+  assert.deepEqual(ng.contents.footer.contents[1].contents.map((b) => b.action.type), ['uri'], '失敗時はサイトへのリンクだけ');
 });
