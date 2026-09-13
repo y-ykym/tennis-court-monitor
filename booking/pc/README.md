@@ -211,4 +211,5 @@ docker compose ps                                                      # 3 サ�
   (4) 自動操作の痕跡: 既定の Playwright は `navigator.webdriver=true`(機械の印)。`IGNORE_DEFAULT_ARGS: '--enable-automation'` と
   `CHROME_ARGS: '--disable-blink-features=AutomationControlled'` で false になる(compose に設定済み)。
   残る機械らしさは WebGL が SwiftShader(ソフト描画)なこと。GPU をコンテナに渡せば消えるが未着手。
-  2026-09-13 に (2)(3)(4) を実施。同じ回線から人が手で予約すると v2 は出なかった → 回線ではなくブラウザの痕跡が原因
+  2026-09-13 に (2)(3)(4) を実施。同じ回線から人が手で予約すると v2 は出なかった → 回線ではなくブラウザの痕跡が原因。
+  検証結果: (4) を入れたあとは UI 経路(85 秒)も高速経路(63 秒)も v2 なしで成立 → **主因は webdriver の目印**。高速経路は `'1'` のまま運用
