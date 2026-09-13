@@ -26,3 +26,7 @@ id = "97e0d8dae665476797bae9dc168c560b"
 # "0" にして deploy すればボタンは消え、押されても無視する(既に配られたカードのボタンも無効になる)
 [vars]
 CANCEL_ENABLED = "1"
+
+# 自宅の予約サーバー(Pi)の生存監視(src/monitor.js)。毎時 0 分。止まっていたら LINE に知らせる(復帰も)
+[triggers]
+crons = ["0 * * * *"]

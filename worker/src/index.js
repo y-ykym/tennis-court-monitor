@@ -11,6 +11,7 @@
 //                                         日付・時刻・公園を照合 → 取消 POST(1回だけ)→ 結果を reply
 //   空き通知の「<呼び名>で予約」(postback, data='book|<署名トークン>') → 自宅 PC の /book を叩いて予約フローを開始
 //                                         → 「受け付けました」を reply(ブラウザは開かない。結果は PC が LINE にカードで push)
+//   Cron(1 時間ごと)                    → 自宅 PC の生存確認。止まっていたら LINE に 1 回知らせ、復帰も知らせる(src/monitor.js)
 //
 // 必要な Secrets(`wrangler secret put`。値はコードや設定ファイルに書かない):
 //   LINE_CHANNEL_SECRET        Webhook署名の検証用
@@ -37,6 +38,7 @@ import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS, jstTodayIso } from 
 import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, isPast, jstNowHHMM } from './flex.js';
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
 import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX } from './booking.js';
+import { runMonitor } from './monitor.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -88,6 +90,15 @@ export default {
     if (booking) return booking;
 
     return new Response('not found', { status: 404 });
+  },
+
+  // Cron Trigger(wrangler.toml [triggers])。自宅 PC の生存監視
+  async scheduled(event, env, ctx) {
+    if (!env.BOOKING_KV || !env.LINE_CHANNEL_ACCESS_TOKEN || !env.LINE_GROUP_ID) {
+      console.error('[monitor] BOOKING_KV / LINE_CHANNEL_ACCESS_TOKEN / LINE_GROUP_ID が未設定です');
+      return;
+    }
+    ctx.waitUntil(runMonitor(env).catch((e) => console.error(`[monitor] 失敗: ${e.message}`)));
   },
 };
 
