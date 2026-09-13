@@ -15,7 +15,6 @@
 //                            渡すと「予約」は押さない(人間が押す)。({ page, facility, dateLabel, slot, people })
 //     fastInPage: false,     高速経路(ブラウザ内版・推奨)。トップを開いたブラウザの中で fetch によりログイン〜枠選択を行い、
 //                            予約内容確認画面の POST まで進める(src/site-inpage.js)。UI 操作の待ちを省く
-//     prepared: null,        高速経路(Node HTTP 版。src/site-http.js)。Cloud Run では通信の出口が分かれて失敗することがあるため非推奨
 //     channel: undefined,    'chrome' で Google Chrome 安定版を使う(既定は環境変数 BROWSER_CHANNEL)。無ければ Chromium
 //     userDataDir: null,     渡すとそのディレクトリをブラウザプロファイルとして使う(Cookie 等を持ち越す)
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
@@ -136,7 +135,7 @@ async function parseResultTable(page) {
 }
 
 export async function reserve(slot, credentials, options = {}) {
-  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, prepared = null, fastInPage = false } = options;
+  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, fastInPage = false } = options;
   const started = Date.now();
   const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...extra });
 
@@ -259,23 +258,6 @@ export async function reserve(slot, credentials, options = {}) {
       log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面 (${Date.now() - started}ms)`);
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
       log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms)`);
-    } else if (prepared) {
-      // 高速経路: HTTP で作ったログイン済みセッションの Cookie を移植し、予約内容確認画面へ進む POST だけをブラウザで行う
-      await context.addCookies(prepared.cookies);
-      facility = prepared.facility || slot.park;
-      loggedIn = true;
-      const escAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-      const inputs = Object.entries(prepared.applyFields)
-        .map(([k, v]) => `<input type="hidden" name="${escAttr(k)}" value="${escAttr(v)}">`)
-        .join('');
-      await page.setContent(
-        `<form id="f" method="post" action="${BASE_URL}/web/rsvWOpeReservedApplyAction.do" accept-charset="Shift_JIS">${inputs}</form>`
-      );
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-        page.evaluate(() => document.getElementById('f').submit()),
-      ]);
-      log(`高速経路: 予約内容確認画面へ POST (${Date.now() - started}ms)`);
     } else {
       // 1. トップ → ログイン画面
       const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });

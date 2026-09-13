@@ -299,4 +299,5 @@ npx wrangler tail --format pretty
   スマホの待機画面が「つながりません」になっても Pi 側の処理は続き、結果は LINE に届く
 - 検証に使った Cloud Run と GitHub Actions からの予約は **2026-09-07 に撤去済み**: GCP プロジェクト `tennis-booking-c46c52c5` を削除(30 日以内なら `gcloud projects undelete` で復元可)、
   `booking/deploy.sh`・`.github/workflows/reserve.yml`・`booking/scripts/notify-result.mjs` を削除、GitHub Secrets の `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A`(Actions 専用)を削除。
-  `booking/src/profile-store.js` の GCS 保存は Pi では使わない(`PROFILE_LOCAL=1` で docker volume に保存)
+  2026-09-13 に GCS 保存(`profile-store.js`・`@google-cloud/storage`)と Node HTTP 版の高速経路(`site-http.js`)、ブラウザ向けの待機画面・予約者選択画面も削除
+  (ボタンは postback になり、ブラウザを開くのは reCAPTCHA の `/vnc` だけ)
