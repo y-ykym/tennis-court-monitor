@@ -46,6 +46,7 @@
 // ============================================================
 import { chromium } from 'playwright';
 import { inPageFlow, submitApplyForm } from './site-inpage.js';
+import { parseReservations, findReservation } from './reservation-list.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -76,6 +77,33 @@ export class ReserveError extends Error {
 async function pageId(page) {
   const head = await page.evaluate(() => document.documentElement.outerHTML.slice(0, 500));
   return head.match(/<!-- (\w+\.jsp) -->/)?.[1] ?? null;
+}
+
+// 「予約」を押した後に完了画面へ行かなかったとき、予約の確認一覧(prwha1000)を開いて実際に入ったかを確かめる。
+// 2026-09-13 21:32 に「確認画面のまま」で終わったが実は成立していた(回線が不安定な夜)。画面遷移だけで成否を決めない。
+// ログイン済みの同じブラウザで form1 を一覧の action に向けて送る(ログアウトと同じやり方)。見つかれば予約を返す、無ければ null
+async function verifyByList(page, slot, facility, log) {
+  try {
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+      page.evaluate(() => {
+        document.form1.action = '/web/rsvWGetCancelRsvDataAction.do';
+        document.form1.submit();
+      }),
+    ]);
+    const id = await pageId(page);
+    if (id !== 'prwha1000.jsp') {
+      log(`一覧で確認: 一覧画面が開けませんでした (${id || '不明'})`);
+      return null;
+    }
+    const list = parseReservations(await page.content());
+    const hit = findReservation(list, slot, facility);
+    log(`一覧で確認: ${list.length} 件中 ${hit ? `該当あり(予約番号 ${hit.id})` : '該当なし'}`);
+    return hit;
+  } catch (e) {
+    log(`一覧で確認: 失敗 (${e.message.split('\n')[0]})`);
+    return null;
+  }
 }
 
 async function hidden(page, name) {
@@ -238,8 +266,21 @@ export async function reserve(slot, credentials, options = {}) {
   const lastAlert = () => alerts[alerts.length - 1] || '';
 
   let loggedIn = false;
+  let applySent = false;
+  let facility = slot.park;
+  // 完了画面に到達しなかったときの成功判定(一覧で確認できたら success)
+  const successByList = (hit) => {
+    log(`予約完了(一覧で確認) 予約番号=${hit.id} (${Date.now() - started}ms)`);
+    return done('success', `予約が完了しました(一覧で確認): ${facility} ${hit.date} ${hit.start}-${hit.end} ${hit.fee || ''}`.trim(), {
+      reservationNo: hit.id,
+      fee: hit.fee || '',
+      facility,
+      dateText: hit.date,
+      timeText: `${hit.start}-${hit.end}`,
+      verifiedByList: true,
+    });
+  };
   try {
-    let facility = slot.park;
     if (fastInPage) {
       // 高速経路(ブラウザ内版): トップページを開き、その中で fetch によりログイン〜枠選択 → 確認画面へ POST
       const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
@@ -430,6 +471,7 @@ export async function reserve(slot, credentials, options = {}) {
       }
       alerts.length = 0; // ここまでの alert(トップページの Ajax 失敗など)は結果判定に混ぜない
       await pause();
+      applySent = true; // ここから先は、途中で失敗しても予約が入っている可能性がある(一覧で確かめる)
       await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     }
     // 送信後の画面を判定する(成功 / 失敗の種類)。onChallenge があり v2 チェックボックスが出た場合は人間に渡してから再判定
@@ -459,10 +501,13 @@ export async function reserve(slot, credentials, options = {}) {
         await saveDebug(page, debugDir, 'apply-recaptcha-v2');
         return done(afterHuman ? 'abandoned' : 'rejected', afterHuman ? '人間の操作が完了しないまま終了しました(予約はされていません)' : 'reCAPTCHA v2 のチェックが要求されました(人間の操作が必要)', { facility });
       }
+      await saveDebug(page, debugDir, `apply-${resultId || 'unknown'}`);
+      // 完了画面ではない。画面だけで「失敗」と決めず、一覧に入っていないかを確かめる(入っていれば成功)
+      const hit = await verifyByList(page, slot, facility, log);
+      if (hit) return successByList(hit);
       if (resultId === 'prwea1000.jsp' && afterHuman) {
         return done('abandoned', '人間の操作が完了しないまま終了しました(予約はされていません)', { facility });
       }
-      await saveDebug(page, debugDir, `apply-${resultId || 'unknown'}`);
       const reason = lastAlert() || bodyText.slice(0, 200);
       if (/reCAPTCHA|ロボット|不正なアクセス/i.test(reason)) return done('rejected', `サイトの認証(reCAPTCHA)で申込みが拒否されました: ${reason}`);
       if (/同じ利用日時|複数の予約|既に予約|2件まで/.test(reason)) return done('duplicate', `サイトが申込みを断りました: ${reason}`);
@@ -472,6 +517,11 @@ export async function reserve(slot, credentials, options = {}) {
     return await classify(false);
   } catch (e) {
     await saveDebug(page, debugDir, 'error');
+    // 「予約」を押した後のエラー(タイムアウト等)は、予約だけ入っている可能性があるので一覧で確かめる
+    if (applySent && loggedIn && !page.isClosed()) {
+      const hit = await verifyByList(page, slot, facility, log);
+      if (hit) return successByList(hit);
+    }
     if (e instanceof ReserveError) return done(e.status, e.message);
     const timeout = /Timeout|timeout/.test(e.message);
     return done('error', `${timeout ? 'タイムアウト' : '想定外のエラー'}: ${e.message.split('\n')[0]}`);
