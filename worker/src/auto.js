@@ -27,8 +27,9 @@ export const AUTO_POSTBACK_PREFIX = 'x|';
 export const KV_EXCLUSIONS = 'auto_exclusions';
 export const KV_ALIVE = 'auto_alive';
 export const KV_MODE = 'auto_mode';
-// Pi の最終チェックがこの時間以内なら生きている扱い(lib/config.js の AUTO_BOOKING.ALIVE_WITHIN_MS と同じ値)
-export const ALIVE_WITHIN_MS = 4 * 60 * 1000;
+// Pi の最終チェックがこの時間以内なら生きている扱い(lib/config.js の AUTO_BOOKING.ALIVE_WITHIN_MS と同じ値。
+// Pi は日中 1 分・深夜 3 分おきに合図するので、その間隔 + 照会の所要でも切れない 5 分)
+export const ALIVE_WITHIN_MS = 5 * 60 * 1000;
 const ALIVE_TTL_SEC = 600;
 // 署名付きリクエストの時刻のずれの許容(リプレイ防止)
 export const AUTH_WINDOW_MS = 5 * 60 * 1000;
