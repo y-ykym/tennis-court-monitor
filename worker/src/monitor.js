@@ -13,6 +13,7 @@
 // 手元で試す: wrangler dev --test-scheduled → curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"
 // ============================================================
 import { pushText } from './line.js';
+import { autoStatus } from './auto.js';
 
 // 月初(1 日 9:00 JST = 0:00 UTC)に届く手動メンテのお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける
 export const MAINTENANCE_CRON = '0 0 1 * *';
@@ -60,12 +61,32 @@ export async function probeBookingServer(env, { attempts = PROBE_ATTEMPTS, retry
   return { ok: false, reason: `${reason}(${attempts} 回試行)` };
 }
 
-// 確認して状態を更新し、必要なら LINE に知らせる。戻り値: { ok, fails, notified: 'down'|'up'|null }
+// フェーズ3: 予約サーバー自体は生きているのに自動予約の照会ループ(heartbeat)が止まっているとき用。
+// Pi が最後に申告したモードが 'on' で、最終チェックがこれより古ければ知らせる(1 回だけ。復帰でも 1 回)
+export const AUTO_STALL_MS = 15 * 60 * 1000;
+
+// 確認して状態を更新し、必要なら LINE に知らせる。戻り値: { ok, fails, notified: 'down'|'up'|null, autoNotified: 'stalled'|'resumed'|null }
 export async function runMonitor(env, { now = Date.now(), probe = probeBookingServer, push = pushText } = {}) {
   const prev = JSON.parse((await env.BOOKING_KV.get(KV_STATE_KEY)) || '{"fails":0,"alerted":false,"since":null}');
   const { ok, reason } = await probe(env);
-  const next = ok ? { fails: 0, alerted: false, since: null } : { fails: prev.fails + 1, alerted: prev.alerted, since: prev.since ?? now };
+  const next = ok ? { fails: 0, alerted: false, since: null, autoAlerted: prev.autoAlerted || false } : { fails: prev.fails + 1, alerted: prev.alerted, since: prev.since ?? now, autoAlerted: prev.autoAlerted || false };
   let notified = null;
+  let autoNotified = null;
+
+  // 自動予約の照会ループの見張り(予約サーバーが応答しているときだけ判定する。サーバーごと落ちていれば上の ⚠️ で分かる)
+  if (ok) {
+    const auto = await autoStatus(env, now);
+    const stalled = auto.declaredMode?.mode === 'on' && (auto.lastSeenAt == null || now - auto.lastSeenAt > AUTO_STALL_MS);
+    if (stalled && !prev.autoAlerted) {
+      next.autoAlerted = true;
+      autoNotified = 'stalled';
+      await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, `⚠️ 自動予約の空きチェックが止まっています(最後の合図: ${auto.lastSeenAt ? jst(auto.lastSeenAt) : '不明'})\n予約サーバー自体は動いています。空き通知は従来どおり全部届きます。Pi で docker compose logs booking を確認してください`);
+    } else if (!stalled && prev.autoAlerted) {
+      next.autoAlerted = false;
+      autoNotified = 'resumed';
+      await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, '✅ 自動予約の空きチェックが復帰しました');
+    }
+  }
 
   if (!ok && !prev.alerted && next.fails >= ALERT_AFTER_FAILS) {
     next.alerted = true;
@@ -82,6 +103,6 @@ export async function runMonitor(env, { now = Date.now(), probe = probeBookingSe
   }
 
   await env.BOOKING_KV.put(KV_STATE_KEY, JSON.stringify(next));
-  console.log(`[monitor] ${ok ? 'ok' : `down(${next.fails}回目): ${reason}`}${notified ? ` → LINE に ${notified} を通知` : ''}`);
-  return { ok, fails: next.fails, notified };
+  console.log(`[monitor] ${ok ? 'ok' : `down(${next.fails}回目): ${reason}`}${notified ? ` → LINE に ${notified} を通知` : ''}${autoNotified ? ` / 自動予約 ${autoNotified}` : ''}`);
+  return { ok, fails: next.fails, notified, autoNotified };
 }

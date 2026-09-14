@@ -2,17 +2,19 @@
   "name": "tennis-booking-assist",
   "version": "0.1.0",
   "private": true,
-  "description": "フェーズ2 予約支援(半自動予約)。LINEの「予約する」ボタンから予約直前画面まで自動遷移し、reCAPTCHAと確定だけ人間が行う",
+  "description": "フェーズ2 予約支援(LINEの予約ボタン → 自宅 Pi で自動予約)+ フェーズ3 自動予約(1 分おきの空き照会 → 予約)",
   "type": "module",
   "scripts": {
     "reserve": "node scripts/reserve-cli.mjs",
     "explore": "node scripts/explore-flow.mjs",
     "test": "node --test \"test/**/*.test.mjs\"",
     "build:novnc": "esbuild node_modules/@novnc/novnc/lib/rfb.js --bundle --format=esm --minify --outfile=server/public/rfb.js",
-    "server": "node server/server.mjs"
+    "server": "node server/server.mjs",
+    "auto-tick": "node scripts/auto-tick.mjs"
   },
   "dependencies": {
     "@novnc/novnc": "^1.5.0",
+    "japanese-holidays": "^1.0.10",
     "playwright": "^1.62.1",
     "ws": "^8.21.3"
   },

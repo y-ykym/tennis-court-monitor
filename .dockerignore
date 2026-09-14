@@ -1,0 +1,22 @@
+# Docker のビルドコンテキストはリポジトリ直下(booking/pc/docker-compose.yml の build.context)。
+# イメージに入れるのは booking/(src, server, package*.json, Dockerfile, docker-entrypoint.sh)と、
+# フェーズ3 で共用する lib/ と root の package*.json だけ。それ以外は送らない
+.git
+.github
+.idea
+docs
+debug
+test
+worker
+node_modules
+**/node_modules
+booking/.explore
+booking/.debug
+booking/debug-out
+booking/scripts
+booking/test
+booking/server/public
+booking/pc
+state.json
+*.log
+*.md

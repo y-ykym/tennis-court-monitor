@@ -7,6 +7,8 @@
 予約確認ボット(Cloudflare Workers)も稼働中です(後述「フェーズ1.5 予約確認ボット」)。
 フェーズ1.6として、その一覧カードの「キャンセル」ボタンから予約を取り消す機能も同じ Worker で稼働中です
 (後述「フェーズ1.6 予約キャンセル」)。
+フェーズ3として、監視中の空きを自宅の Raspberry Pi が 1 分おきに見つけて自動で予約する機能を実装済みです
+(後述「フェーズ3 自動予約」。稼働開始は dry-run で振り分けを確認してから)。
 
 サイトの週表示カレンダーが使う内部JSON APIをHTTP(Node標準fetch)で直接叩くため、
 ブラウザ自動化(Playwright)は不要です。依存パッケージは japanese-holidays の1個だけ。
@@ -30,6 +32,10 @@ lib/state.js                 前回結果(state.json)との差分検出
 lib/notify.js                LINEへのpush通知(カード型Flex Message)
 lib/date.js                  JST基準の日付ユーティリティ
 lib/maintenance.js           サイトの定期メンテ時間帯のスキップ判定
+lib/auto-rules.js            フェーズ3 自動予約の判断ルール(ペナルティ境界・除外日/除外枠・公園→時間帯の優先順・予約者・通知の振り分け)。
+                             Actions(check.js)と Pi(booking/src/auto-runner.js)が同じコードを使う
+lib/auto-client.js           Worker の /auto/* を署名付きで呼ぶ(Actions は生存と除外一覧の取得、Pi は heartbeat と除外枠の登録)
+test/auto-rules.test.mjs     上記ルールのユニットテスト(npm test)
 .github/workflows/monitor.yml  空きチェックの実行(起動はcron-job.orgから3分おき)
 state.json                   前回の空き状況(自動更新される)
 test/mock-slots.json         ロジック動作確認用のモックデータ
@@ -37,24 +43,32 @@ docs/site-notes.md           サイト調査記録(API仕様・画面遷移・�
 docs/予約空き監視_要件定義書.md  要件定義書(§11 がフェーズ1.5)
 docs/PROMPT.md               scrape.js実装時にClaude Codeへ渡した指示(記録用)
 
-booking/                     フェーズ2 予約支援(自宅の Raspberry Pi 5 で動かす Docker コンテナ。lib/ とは独立)
+booking/                     フェーズ2 予約支援 + フェーズ3 自動予約(自宅の Raspberry Pi 5 で動かす Docker コンテナ。lib/ を共用)
   src/reserve.js             Playwright で ログイン→検索→枠選択→予約内容確認→「予約」→完了画面の解析。v2 が出たら人間へ引き渡し。
-                             完了画面に到達しなくても予約一覧で成立を確かめる(verifyByList)
-  src/site-inpage.js         高速経路: ブラウザ内 fetch でログイン〜枠選択(UI 操作を省く)
+                             完了画面に到達しなくても予約一覧で成立を確かめる(verifyByList)。
+                             reservationList/beforeApply オプションでログイン直後に予約一覧を見て件数の上限を判定(フェーズ3)
+  src/site-inpage.js         高速経路: ブラウザ内 fetch でログイン〜枠選択(UI 操作を省く)。withList で予約一覧も取る
   src/reservation-list.js    予約の確認一覧(prwha1000)の解析と照合(Worker の parseReservations と同じ)
   src/token.js               LINE ボタン用の署名付きトークン(枠情報+予約者+有効期限、HMAC)
-  src/result-flex.js         LINE に push するカード(予約結果 / 🔐 確認が必要です)
+  src/cancel-token.js        フェーズ1.6 の「キャンセル」postback data を Pi 側で作る(Worker と同形式。自動予約の成功カード用)
+  src/result-flex.js         LINE に push するカード(予約結果 / 🔐 確認が必要です)。自動予約の表記とキャンセルボタンにも対応
   src/line-queue.js          回線断で送れなかった LINE カードを保存して 1 分ごとに再送(最長 6 時間)
-  server/server.mjs          Web アプリ(/book は Worker 向け JSON、/vnc は reCAPTCHA 時の noVNC 画面、/status /result /abort)。WebSocket 橋渡しも内蔵
+  src/booking-queue.js       予約実行の行列(1 件ずつ。手動ボタンを自動予約より優先)
+  src/auto-state.js          自動予約の状態ファイル(既知の枠・試行記録・自分が取った枠。/var/lib/booking/auto-state.json)
+  src/auto-runner.js         フェーズ3 の中核: 1 分おきの空き照会 → 差分 → 振り分け → 行列へ → 結果カード。Worker への heartbeat
+  server/server.mjs          Web アプリ(/book は Worker 向け JSON、/vnc は reCAPTCHA 時の noVNC 画面、/status /result /abort、/auto/status)。
+                             WebSocket 橋渡しも内蔵。AUTO_BOOKING=on|dry-run で自動予約ループを起動
   server/register.mjs        Tunnel の現在の URL を 2 分ごとに Worker へ登録
   scripts/reserve-cli.mjs    予約実行を手元から動かす CLI(--dry-run で予約直前まで)
+  scripts/auto-tick.mjs      自動予約の照会・振り分けを手元で 1 周期だけ動かす(予約しない。モック可)
   scripts/explore-flow.mjs   予約フローの調査スクリプト(本人ログイン。確定は押さない)
-  Dockerfile / docker-entrypoint.sh  Playwright 公式イメージ + Xvfb + x11vnc。noVNC クライアントは esbuild で束ねる
+  Dockerfile / docker-entrypoint.sh  Playwright 公式イメージ + Xvfb + x11vnc。noVNC クライアントは esbuild で束ねる。
+                             ビルドコンテキストはリポジトリ直下(lib/ を同梱するため。除外は直下の .dockerignore)
   pc/                        自宅 Pi 用: docker-compose.yml(本体+Tunnel+URL登録)、README.md(構築・運用手順)、pi-init.sh(初期化)、pi-check.sh(確認)、
                              tunnel-watchdog.sh + systemd/(Tunnel の見張り)、apt/(OS 自動更新の方針)
-  test/                      node --test(トークン署名・カード・持ち越し・一覧の解析)
+  test/                      node --test(トークン署名・カード・持ち越し・一覧の解析・行列・自動予約の振り分けと実行)
 
-worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル(Cloudflare Workers。lib/ とは独立)
+worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル + フェーズ3 の状態置き場(Cloudflare Workers。lib/ とは独立)
   src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply。postback→確認カード/取消実行)
   src/line.js                LINE署名検証・イベント抽出(テキスト・postback)・reply送信
   src/site.js                予約サイトへログインして「予約の確認」一覧を取得。cancelReservation で取消 POST(1回だけ)
@@ -62,7 +76,10 @@ worker/                      フェーズ1.5 予約確認ボット + 1.6 予約�
   src/format.js              テキスト整形(0件・失敗時の文言)
   src/flex.js                予約一覧(人ごとのカルーセル)・キャンセル確認・結果のFlex Message。30KB/50KB制限に収まるよう行数を自動調整
   src/booking.js             フェーズ2 予約支援の玄関(予約ボタンの postback → 自宅サーバーの /book を叩く。noVNC の中継、URL 登録)
-  src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初のメンテのお知らせ
+  src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初のメンテのお知らせ。自動予約の照会ループが止まったときの ⚠️ も
+  src/auto.js                フェーズ3: 除外日・除外枠・Pi の最終チェックを KV に持つ。/auto/state /auto/heartbeat /auto/exclusions(署名付き API)、
+                             「じどう」コマンドと「解除」「日を追加」の postback、キャンセル成功時の除外枠の記録
+  src/auto-flex.js           「じどう」への返信カード
   scripts/probe-site.mjs     ローカルからログイン確認(パスワード変更後の疎通確認にも)
   scripts/send-test-event.mjs 署名付きの模擬Webhookを wrangler dev に送る
   test/                      node --test のユニットテスト(fixturesは個人情報をダミー化済み)
@@ -309,3 +326,85 @@ npx wrangler tail --format pretty
   `booking/deploy.sh`・`.github/workflows/reserve.yml`・`booking/scripts/notify-result.mjs` を削除、GitHub Secrets の `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A`(Actions 専用)を削除。
   2026-09-13 に GCS 保存(`profile-store.js`・`@google-cloud/storage`)と Node HTTP 版の高速経路(`site-http.js`)、ブラウザ向けの待機画面・予約者選択画面も削除
   (ボタンは postback になり、ブラウザを開くのは reCAPTCHA の `/vnc` だけ)
+
+## フェーズ3 自動予約(2026-09-14 実装。稼働は dry-run で確認後に ON)
+
+監視中の枠に空きが出たら、自宅の Raspberry Pi が **1 分おきに自分で空きを照会し、見つけたら同じプロセスで即予約**します。
+要件と確定事項は `docs/PROMPT_フェーズ3_自動予約.md` §2〜§3(設計の背景データ含む)、要件定義書は `docs/予約空き監視_要件定義書.md` §13。
+
+### 動き(要点)
+
+| 場所 | 役割 |
+|---|---|
+| Pi(`booking/src/auto-runner.js`) | 1 分おき: 空き照会(`lib/scrape.js`、ログイン不要)→ 監視条件 → 前回との差分 → Worker に heartbeat(生存の合図。応答で除外日・除外枠を受け取る)→ `lib/auto-rules.js` で振り分け → 予約の行列へ。行列は 1 件ずつ実行し、LINE の予約ボタン(手動)を優先 |
+| Actions(`check.js`) | 3 分おき(従来どおり): 新しい空きのうち、Worker の `/auto/state` で Pi の自動予約が生きて動いていれば **自動予約の対象(利用日 ≥ 今日+4 日、除外日以外)は通知しない**。Pi が止まっていれば従来どおり全部通知。除外枠は通知しない |
+| Worker(`worker/src/auto.js`) | KV に 除外日・除外枠・Pi の最終チェック を持つ。「じどう」で一覧カード。キャンセル成功時にその枠を除外枠に記録 |
+
+- **対象**: 利用日が今日+4 日以上先の枠(利用日 ≤ 今日+3 日はペナルティ期間なので自動予約せず、従来の通知カードに回す)。定数は `lib/config.js` の `AUTO_BOOKING`
+- **締切と日付境界**: 利用日 = 今日+4 日の枠は **23:35 以降は自動予約しない**(取れても取消の猶予が無い。`LAST_DAY_DEADLINE`)。+5 日以降には締切なし。
+  対象かどうかは **見つけた時と「予約」の直前の両方**で判定する(23:59 に見つけて 00:01 に予約すると +3 日 = ペナルティ期間になるため)。
+  予約直前に対象外になった枠は予約せず、**Pi 自身が従来の空き通知カード(予約ボタン付き)を送る**(Actions は見つけた時点で「対象枠だから通知しない」と処理済みのことがある)。
+  見つけた時点で対象外なら Pi は何もせず、Actions が従来どおり通知する。境界(23:35 前後の数分)では Actions と Pi の両方から同じ枠のカードが届くことがある
+- **上限**: 利用日ごとに 2 件(手動で取った分も数える)。予約直前にログインして予約一覧を見て数える。同じ実行で複数候補があれば成立分も数え、達したら残りはログインせず見送る
+- **順番**: 同じ利用日の候補は 公園(大島小松川 > 猿江恩賜 > 亀戸中央)→ 時間帯(17 > 19 > 9 > 11 > 13 > 15 時開始)。失敗したら次の候補へ
+- **予約者**: 利用日が平日なら B、土日祝なら A(`isWeekendOrHoliday`)。人数は 2 人
+- **通知**: 成功・失敗は既存の結果カードに「(自動予約)」を付けて送る。見送り(2 件あった・上位を取った)はカードなし。
+  利用日 = 今日+4 日の成功カードには「⚠ 無料キャンセルは今日 23:59 まで」と「キャンセル」ボタン(フェーズ1.6 の取消処理に流れる。期限は今日 23:59)
+- **除外日**: LINE で `じどう` → 除外日・除外枠の一覧カード。「📅 日を追加」(日付ピッカー)で追加、各行の「解除」で戻す。除外日の枠は自動予約せず従来の通知に回す。過ぎた日は自動で消える
+- **除外枠**: LINE からキャンセルした枠(「よやく」の一覧、または成功カードのボタン。どちらも Worker の同じ取消処理)は、空きとして再出現しても自動予約せず、通知もしない。
+  Pi が自動予約した枠がサイトで直接取り消されていた(次の予約一覧に無い)場合も除外枠に登録する。開始時刻を過ぎたら自動で消える
+- **reCAPTCHA v2** が出た回は既存の「🔐 確認が必要です」カードで人が対応(自動予約でも同じ。回避・突破はしない)
+- **初回起動**(状態ファイルが無い・10 分より古い): いま見えている空きを既知として登録し、予約しない(起動直後の暴走防止)
+- **Worker に繋がらない**: 30 分以内に取れた除外一覧があればそれで続行、無ければ予約しない(除外日を守れないため)
+- **Pi 不達の判定**(Actions 側): Pi の heartbeat が 4 分以内で、かつ mode が on のときだけ「生きている」。取れなければ全部通知(安全側)
+- **同じ枠を二重に試さない**: 枠キー `公園コード|日付|開始時刻` で行列・試行記録を管理。成功した枠は再出現しても取り直さない(取り消したなら除外枠)
+
+### 設定と起動(Pi の `.env`)
+
+```
+AUTO_BOOKING=off       # off(既定): ループを起動しない / dry-run: 照会と振り分けだけログに出す(予約しない) / on: 予約まで行う
+# AUTO_POLL_MS=60000   # 照会間隔。30000 未満は 30000 に切り上げ(サイトへの配慮。要件 §7)
+```
+
+`WORKER_URL`・`BOOKING_SIGNING_SECRET`・`LINE_*` は既存の値をそのまま使います(新しい Secret は不要)。反映は他の変更と同じ:
+
+```bash
+ssh yu@homepi.local 'cd ~/tennis-court-monitor && git pull --ff-only && cd booking/pc && docker compose build booking && docker compose up -d'
+docker compose logs -f booking | grep '\[auto\]'          # 振り分けのログ(見送りの理由も出る)
+curl -s http://localhost:8080/auto/status | jq             # mode・最終照会・行列
+curl -s https://tennis-reservation-bot.y-ykym.workers.dev/booking/status   # (従来) Pi の登録
+```
+
+Worker は `cd worker && npm test && npx wrangler deploy`(「じどう」と `/auto/*` が入る。Secrets の追加なし)。Actions は push で次回から反映(Secrets の追加なし。
+`BOOKING_BASE_URL` と `BOOKING_SIGNING_SECRET` があれば `/auto/state` を見に行く)。
+
+手元で振り分けだけ確かめる(予約しない・Worker にも繋がない):
+
+```bash
+cd booking && node scripts/auto-tick.mjs --mock ../test/mock-slots.json --all-new --today 2026-09-01
+```
+
+### 稼働開始の手順(推奨)
+
+1. Worker を deploy → LINE で `じどう` と送ってカードが返ることを確認(除外日の追加・解除を試す)
+2. Pi の `.env` に `AUTO_BOOKING=dry-run` を書いて再ビルド → 数日、`[auto]` のログで「予約するはず」「見送り」の振り分けを本人と確認。
+   この間 Actions の通知は従来どおり全部届く(dry-run は active=false の合図を送るため)。「じどう」カードの「Pi の自動予約」は「停止中(dry-run)」と出る
+3. 実枠テスト(本人の了解を得てから。利用日が 5 日以上先の枠。取消は「よやく」→「キャンセル」で当日中は無料)
+4. `AUTO_BOOKING=on` にして再ビルド → 「じどう」カードが「稼働中」になり、Actions は対象期間の枠を通知しなくなる
+
+### ログの読み方(`docker compose logs booking | grep '\[auto\]'`)
+
+- `初回起動: いま見えている監視対象 N 件を既知として登録しました` … 起動直後(この分は予約しない)
+- `新しい空き N 件: …` → 続いて各枠の `見送り: …(理由)` / `行列へ: …` / `[dry-run] 予約するはず: …`
+- `自動予約 開始: …` → `予約一覧(予約前): N 件` → `自動予約 結果: success|taken|capped|… …`
+- `見送り(予約直前の再判定): …(…。従来の空き通知カードを送る)` … 日付が変わった・23:35 を過ぎた・除外日になった(除外枠なら「通知もしない」)
+- `除外一覧を更新: 除外日 N 件、除外枠 N 件` … Worker の一覧が変わったとき
+- `Worker への合図に失敗(…)` … 回線断など。直近の一覧で続けるか、無ければ予約しない
+
+### 気をつけること
+
+- 高速経路のログイン直後に予約一覧(prwha1000)を 1 回取ってから空き検索に進む(サイトの画面遷移の順としては自然だが、実機で「検索結果画面が想定外」が出たら
+  `site-inpage.js` の 2.5 の位置を枠選択の後ろに動かす)。UI 操作の経路でもログイン直後にブラウザ内 fetch で一覧を取る
+- 空き照会(ログイン不要)は 1 分に 20 リクエスト程度。失敗時のレスポンスはコンテナに溜めない(`SCRAPE_DEBUG_DIR=''`)
+- ログインを伴うのは予約の実行時だけ(候補 1 件につき 1 回)。dry-run では一切ログインしない
+- Pi の生存監視(毎時)は従来どおり。加えて Pi は動いているのに heartbeat が 15 分止まっていれば「⚠️ 自動予約の空きチェックが止まっています」を 1 回(`AUTO_BOOKING=on` を申告しているときだけ)

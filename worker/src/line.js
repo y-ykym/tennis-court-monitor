@@ -49,9 +49,9 @@ export async function verifySignature(channelSecret, rawBody, signatureHeader) {
   return safeEqual(expected, signatureHeader);
 }
 
-// Webhook本文(JSON文字列)から「対象グループで『よやく』と送られたテキストメッセージ」だけを返す。
+// Webhook本文(JSON文字列)から「対象グループで合言葉(texts のいずれか)と送られたテキストメッセージ」だけを返す。
 // それ以外(参加イベント・他グループ・個人チャット・別の文言)は全て無視する。
-export function pickCommandEvents(rawBody, groupId) {
+export function pickTextCommandEvents(rawBody, groupId, texts) {
   let payload;
   try {
     payload = JSON.parse(rawBody);
@@ -66,9 +66,14 @@ export function pickCommandEvents(rawBody, groupId) {
       ev.source?.type === 'group' &&
       ev.source.groupId === groupId &&
       typeof ev.message.text === 'string' &&
-      ev.message.text.trim() === COMMAND_TEXT &&
+      texts.includes(ev.message.text.trim()) &&
       typeof ev.replyToken === 'string'
   );
+}
+
+// 「よやく」だけ(フェーズ1.5)
+export function pickCommandEvents(rawBody, groupId) {
+  return pickTextCommandEvents(rawBody, groupId, [COMMAND_TEXT]);
 }
 
 // Webhook本文から「対象グループで押された postback(ボタン)」だけを返す(フェーズ1.6 キャンセル用)。
