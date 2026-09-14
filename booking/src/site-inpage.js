@@ -2,8 +2,10 @@
 // 高速経路(ブラウザ内版): サイトのトップページを開いたブラウザの「中」で、fetch を使って
 // ログイン → 空き検索 → 週データ → 枠の選択 まで進める。UI 操作(クリック・入力・描画待ち)を省いて速くする。
 //
-//   page.evaluate(inPageFlow, { slot, credentials }) → { ok: true, applyFields, facility, vacant }
-//                                                    | { ok: false, status: 'auth_error'|'taken'|'error', message }
+//   page.evaluate(inPageFlow, { slot, credentials, withList }) → { ok: true, applyFields, facility, vacant, listHtml? }
+//                                                              | { ok: false, status: 'auth_error'|'taken'|'error', message }
+//   withList: true のとき、ログイン直後に「予約の確認・取消」画面(prwha1000)を取って listHtml に入れて返す
+//   (フェーズ3: 予約する前にその利用日の予約件数を数えるため。Node 側で reservation-list.js の parseReservations に渡す)
 //
 // Node 側の HTTP ではなくブラウザ内で行う理由:
 //   Cloud Run では Node の HTTP とブラウザの通信が別の出口(IP)になり得て、予約サイトのロードバランサが
@@ -14,7 +16,7 @@
 // 通信の内訳は docs/site-notes.md「フェーズ1.5 追加調査」「フェーズ2 追加調査」を参照。書き込みは枠の選択まで。
 // ============================================================
 
-export async function inPageFlow({ slot, credentials }) {
+export async function inPageFlow({ slot, credentials, withList = false }) {
   const dec = new TextDecoder('shift_jis');
   const ymd = slot.date.replace(/-/g, '');
   const startTime = Number(slot.startHour) * 100;
@@ -70,6 +72,17 @@ export async function inPageFlow({ slot, credentials }) {
       return fail('auth_error', `ログインが拒否されました(利用者番号・パスワード・カード有効期限を確認) ${alert}`);
     }
     if (!home.body.includes('gRsvWTransUserAttestationEndAction);')) return fail('error', `ログイン後の画面が想定外です (${pageId(home.body) || '不明'})`);
+
+    // 2.5 (フェーズ3)予約の確認・取消画面を取る(この人の予約一覧。件数の上限判定と、手放した枠の検出に使う)
+    let listHtml = null;
+    if (withList) {
+      const displayNo = hiddenValue(home.body, 'displayNo') || 'pawab2000';
+      const list = await req('/web/rsvWGetCancelRsvDataAction.do', { displayNo, displayNoFrm: displayNo });
+      if (pageId(list.body) !== 'prwha1000.jsp' && !list.body.includes('id="rsvacceptlist"')) {
+        return fail('error', `予約一覧画面が想定外です (${pageId(list.body) || '不明'})`);
+      }
+      listHtml = list.body;
+    }
 
     // 3. 空き検索(週表示画面。hidden 一式を控える)
     const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
@@ -139,10 +152,24 @@ export async function inPageFlow({ slot, credentials }) {
 
     // 予約内容確認画面へ進む POST の値(checkSelect() が送るもの: 週表示画面の hidden 一式 + applyFlg=1)
     const applyFields = { ...hiddenFields(week.body), daystart: slot.date, applyFlg: '1', selectSize: String(sel.selectState ?? 1) };
-    return { ok: true, applyFields, facility, vacant: Number(cell.rsvNum) };
+    return { ok: true, applyFields, facility, vacant: Number(cell.rsvNum), listHtml };
   } catch (e) {
     return fail('error', `ブラウザ内 fetch でエラー: ${e && e.message ? e.message : String(e)}`);
   }
+}
+
+// ログイン済みのブラウザの中で「予約の確認・取消」画面(prwha1000)を fetch して HTML を返す(画面は遷移させない)。
+// UI 操作の経路(reserve.js の fastInPage=false)でフェーズ3 の件数判定に使う。ブラウザ内で実行されるので自己完結
+export async function fetchReservationListInPage() {
+  const displayNo = document.querySelector('input[name="displayNo"]')?.value || 'pawab2000';
+  const res = await fetch('/web/rsvWGetCancelRsvDataAction.do', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ displayNo, displayNoFrm: displayNo }).toString(),
+    credentials: 'include',
+    redirect: 'manual',
+  });
+  return new TextDecoder('shift_jis').decode(await res.arrayBuffer());
 }
 
 // 予約内容確認画面へ進むフォームを、サイトの画面上に作って送信する(ブラウザ内で実行)

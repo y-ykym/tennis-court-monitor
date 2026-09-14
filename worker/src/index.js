@@ -13,6 +13,9 @@
 //                                         → 「受け付けました」を reply(ブラウザは開かない。結果は PC が LINE にカードで push)
 //   Cron(1 時間ごと)                    → 自宅 PC の生存確認。止まっていたら LINE に 1 回知らせ、復帰も知らせる(src/monitor.js)
 //   Cron(毎月 1 日 9:00 JST)             → 手動メンテ(ブラウザのイメージ再ビルド)のお知らせを LINE に
+//   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
+//                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
+//                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
 //
 // 必要な Secrets(`wrangler secret put`。値はコードや設定ファイルに書かない):
 //   LINE_CHANNEL_SECRET        Webhook署名の検証用
@@ -33,7 +36,7 @@
 //   - 取消の POST は絶対に再試行しない(成否不明のまま2回送らない)
 //   - ログに利用者番号・パスワード・トークン・Cookie・グループID・表示名・予約番号は出さない
 // ============================================================
-import { verifySignature, pickCommandEvents, pickPostbackEvents, replyText, replyMessages } from './line.js';
+import { verifySignature, pickCommandEvents, pickTextCommandEvents, pickPostbackEvents, replyText, replyMessages } from './line.js';
 import { fetchReservations, cancelReservation, AuthError } from './site.js';
 import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS, jstTodayIso } from './format.js';
 import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, isPast, jstNowHHMM } from './flex.js';
@@ -42,6 +45,7 @@ import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotTe
 
 export { MSG_BOOK };
 import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
+import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, AUTO_COMMAND_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -71,6 +75,10 @@ export default {
     if (request.method === 'POST' && url.pathname === '/webhook') {
       return handleWebhook(request, env, ctx);
     }
+
+    // フェーズ3 自動予約の API(/auto/*。Pi と Actions から署名付きで)。src/auto.js
+    const auto = await handleAuto(request, env, ctx);
+    if (auto) return auto;
 
     // フェーズ2 予約支援の玄関(/book の転送、自宅 PC の URL 登録、/warmup)。src/booking.js
     const booking = await handleBooking(request, env, ctx);
@@ -110,15 +118,19 @@ async function handleWebhook(request, env, ctx) {
   }
 
   const targets = pickCommandEvents(rawBody, env.LINE_GROUP_ID);
+  const autoCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [AUTO_COMMAND_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
-  console.log(`webhook受信: 対象イベント ${targets.length}件, postback ${postbacks.length}件`);
+  console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, postback ${postbacks.length}件`);
 
   // 取得と返信は応答後に続ける(即座に200を返さないとLINE側に切られる)
   for (const ev of targets) {
     ctx.waitUntil(replyReservations(env, ev.replyToken));
   }
+  for (const ev of autoCommands) {
+    ctx.waitUntil(replyAutoSettings(env, ev.replyToken));
+  }
   for (const ev of postbacks) {
-    ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data));
+    ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data, ev.postback.params));
   }
 
   return new Response('ok', { status: 200 });
@@ -235,16 +247,34 @@ export async function buildReservationReply(env, { budgetMs = FETCH_BUDGET_MS, d
   }
 }
 
+// ---- フェーズ3 「じどう」(自動予約の除外設定) ----
+export const MSG_AUTO_UNAVAILABLE = '自動予約の設定は現在使えません(署名鍵または KV が未設定)';
+
+async function replyAutoSettings(env, replyToken) {
+  const started = Date.now();
+  try {
+    if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) {
+      await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, MSG_AUTO_UNAVAILABLE);
+      return;
+    }
+    const reply = await buildAutoSettingsReply(env);
+    await replyFlexOrText(env, replyToken, reply.flex, reply.text);
+    console.log(`[auto] 設定カードを返信しました (${Date.now() - started}ms)`);
+  } catch (e) {
+    console.error(`[auto] 設定カードの返信に失敗 (${Date.now() - started}ms): ${e.message}`);
+  }
+}
+
 // ---- フェーズ1.6 キャンセル ----
 
 const slotText = (t) => `${t.person} ${t.date} ${t.start} ${t.facility}`;
 
 // postback を処理して reply する(waitUntil 内。例外は全て握ってログに出す)
-async function handlePostback(env, replyToken, data) {
+async function handlePostback(env, replyToken, data, params) {
   const started = Date.now();
   const logouts = [];
   try {
-    const reply = await buildPostbackReply(env, data, { deferLogout: (fn) => logouts.push(fn) });
+    const reply = await buildPostbackReply(env, data, { deferLogout: (fn) => logouts.push(fn), params });
     if (!reply) return; // 無視するべき postback(署名不正など)
     if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
     else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
@@ -256,8 +286,14 @@ async function handlePostback(env, replyToken, data) {
 }
 
 // postback data から返信内容を決める。戻り値: { text } | { flex, text } | null(無視)
-export async function buildPostbackReply(env, data, { deferLogout, now = Date.now(), budgetMs = FETCH_BUDGET_MS } = {}) {
+//   params: LINE の postback.params(日付ピッカーで選んだ日 { date })。cancel: 取消の実行関数(テストで差し替える)
+export async function buildPostbackReply(env, data, { deferLogout, now = Date.now(), budgetMs = FETCH_BUDGET_MS, params = null, cancel = cancelReservation } = {}) {
   if (data === POSTBACK_NO) return { text: MSG_CANCEL_DECLINED };
+  // フェーズ3 「じどう」カードのボタン(除外日の追加・解除、除外枠の解除)
+  if (data.startsWith(AUTO_POSTBACK_PREFIX)) {
+    if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) return { text: MSG_AUTO_UNAVAILABLE };
+    return handleAutoPostback(env, data, params, { now });
+  }
   // 空き通知の予約ボタン(フェーズ2)。キャンセル機能の ON/OFF とは独立
   if (data.startsWith(BOOK_POSTBACK_PREFIX)) {
     if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) return { text: MSG_BOOK.offline() };
@@ -312,7 +348,7 @@ export async function buildPostbackReply(env, data, { deferLogout, now = Date.no
   const timer = setTimeout(() => controller.abort(), budgetMs);
   let result;
   try {
-    result = await cancelReservation(
+    result = await cancel(
       { userId: person.userId, password: person.password },
       reservation,
       { signal: controller.signal, log: (msg) => console.log(`[cancel:${person.slot}] ${msg}`), retryUntil: started + RETRY_UNTIL_MS, deferLogout }
@@ -329,6 +365,14 @@ export async function buildPostbackReply(env, data, { deferLogout, now = Date.no
   if (result.status === 'not_found') return { text: MSG_CANCEL_NOT_FOUND };
   if (result.status === 'mismatch') return { text: MSG_CANCEL_MISMATCH };
   const ok = result.status === 'success';
+  // フェーズ3: 人が意図して手放した枠は、空きとして再出現しても自動予約しない(除外枠)。Pi の次の照会(1 分)より先に KV へ載せるため、返信の前に書く
+  if (ok && env.BOOKING_KV) {
+    try {
+      await addExcludedSlots(env, [{ facility: token.facility, date: token.date, start: token.start, end: token.end, reason: 'cancel' }], now);
+    } catch (e) {
+      console.error(`[auto] 除外枠の登録に失敗(取消自体は成功): ${e.message}`);
+    }
+  }
   const nowText = `${jstTodayIso(new Date()).slice(5).replace(/^0/, '').replace('-0', '/').replace('-', '/')} ${jstNowHHMM()}`;
   return {
     flex: buildCancelResultFlex({ ok, label: person.label, reservation, nowText }),

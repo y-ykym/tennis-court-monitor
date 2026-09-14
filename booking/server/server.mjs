@@ -15,6 +15,7 @@
 //   GET /abort?token=…   人間が「やめる」を押した(予約せず終了)
 //   GET /warmup          監視・生存確認の空叩き
 //   GET /healthz
+//   GET /auto/status     フェーズ3 自動予約の状態(mode・行列・最終照会。Pi 自身からの確認用)
 //
 // 環境変数(.env と docker-compose.yml から):
 //   BOOKING_SIGNING_SECRET  トークン署名鍵(通知側・Worker と同じ値)
@@ -25,11 +26,16 @@
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
-//   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)
+//   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)。WORKER_URL は自動予約の合図の宛先にも使う
+//   AUTO_BOOKING            フェーズ3 自動予約: 'on' / 'dry-run' / 'off'(既定)。src/auto-runner.js
+//   AUTO_POLL_MS            空き照会の間隔(既定 60000。30000 未満にはならない)
+//   AUTO_STATE_FILE         自動予約の状態ファイル(既定 /var/lib/booking/auto-state.json)
+//   MOCK_SLOTS_FILE         あればサイトを見ずにこのファイルの空きを使う(dry-run の確認用)
 //
 // 方針:
 //   - 「予約」まで自動で押す(自宅回線なら reCAPTCHA v3 で通る)。v2 のチェックが出たときだけ noVNC で人間に渡す
-//   - 同時に扱う予約は1件だけ(画面が1つしかない)
+//   - 同時に扱う予約は1件だけ(画面が1つしかない)。フェーズ3 からは行列(src/booking-queue.js)で 1 件ずつ実行し、
+//     手動(LINE ボタン)を自動予約より優先する。手動同士は従来どおり 409 busy
 //   - セッションは予約サイト側で約10分で切れるため、人間に渡してから HANDOFF_TIMEOUT_MS で打ち切る
 //   - 利用者番号・パスワード・Cookie・VNC パスワードはログに出さない
 // ============================================================
@@ -39,10 +45,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
+import { createRequire } from 'node:module';
 import { reserve } from '../src/reserve.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { createLineQueue } from '../src/line-queue.js';
-import { verify } from '../src/token.js';
+import { verify, sign, slotExpiry } from '../src/token.js';
+import { createBookingQueue } from '../src/booking-queue.js';
+import { createAutoState } from '../src/auto-state.js';
+import { createAutoRunner, createScraper } from '../src/auto-runner.js';
+
+const require = createRequire(import.meta.url);
+const { sendHeartbeat, addExcludedSlots } = require('../../lib/auto-client.js');
+const { AUTO_BOOKING } = require('../../lib/config.js');
+// 従来の空き通知カード(予約ボタン付き)。予約直前に対象外になった枠を Pi から通知するのに使う。
+// ボタンの署名と宛先は lib/notify.js が環境変数から読む(BOOKING_BASE_URL は Pi では WORKER_URL と同じ)
+process.env.BOOKING_BASE_URL ||= process.env.WORKER_URL || process.env.BOOKING_PUBLIC_URL || '';
+const { buildFlexMessages } = require('../../lib/notify.js');
 
 const PORT = Number(process.env.PORT || 8080);
 const SECRET = process.env.BOOKING_SIGNING_SECRET || '';
@@ -83,9 +101,11 @@ function credentialsFor(person) {
   };
 }
 
-// ---- 進行中のセッション(1件だけ) ----
-let session = null;
-// session = { token, payload, label, status: 'starting'|'ready'|'done', message, result, startedAt, readyAt, finish(reason) }
+// ---- 予約の実行(行列で 1 件ずつ。手動優先) ----
+const queue = createBookingQueue({ log });
+// token → セッション。終わったものも DONE_KEEP_MS の間は残す(結果画面・/status 用)
+const sessions = new Map();
+// session = { token, payload, label, kind: 'manual'|'auto', status: 'queued'|'starting'|'ready'|'done', message, result, startedAt, readyAt, finish(reason) }
 
 function slotText(p) {
   const [y, m, d] = p.date.split('-').map(Number);
@@ -93,20 +113,31 @@ function slotText(p) {
   return `${PARK_NAMES[p.park] || p.park} ${m}/${d}(${dow}) ${p.startHour}:00-${Number(p.startHour) + 2}:00`;
 }
 
-function startSession(token, payload) {
+function newSession(token, payload, kind) {
   const creds = credentialsFor(payload.person);
   const s = {
     token,
     payload,
     label: creds.label,
-    status: 'starting',
-    message: 'ログインして枠を選んでいます…',
+    kind,
+    status: 'queued',
+    message: kind === 'auto' ? '自動予約の順番待ち…' : '順番待ち(別の予約を処理中)…',
     result: null,
-    startedAt: Date.now(),
+    startedAt: null,
     readyAt: null,
     finish: null,
   };
-  session = s;
+  sessions.set(token, s);
+  return s;
+}
+
+// 予約フロー本体(行列の中で呼ばれる)。extra は reserve() への追加オプション(自動予約の reservationList / beforeApply)
+async function runReserve(s, extra = {}) {
+  const { token, payload } = s;
+  const creds = credentialsFor(payload.person);
+  s.status = 'starting';
+  s.startedAt = Date.now();
+  s.message = 'ログインして枠を選んでいます…';
 
   // 人間に画面を渡す(reCAPTCHA v2 が出たときだけ呼ばれる)。人間の操作が終わる(画面が変わる)か、時間切れ/中止まで待つ
   const handoff = ({ page, facility }) =>
@@ -142,7 +173,7 @@ function startSession(token, payload) {
     });
 
   const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2) };
-  log(`予約フロー開始: ${slotText(payload)} 予約者=${creds.label}`);
+  log(`予約フロー開始${s.kind === 'auto' ? '(自動予約)' : ''}: ${slotText(payload)} 予約者=${creds.label}`);
   const credentials = { userId: creds.userId, password: creds.password };
   const browserOptions = {
     headless: false,
@@ -151,43 +182,84 @@ function startSession(token, payload) {
     onChallenge: handoff,
     debugDir: '/tmp/debug-out',
     log: (m) => log(`  ${m}`),
+    ...extra,
   };
-  (async () => {
+  let result;
+  try {
     // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
     if (PROFILE_LOCAL) browserOptions.userDataDir = PROFILE_DIR;
     // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す。
     // 環境変数 FAST_PATH=0 で高速経路を使わず、最初から UI 操作(人間らしい操作)で進める(reCAPTCHA の重さの比較用)
     const useFast = process.env.FAST_PATH !== '0';
     s.message = useFast ? 'ログインして枠を選んでいます(高速経路)…' : 'ブラウザでログインして枠を選んでいます…';
-    let result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast });
+    result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast });
     if (useFast && result.status === 'error') {
       log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
       s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
       result = await reserve(slot, credentials, browserOptions);
     }
-    return result;
-  })()
-    .then(async (result) => {
-      s.status = 'done';
-      s.result = result;
-      s.message = result.message;
-      log(`予約フロー終了: ${result.status} ${result.message}`);
-      // 結果を LINE にも送る(ボタンを押した本人以外にも分かるように)。失敗しても結果表示には影響させない
-      if (LINE.token && LINE.to && result.status !== 'dry_run') {
-        await lineQueue.send(buildResultFlex({ slot, ...result }, s.label), '結果カード');
-      }
-    })
-    .catch((e) => {
-      s.status = 'done';
-      s.result = { status: 'error', message: e.message };
-      s.message = e.message;
-      log(`予約フロー例外: ${e.message}`);
-    })
-    .finally(() => {
-      setTimeout(() => {
-        if (session === s) session = null;
-      }, DONE_KEEP_MS);
-    });
+  } catch (e) {
+    result = { status: 'error', message: e.message };
+    log(`予約フロー例外: ${e.message}`);
+  }
+  s.status = 'done';
+  s.result = result;
+  s.message = result.message;
+  log(`予約フロー終了: ${result.status} ${result.message}`);
+  // 手動の結果は LINE にも送る(ボタンを押した本人以外にも分かるように)。自動予約のカードは auto-runner が送る
+  if (s.kind === 'manual' && LINE.token && LINE.to && result.status !== 'dry_run') {
+    await lineQueue.send(buildResultFlex({ slot, ...result }, s.label), '結果カード');
+  }
+  setTimeout(() => {
+    if (sessions.get(token) === s) sessions.delete(token);
+  }, DONE_KEEP_MS);
+  return result;
+}
+
+// ---- フェーズ3 自動予約(AUTO_BOOKING=on|dry-run のとき起動) ----
+const AUTO_MODE = (() => {
+  const v = String(process.env.AUTO_BOOKING || 'off').trim().toLowerCase();
+  if (v === 'on' || v === '1') return 'on';
+  if (v === 'dry-run' || v === 'dryrun') return 'dry-run';
+  return 'off';
+})();
+const WORKER_URL = (process.env.WORKER_URL || process.env.BOOKING_PUBLIC_URL || '').replace(/\/$/, '');
+let autoRunner = null;
+if (AUTO_MODE !== 'off') {
+  if (!WORKER_URL || !SECRET) {
+    log('自動予約: WORKER_URL と BOOKING_SIGNING_SECRET が必要です。起動しません');
+  } else {
+    const state = createAutoState({ file: process.env.AUTO_STATE_FILE || '/var/lib/booking/auto-state.json' });
+    autoRunner = createAutoRunner({
+      mode: AUTO_MODE,
+      scrape: createScraper(),
+      queue,
+      state,
+      worker: {
+        heartbeat: (payload) => sendHeartbeat(WORKER_URL, SECRET, payload),
+        addExcludedSlots: (slots) => addExcludedSlots(WORKER_URL, SECRET, slots),
+      },
+      credentialsFor: (person) => {
+        const c = credentialsFor(person);
+        return c.userId && c.password ? c : null;
+      },
+      // 候補 1 件の予約実行(行列の中で呼ばれる)。手動と同じセッション扱いにして、reCAPTCHA v2 の /vnc も同じ仕組みで動くようにする
+      book: async (c, { beforeApply }) => {
+        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour) };
+        const token = sign(payload, SECRET);
+        const s = newSession(token, payload, 'auto');
+        return runReserve(s, { reservationList: true, beforeApply });
+      },
+      notify: (message, what) => (LINE.token && LINE.to ? lineQueue.send(message, what) : Promise.resolve(false)),
+      notifyVacancy: async (slots) => {
+        if (!LINE.token || !LINE.to) return;
+        for (const m of buildFlexMessages(slots)) await lineQueue.send(m, '空き通知カード(予約直前に対象外になった枠)');
+      },
+      signingSecret: SECRET,
+      log: (m) => log(`[auto] ${m}`),
+      pollMs: Number(process.env.AUTO_POLL_MS) || AUTO_BOOKING.POLL_INTERVAL_MS,
+    }).start();
+  }
 }
 
 // ---- HTML ----
@@ -303,6 +375,21 @@ const server = http.createServer((req, res) => {
   const p = url.pathname;
 
   if (p === '/healthz' || p === '/warmup') return send(res, 200, 'ok\n', 'text/plain');
+  if (p === '/auto/status') {
+    return send(
+      res,
+      200,
+      JSON.stringify({
+        mode: AUTO_MODE,
+        active: !!autoRunner?.active,
+        intervalMs: autoRunner?.intervalMs ?? null,
+        lastCycle: autoRunner?.lastCycle() ?? null,
+        exclusions: autoRunner?.exclusions() ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, at: autoRunner.exclusions().at } : null,
+        queue: { running: queue.current() ? { kind: queue.current().kind, id: queue.current().id } : null, waiting: queue.waiting().map((j) => ({ kind: j.kind, id: j.id })) },
+      }),
+      'application/json'
+    );
+  }
 
   // noVNC のクライアント JS(単一バンドル)
   if (p === '/novnc/rfb.js') {
@@ -323,17 +410,23 @@ const server = http.createServer((req, res) => {
   if (p === '/book') {
     // 予約者はトークンに入っている(通知側が「<呼び名>で予約」ボタンごとに署名)。無いトークンは受け付けない
     if (!['A', 'B'].includes(payload.person)) return json(400, { status: 'no_person' });
-    // 同じ枠で終わった処理があるとき: 予約が成立していれば「済み」(二重予約防止)。それ以外(中止・失敗)はやり直せる
-    if (session && session.token === token && session.status === 'done') {
-      if (session.result?.status === 'success') return json(200, { status: 'already' });
-      session = null;
+    const existing = sessions.get(token);
+    if (existing) {
+      // 同じ枠で終わった処理があるとき: 予約が成立していれば「済み」(二重予約防止)。それ以外(中止・失敗)はやり直せる
+      if (existing.status !== 'done') return json(202, { status: 'started' });
+      if (existing.result?.status === 'success') return json(200, { status: 'already' });
+      sessions.delete(token);
     }
-    if (session && session.token !== token && session.status !== 'done') return json(409, { status: 'busy' });
-    if (!session || session.token !== token) startSession(token, payload);
-    return json(202, { status: 'started' });
+    // 手動同士は従来どおり 1 件だけ(実行中・順番待ちの手動があれば busy)。自動予約が実行中なら受け付けて、その直後に割り込む
+    const manualBusy = (queue.current()?.kind === 'manual') || queue.waiting().some((j) => j.kind === 'manual');
+    if (manualBusy) return json(409, { status: 'busy' });
+    const s = newSession(token, payload, 'manual');
+    const r = queue.submit({ id: `manual:${token}`, kind: 'manual', run: () => runReserve(s) });
+    if (r.status === 'queued') log(`手動予約を受け付け(自動予約の実行中のため順番待ち): ${slotText(payload)}`);
+    return json(202, { status: 'started', queued: r.status === 'queued' });
   }
 
-  const s = session && session.token === token ? session : null;
+  const s = sessions.get(token) || null;
   if (!s) {
     if (p === '/status') return json(200, { status: 'none' });
     return send(res, ...simplePage('処理が見つかりません', 'この予約の処理は始まっていないか、終了しています。通知のボタンからもう一度開いてください。', 404));
@@ -354,7 +447,8 @@ server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (url.pathname !== '/websockify') return socket.destroy();
   const { token, payload } = tokenOf(url);
-  if (!payload || !session || session.token !== token || session.status !== 'ready') return socket.destroy();
+  const session = sessions.get(token);
+  if (!payload || !session || session.status !== 'ready') return socket.destroy();
   wss.handleUpgrade(req, socket, head, (ws) => {
     const vnc = net.connect(VNC_PORT, '127.0.0.1');
     const stream = createWebSocketStream(ws, { decodeStrings: false });
@@ -368,5 +462,5 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, () => {
-  log(`予約支援サーバー起動 port=${PORT} display=${process.env.DISPLAY || '(なし)'} 署名鍵=${SECRET ? 'あり' : 'なし!'} VNCパスワード=${VNC_PASSWORD ? 'あり' : 'なし!'}`);
+  log(`予約支援サーバー起動 port=${PORT} display=${process.env.DISPLAY || '(なし)'} 署名鍵=${SECRET ? 'あり' : 'なし!'} VNCパスワード=${VNC_PASSWORD ? 'あり' : 'なし!'} 自動予約=${AUTO_MODE}`);
 });

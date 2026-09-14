@@ -29,3 +29,24 @@ test('結果カード: 成功は予約番号と料金、失敗は理由と手動
   assert.match(JSON.stringify(ng.contents), /先に予約されていました/);
   assert.deepEqual(ng.contents.footer.contents[1].contents.map((b) => b.action.type), ['uri'], '失敗時はサイトへのリンクだけ');
 });
+
+test('結果カード(自動予約): 見出しに「自動予約」。cancelData があれば警告文とキャンセル postback ボタンが付く', () => {
+  const ok = buildResultFlex({ slot, status: 'success', reservationNo: '2026260562', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう', { auto: true, cancelData: 'c|A|2026260562|20260930|1300|1500|亀戸中央公園|3|1|.sig' });
+  const text = JSON.stringify(ok.contents);
+  assert.match(ok.contents.header.contents[0].text, /予約完了\(自動予約\)/);
+  assert.match(text, /無料キャンセルは今日 23:59 まで/);
+  const pb = JSON.stringify(ok.contents.footer).match(/"type":"postback"/g);
+  assert.equal(pb.length, 1);
+  assert.match(JSON.stringify(ok.contents.footer), /"data":"c\|A\|2026260562/);
+  assert.ok(bytes(ok) < 10000);
+
+  const plain = buildResultFlex({ slot, status: 'success', reservationNo: '1', facility: '亀戸中央公園' }, 'ゆう', { auto: true });
+  assert.equal(JSON.stringify(plain.contents).includes('"type":"postback"'), false, '+5 日以降はキャンセルボタン無し');
+  assert.equal(JSON.stringify(plain.contents).includes('無料キャンセルは今日'), false);
+
+  const ng = buildResultFlex({ slot, status: 'taken', message: '先に取られた', facility: '亀戸中央公園' }, 'ゆう', { auto: true });
+  assert.match(ng.contents.header.contents[0].text, /予約できませんでした\(自動予約\)/);
+  // 従来(手動)のカードは変わらない
+  const manual = buildResultFlex({ slot, status: 'success', reservationNo: '1', facility: '亀戸中央公園' }, 'ゆう');
+  assert.equal(manual.contents.header.contents[0].text, '🎾 予約完了');
+});
