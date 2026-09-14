@@ -12,7 +12,9 @@
 //     (Actions は見つけた時点で「対象枠だから通知しない」と処理済みのことがあるため)。除外枠になっていたらカードも送らない。
 //     その利用日の残り枚数が 0 なら見送り(ログイン不要)。そうでなければ reserve() を reservationList + beforeApply 付きで呼び、
 //     ログイン直後の予約一覧でその日の件数を数え、上限(2 件)なら予約せず 'capped'。成立したら結果カード(自動予約の表記。
-//     利用日 = 今日+4 日なら「無料キャンセルは今日 23:59 まで」とキャンセルボタン)。失敗も結果カード。見送りはカードなし
+//     利用日 = 今日+4 日なら「無料キャンセルは今日 23:59 まで」とキャンセルボタン)。見送りはカードなし。
+//     失敗のうち「先に取られた(taken)」「サイトが断った(duplicate)」は LINE の通数を節約するためカードを送らずログのみ(人が何もできない失敗)。
+//     ログインできない・reCAPTCHA で拒否・サイトのエラーは放置すると自動予約が全部止まるのでカードで知らせる
 //     予約一覧に「自分が自動予約した枠」が無ければ、サイトで手放したとみなして Worker に除外枠として登録する
 //
 //   mode: 'on'     予約まで行う(heartbeat の active=true → Actions は対象期間の枠を通知しない)
@@ -39,8 +41,8 @@ const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, sta
 const EXCLUSIONS_MAX_AGE_MS = 30 * 60 * 1000;
 // これらの結果の枠は同じ枠が「新しく出た」扱いになっても再投入しない
 const NO_RETRY_STATUSES = new Set(['queued', 'running', 'success']);
-// 結果カードを送らない結果(見送り)
-const SILENT_STATUSES = new Set(['capped', 'skipped', 'dry_run']);
+// 結果カードを送らない結果: 見送りと、人が何もできない失敗(先に取られた・サイトが断った)。LINE の月 200 通の枠を節約する
+const SILENT_STATUSES = new Set(['capped', 'skipped', 'dry_run', 'taken', 'duplicate']);
 
 export function createAutoRunner({
   mode = 'dry-run',
@@ -255,6 +257,8 @@ export function createAutoRunner({
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData }), '自動予約の結果カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true }), '自動予約の結果カード');
+    } else if (result.status === 'taken' || result.status === 'duplicate') {
+      log(`結果カードは送りません(${result.status}。人が対応できる失敗ではないため。LINE の通数節約)`);
     }
     state.save();
     return result;

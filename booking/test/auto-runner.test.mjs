@@ -144,7 +144,7 @@ test('2 件上限: 予約直前の一覧でその日の件数を数え、手動�
   assert.ok(h.logs.filter((l) => l.includes('既に 2 件あるため')).length >= 2);
 });
 
-test('2 件上限: 一覧で既に 2 件なら予約せず(capped)、カードも送らない。失敗(taken)は次の候補へ進み、カードは送る', async () => {
+test('2 件上限: 一覧で既に 2 件なら予約せず(capped)、カードも送らない。失敗(taken)は次の候補へ進むが、カードは送らない(通数節約)', async () => {
   const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00' }, { id: '2', date: '2026-09-27', start: '19:00' }], B: [] };
   let n = 0;
   const h = harness({
@@ -169,7 +169,31 @@ test('2 件上限: 一覧で既に 2 件なら予約せず(capped)、カード�
   assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'capped');
   assert.equal(h.state.attemptStatus('1040|2026-09-25|19:00'), 'taken');
   assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'success');
-  assert.deepEqual(h.notified.map((x) => x.m.contents.header.contents[0].text), ['⚠️ 予約できませんでした(自動予約)', '🎾 予約完了(自動予約)']);
+  assert.deepEqual(h.notified.map((x) => x.m.contents.header.contents[0].text), ['🎾 予約完了(自動予約)'], 'taken のカードは送らない');
+  assert.ok(h.logs.some((l) => l.includes('結果カードは送りません(taken')));
+});
+
+test('失敗カード: ログインできない・reCAPTCHA 拒否・サイトのエラーは送る(放置すると自動予約が止まる)。先に取られた・断られたは送らない', async () => {
+  const statuses = ['auth_error', 'rejected', 'error', 'taken', 'duplicate'];
+  let i = 0;
+  const h = harness({ book: async () => ({ status: statuses[i++], message: 'x' }) });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([
+    slot('猿江恩賜公園', '2026-09-22', '19:00-21:00'),
+    slot('猿江恩賜公園', '2026-09-24', '19:00-21:00'),
+    slot('猿江恩賜公園', '2026-09-25', '19:00-21:00'),
+    slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'),
+    slot('猿江恩賜公園', '2026-09-30', '19:00-21:00'),
+  ]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(i, 5);
+  const reasons = h.notified.map((x) => JSON.stringify(x.m.contents.body));
+  assert.equal(reasons.length, 3);
+  assert.match(reasons[0], /ログインできませんでした/);
+  assert.match(reasons[1], /認証で拒否/);
+  assert.match(reasons[2], /サイトのエラー/);
 });
 
 test('利用日 = 今日+4 日の成功カードにはキャンセルボタン(Worker が検証できる c| トークン、期限は今日 23:59)。+5 日には付かない', async () => {
