@@ -6,7 +6,8 @@
   "scripts": {
     "check": "node check.js",
     "dry-run": "node check.js --dry-run",
-    "test:logic": "MOCK_SLOTS_FILE=test/mock-slots.json node check.js --dry-run"
+    "test:logic": "MOCK_SLOTS_FILE=test/mock-slots.json node check.js --dry-run",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "japanese-holidays": "^1.0.10"

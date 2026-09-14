@@ -1,5 +1,6 @@
-# 自宅 PC(Windows + Docker Desktop)で予約支援サーバーを動かすための構成。
+# 自宅の Raspberry Pi で予約支援サーバーを動かすための構成。
 #   booking    予約支援サーバー本体(../Dockerfile。自宅回線から予約サイトへ出る → reCAPTCHA v3 で通る → 「予約」まで自動)
+#              フェーズ3 の自動予約(1 分おきの空き照会 → 予約)も同じコンテナの中で動く(.env の AUTO_BOOKING で on / dry-run / off)
 #   tunnel     Cloudflare Tunnel(quick tunnel)。外(スマホ)から booking に届く URL を作る。URL は起動ごとに変わる
 #   registrar  tunnel の現在の URL を玄関の Worker に 4 分ごとに登録する(server/register.mjs)
 #
@@ -14,7 +15,10 @@ x-logging: &default-logging
 
 services:
   booking:
-    build: ..
+    # ビルドコンテキストはリポジトリ直下(lib/ を Pi でも使うため)。除外は リポジトリ直下の .dockerignore
+    build:
+      context: ../..
+      dockerfile: booking/Dockerfile
     image: tennis-booking:local
     restart: unless-stopped
     logging: *default-logging
@@ -32,11 +36,14 @@ services:
       STEP_TIMEOUT_MS: '90000' # 1 ステップの待ち上限。自宅回線が遅い時間帯(深夜)に 30 秒では足りなかったため延長(2026-09-13)
       APPLY_TIMEOUT_MS: '90000'
       PROFILE_LOCAL: '1'       # ブラウザプロファイルを下の volume に持ち越す
+      # フェーズ3: 空き照会(lib/scrape.js)の失敗時レスポンスはコンテナ内に溜めない(1 分周期で増えるため)
+      SCRAPE_DEBUG_DIR: ''
+      AUTO_STATE_FILE: /var/lib/booking/auto-state.json
       SCREEN_W: '600'
       SCREEN_H: '1000'
     volumes:
       - profile:/tmp/profile
-      - state:/var/lib/booking # 回線断で送れなかった LINE カードの持ち越し(src/line-queue.js)
+      - state:/var/lib/booking # 回線断で送れなかった LINE カードの持ち越し(src/line-queue.js)と自動予約の状態(src/auto-state.js)
     ports:
       - '127.0.0.1:8080:8080' # PC 自身からの確認用(http://localhost:8080/warmup)。外からは tunnel 経由
     shm_size: 1g

@@ -17,6 +17,7 @@ workers_dev = true
 enabled = true
 
 # フェーズ2 予約支援の玄関で使う KV(自宅 PC の現在の URL を TTL 付きで保存)。
+# フェーズ3 では 除外日・除外枠(auto_exclusions)、Pi の最終チェック(auto_alive)、申告モード(auto_mode)もここに置く(src/auto.js)。
 # 初回: `npx wrangler kv namespace create BOOKING_KV` を実行し、表示された id を下に書く
 [[kv_namespaces]]
 binding = "BOOKING_KV"

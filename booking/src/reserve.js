@@ -19,6 +19,9 @@
 //     userDataDir: null,     渡すとそのディレクトリをブラウザプロファイルとして使う(Cookie 等を持ち越す)
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
+//     reservationList: false, (フェーズ3)ログイン直後にその人の予約一覧(prwha1000)を取り、結果に reservationsBefore として付ける
+//     beforeApply: null,     (フェーズ3)予約一覧を見た直後に呼ぶ ({ reservations }) → null なら続行、{ status, message } を返すと
+//                            そこで中止し、その status の結果を返す(利用日ごとの 2 件上限の判定に使う。予約は送らない)
 //   }
 //   Result = {
 //     status: 'success' | 'dry_run' | 'abandoned' | 'taken' | 'duplicate' | 'rejected' | 'auth_error' | 'error',
@@ -36,6 +39,7 @@
 //     rejected   reCAPTCHA の判定で申込みが拒否された。**やり直さない**(繰り返すのは回避行為になる)
 //     auth_error ログインが拒否された(利用者番号・パスワード・カード期限)。やり直さない
 //     error      一時的なサーバーエラー・想定外画面・タイムアウト。呼び出し側で1回だけやり直してよい
+//     capped     (フェーズ3)beforeApply が中止を指示した(その日の件数が上限)。予約は送っていない
 //
 // 方式: Playwright(Chromium)でサイトの画面をそのまま操作する。
 //   ログイン → お知らせモーダルを閉じる → 空き検索 → 対象セルを選択 → 「予約」 → 予約内容確認画面で
@@ -45,7 +49,7 @@
 //   画面構造・実機確認の記録は docs/site-notes.md「フェーズ2 追加調査」「予約フローの実機確認結果」。
 // ============================================================
 import { chromium } from 'playwright';
-import { inPageFlow, submitApplyForm } from './site-inpage.js';
+import { inPageFlow, submitApplyForm, fetchReservationListInPage } from './site-inpage.js';
 import { parseReservations, findReservation } from './reservation-list.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -163,9 +167,18 @@ async function parseResultTable(page) {
 }
 
 export async function reserve(slot, credentials, options = {}) {
-  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, fastInPage = false } = options;
+  const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, fastInPage = false, reservationList = false, beforeApply = null } = options;
   const started = Date.now();
-  const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...extra });
+  // (フェーズ3)ログイン直後に取った予約一覧。結果に付けて返す(呼び出し側が手放した枠の検出に使う)
+  let reservationsBefore = null;
+  const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...(reservationsBefore ? { reservationsBefore } : {}), ...extra });
+  // 予約一覧 HTML を解析して控え、beforeApply に見せる。中止の指示があれば ReserveError で抜ける(予約は送らない)
+  const inspectList = async (html) => {
+    reservationsBefore = parseReservations(html);
+    log(`予約一覧(予約前): ${reservationsBefore.length} 件`);
+    const stop = beforeApply ? await beforeApply({ reservations: reservationsBefore }) : null;
+    if (stop) throw new ReserveError(stop.status || 'capped', stop.message || '見送りました');
+  };
 
   if (!credentials?.userId || !credentials?.password) return done('auth_error', '利用者番号またはパスワードが未設定です');
   const tz = HOUR_TO_TZ[Number(slot.startHour)];
@@ -292,11 +305,12 @@ export async function reserve(slot, credentials, options = {}) {
         await saveDebug(page, debugDir, 'top-unexpected');
         throw new ReserveError('error', `トップページにログインボタンがありません (HTTP ${topRes?.status() ?? '?'}, ${await pageId(page)}: ${diag})`);
       }
-      const r = await page.evaluate(inPageFlow, { slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour) }, credentials });
+      const r = await page.evaluate(inPageFlow, { slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour) }, credentials, withList: reservationList });
       if (!r.ok) throw new ReserveError(r.status, r.message);
       loggedIn = true;
       facility = r.facility || slot.park;
       log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面 (${Date.now() - started}ms)`);
+      if (r.listHtml) await inspectList(r.listHtml);
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
       log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms)`);
     } else {
@@ -357,6 +371,8 @@ export async function reserve(slot, credentials, options = {}) {
         log(`モーダルを閉じました: ${closed.join(', ')}`);
         await page.waitForSelector('.modal-backdrop', { state: 'detached', timeout: 5000 }).catch(() => {});
       }
+      // (フェーズ3)予約一覧を取って件数を確かめる(画面は遷移させずブラウザ内 fetch)
+      if (reservationList) await inspectList(await page.evaluate(fetchReservationListInPage));
 
       // 4. 空き検索(種目 → 公園の順。同期先の hidden も揃ってから検索する。docs/site-notes.md「ハマりどころ」)
       //    ホーム画面の Ajax(種目→公園の選択肢)が失敗して「データ通信を正しく行うことができませんでした」が出ることがあるので、

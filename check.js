@@ -8,6 +8,11 @@
 //   node check.js --dry-run    通知せず内容をコンソール表示のみ
 //   MOCK_SLOTS_FILE=test/mock-slots.json node check.js --dry-run
 //                              スクレイピングせずモックデータで動作確認
+//
+// フェーズ3(自動予約)との分担: 新しい空きのうち、自宅 Pi の自動予約が生きていれば
+//   「自動予約の対象(利用日 >= 今日+4 日、除外日以外)」は通知しない(Pi が予約し、結果カードで知らせる)。
+//   Pi が止まっていれば従来どおり全部通知する(受け皿)。除外枠(人が手放した枠)は通知しない。
+//   Pi の生死と除外一覧は Worker の GET /auto/state から取る(lib/auto-client.js)。取れなければ全部通知(安全側)
 // ============================================================
 const fs = require('fs');
 const { scrapeAvailability } = require('./lib/scrape');
@@ -15,6 +20,8 @@ const { filterTargetSlots } = require('./lib/filter');
 const { loadState, diffNewSlots, saveState } = require('./lib/state');
 const { sendLineMessage, formatMessage, warmupBookingServer } = require('./lib/notify');
 const { inMaintenanceWindow } = require('./lib/maintenance');
+const { splitForNotification } = require('./lib/auto-rules');
+const { fetchAutoState } = require('./lib/auto-client');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
@@ -48,18 +55,28 @@ const DRY_RUN = process.argv.includes('--dry-run');
   const prev = loadState();
   const newSlots = diffNewSlots(prev, targets);
 
+  // 3.5 フェーズ3: Pi の自動予約が生きていれば、対象期間の枠は通知しない(Pi が予約する)。除外枠は通知しない
+  let toNotify = newSlots;
+  if (newSlots.length > 0 && process.env.BOOKING_BASE_URL && process.env.BOOKING_SIGNING_SECRET) {
+    const autoState = await fetchAutoState(process.env.BOOKING_BASE_URL, process.env.BOOKING_SIGNING_SECRET);
+    const { notify, suppressed, piAlive } = splitForNotification(newSlots, { now: Date.now(), autoState });
+    console.log(`自動予約(Pi): ${autoState ? (piAlive ? '稼働中' : autoState.alive ? `生存(mode=${autoState.mode || '?'}, 自動予約は停止中)` : '停止中(生存の合図なし)') : '状態不明'}`);
+    for (const s of suppressed) console.log(`  通知しない: ${s.slot.date} ${s.slot.time} ${s.slot.facility} (${s.reason})`);
+    toNotify = notify;
+  }
+
   // 4. 新しい空きがあればLINEへ通知(Flex Message。dry-run時はテキスト表現で表示)
-  if (newSlots.length > 0) {
+  if (toNotify.length > 0) {
     if (DRY_RUN) {
-      console.log('[dry-run] 送信される通知内容:\n' + formatMessage(newSlots));
+      console.log('[dry-run] 送信される通知内容:\n' + formatMessage(toNotify));
     } else {
       // 予約支援サーバー(フェーズ2)を通知と同時に起こしておく(コールドスタート対策。失敗しても通知は送る)
-      const [sent] = await Promise.allSettled([sendLineMessage(newSlots), warmupBookingServer()]);
+      const [sent] = await Promise.allSettled([sendLineMessage(toNotify), warmupBookingServer()]);
       if (sent.status === 'rejected') throw sent.reason;
-      console.log(`LINE通知を送信しました (${newSlots.length}件)`);
+      console.log(`LINE通知を送信しました (${toNotify.length}件)`);
     }
   } else {
-    console.log('新しい空きはありません。');
+    console.log(newSlots.length > 0 ? '新しい空きはすべて自動予約の対象(または除外枠)のため通知しません。' : '新しい空きはありません。');
   }
 
   // 5. 今回の結果を保存(次回の比較用)

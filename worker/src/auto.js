@@ -1,0 +1,301 @@
+// ============================================================
+// フェーズ3 自動予約の Worker 側(状態の置き場・API・「じどう」コマンドの postback)
+//
+//   KV(BOOKING_KV):
+//     auto_exclusions  { dates: ['YYYY-MM-DD'], slots: [{ park, date, start, end, facility, reason, at }] }  除外日・除外枠(A/B 共通)
+//     auto_alive       { at, active, mode }  Pi の最終チェック(heartbeat)。TTL 10 分(Pi が止まると自然に消える)
+//     auto_mode        { mode, at }          Pi が最後に申告したモード(TTL 無し。生存監視が「照会ループが止まった」を見分けるのに使う)
+//
+//   API(Pi と Actions から。認証は lib/auto-client.js と同じ HMAC + 時刻):
+//     GET  /auto/state        → { alive, active, mode, lastSeenAt, dates, slots }   Actions が通知を絞る判断に使う
+//     POST /auto/heartbeat    { active, mode, ... } → 除外一覧 { dates, slots }     Pi が 1 分おきに呼ぶ(生存の合図 + 除外一覧の取得)
+//     POST /auto/exclusions   { addSlots: [{ park, date, start, end, facility, reason }] } → 除外一覧   Pi が「手放した枠」を登録
+//
+//   LINE:
+//     「じどう」→ 除外日・除外枠の一覧カード(各行に「解除」、フッターに「日を追加」= 日付ピッカー)。auto-flex.js
+//     postback 'x|a|-|<exp>.<sig>'(日を追加。params.date に選んだ日)/ 'x|d|YYYYMMDD|<exp>.<sig>'(除外日を解除)/
+//              'x|s|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(除外枠を解除)。署名は cancel-token.js と同じ HMAC 先頭 16 バイト
+//     キャンセル成功時(index.js)→ addExcludedSlots() で除外枠に(LINE の返信より先に KV へ書く)
+//
+//   枠キーは lib/auto-rules.js と同じ "<公園コード>|<YYYY-MM-DD>|<HH:MM>"。過ぎた除外日・開始時刻を過ぎた除外枠は読むときに落とす
+// ============================================================
+import { PARK_NAMES } from './booking.js';
+import { buildAutoSettingsFlex, autoSettingsText } from './auto-flex.js';
+
+export const AUTO_COMMAND_TEXT = 'じどう';
+export const AUTO_POSTBACK_PREFIX = 'x|';
+export const KV_EXCLUSIONS = 'auto_exclusions';
+export const KV_ALIVE = 'auto_alive';
+export const KV_MODE = 'auto_mode';
+// Pi の最終チェックがこの時間以内なら生きている扱い(lib/config.js の AUTO_BOOKING.ALIVE_WITHIN_MS と同じ値)
+export const ALIVE_WITHIN_MS = 4 * 60 * 1000;
+const ALIVE_TTL_SEC = 600;
+// 署名付きリクエストの時刻のずれの許容(リプレイ防止)
+export const AUTH_WINDOW_MS = 5 * 60 * 1000;
+// 「じどう」カードのボタンの有効期限
+const SETTINGS_BUTTON_TTL_SEC = 60 * 60;
+// 除外日に指定できる範囲(今日から)
+export const MAX_DAYS_AHEAD = 35;
+const SIG_BYTES = 16;
+
+const enc = new TextEncoder();
+const b64u = (bytes) => {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+async function hmac(secret, data) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(data)));
+}
+function safeEqual(a, b) {
+  const x = enc.encode(a);
+  const y = enc.encode(b);
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
+}
+
+// ---- 日付(JST) ----
+export const jstTodayIso = (now = Date.now()) => new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 10);
+export function jstDateTimeMs(iso, hhmm) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const [hh, mm] = String(hhmm).split(':').map(Number);
+  return Date.UTC(y, m - 1, d, hh - 9, mm || 0, 0);
+}
+function addDaysIso(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+// ---- 枠キー(lib/auto-rules.js と同じ形式) ----
+export function parkCodeOf(facilityOrCode) {
+  const s = String(facilityOrCode ?? '');
+  if (PARK_NAMES[s]) return s;
+  const hit = Object.entries(PARK_NAMES).find(([, name]) => s.includes(name.replace(/公園$/, '')));
+  return hit ? hit[0] : null;
+}
+export function slotKeyOf(s) {
+  const code = parkCodeOf(s.park ?? s.facility) ?? String(s.park ?? s.facility ?? '?');
+  return `${code}|${s.date}|${s.start}`;
+}
+// 除外枠を保存する形に揃える(公園コード・公園名・終了時刻を補う)
+function normalizeSlot(s, now) {
+  const park = parkCodeOf(s.park ?? s.facility);
+  if (!park || !/^\d{4}-\d{2}-\d{2}$/.test(s.date || '') || !/^\d{2}:\d{2}$/.test(s.start || '')) return null;
+  const end = /^\d{2}:\d{2}$/.test(s.end || '') ? s.end : `${String(Number(s.start.slice(0, 2)) + 2).padStart(2, '0')}:00`;
+  return { park, date: s.date, start: s.start, end, facility: PARK_NAMES[park], reason: s.reason === 'released' ? 'released' : 'cancel', at: s.at ?? now };
+}
+
+// ---- 除外一覧 ----
+export function pruneExclusions(ex, now = Date.now()) {
+  const today = jstTodayIso(now);
+  const dates = [...new Set((ex?.dates || []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= today))].sort();
+  const seen = new Set();
+  const slots = (ex?.slots || []).filter((s) => {
+    if (!s?.date || !s?.start || jstDateTimeMs(s.date, s.start) <= now) return false;
+    const k = slotKeyOf(s);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  slots.sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`));
+  return { dates, slots };
+}
+export async function loadExclusions(env, now = Date.now()) {
+  let raw = null;
+  try {
+    raw = JSON.parse((await env.BOOKING_KV.get(KV_EXCLUSIONS)) || 'null');
+  } catch {
+    raw = null;
+  }
+  return pruneExclusions(raw || { dates: [], slots: [] }, now);
+}
+async function saveExclusions(env, ex, now = Date.now()) {
+  const pruned = pruneExclusions(ex, now);
+  await env.BOOKING_KV.put(KV_EXCLUSIONS, JSON.stringify(pruned));
+  return pruned;
+}
+// 除外枠を追加(キャンセル成功時・Pi からの「手放し」登録)。戻り値は保存後の一覧
+export async function addExcludedSlots(env, slots, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  const keys = new Set(ex.slots.map(slotKeyOf));
+  let added = 0;
+  for (const raw of slots || []) {
+    const s = normalizeSlot(raw, now);
+    if (!s) continue;
+    const k = slotKeyOf(s);
+    if (keys.has(k)) continue;
+    keys.add(k);
+    ex.slots.push(s);
+    added++;
+  }
+  if (added) console.log(`[auto] 除外枠を ${added} 件追加(合計 ${ex.slots.length} 件)`);
+  return saveExclusions(env, ex, now);
+}
+export async function addExcludedDate(env, dateIso, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  if (!ex.dates.includes(dateIso)) ex.dates.push(dateIso);
+  return saveExclusions(env, ex, now);
+}
+export async function removeExcludedDate(env, dateIso, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  ex.dates = ex.dates.filter((d) => d !== dateIso);
+  return saveExclusions(env, ex, now);
+}
+export async function removeExcludedSlot(env, key, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  ex.slots = ex.slots.filter((s) => slotKeyOf(s) !== key);
+  return saveExclusions(env, ex, now);
+}
+
+// ---- Pi の生存 ----
+export async function autoStatus(env, now = Date.now()) {
+  let alive = null;
+  let mode = null;
+  try {
+    alive = JSON.parse((await env.BOOKING_KV.get(KV_ALIVE)) || 'null');
+  } catch {
+    alive = null;
+  }
+  try {
+    mode = JSON.parse((await env.BOOKING_KV.get(KV_MODE)) || 'null');
+  } catch {
+    mode = null;
+  }
+  const lastSeenAt = alive?.at ?? null;
+  const isAlive = lastSeenAt != null && now - lastSeenAt <= ALIVE_WITHIN_MS;
+  return { alive: isAlive, active: isAlive && !!alive.active, mode: alive?.mode ?? mode?.mode ?? null, lastSeenAt, declaredMode: mode };
+}
+
+// ---- 署名付きリクエストの検証(lib/auto-client.js の signRequest と対) ----
+export async function verifyAutoRequest(secret, { method, path, body = '', ts, auth }, now = Date.now()) {
+  if (!secret || !ts || !auth) return false;
+  const t = Number(ts);
+  if (!Number.isFinite(t) || Math.abs(now - t) > AUTH_WINDOW_MS) return false;
+  const expected = b64u(await hmac(secret, `${ts}\n${method.toUpperCase()} ${path}\n${body}`));
+  return safeEqual(expected, auth);
+}
+
+// このモジュールが扱うパス(/auto/*)なら Response、それ以外は null
+export async function handleAuto(request, env, ctx, { now = Date.now() } = {}) {
+  const url = new URL(request.url);
+  const p = url.pathname;
+  if (!p.startsWith('/auto/')) return null;
+  if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) return new Response('server misconfigured', { status: 500 });
+  const body = request.method === 'GET' || request.method === 'HEAD' ? '' : await request.text();
+  const ok = await verifyAutoRequest(
+    env.BOOKING_SIGNING_SECRET,
+    { method: request.method, path: p, body, ts: request.headers.get('x-booking-ts'), auth: request.headers.get('x-booking-auth') },
+    now
+  );
+  if (!ok) {
+    console.warn(`[auto] 認証に失敗: ${request.method} ${p}`);
+    return new Response('unauthorized', { status: 401 });
+  }
+  let json = {};
+  if (body) {
+    try {
+      json = JSON.parse(body);
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+  }
+
+  if (p === '/auto/state' && request.method === 'GET') {
+    const [status, ex] = await Promise.all([autoStatus(env, now), loadExclusions(env, now)]);
+    return Response.json({ ...status, ...ex });
+  }
+  if (p === '/auto/heartbeat' && request.method === 'POST') {
+    const active = json.active === true;
+    const mode = typeof json.mode === 'string' ? json.mode.slice(0, 16) : active ? 'on' : 'unknown';
+    await env.BOOKING_KV.put(KV_ALIVE, JSON.stringify({ at: now, active, mode }), { expirationTtl: ALIVE_TTL_SEC });
+    // 起きるたびに書くと KV の書き込み上限(無料 1,000/日)を圧迫するので、モードの申告は変わったときだけ
+    const prev = (await autoStatus(env, now)).declaredMode;
+    if (!prev || prev.mode !== mode) await env.BOOKING_KV.put(KV_MODE, JSON.stringify({ mode, at: now }));
+    const ex = await loadExclusions(env, now);
+    return Response.json({ ...ex, serverTime: now });
+  }
+  if (p === '/auto/exclusions' && request.method === 'POST') {
+    const ex = await addExcludedSlots(env, Array.isArray(json.addSlots) ? json.addSlots : [], now);
+    return Response.json(ex);
+  }
+  return new Response('not found', { status: 404 });
+}
+
+// ---- 「じどう」カードの postback data(短い署名付き) ----
+export async function signAutoData(secret, kind, value, exp) {
+  if (!secret) throw new Error('署名鍵が未設定です');
+  if (!['a', 'd', 's'].includes(kind)) throw new Error('kind が不正です');
+  const v = String(value || '-');
+  if (/[|.]/.test(v)) throw new Error('値に使えない文字');
+  const body = `x|${kind}|${v}|${exp}`;
+  const sig = b64u((await hmac(secret, body)).slice(0, SIG_BYTES));
+  return `${body}.${sig}`;
+}
+export async function verifyAutoData(secret, data, now = Date.now()) {
+  if (!secret || typeof data !== 'string' || !data.startsWith(AUTO_POSTBACK_PREFIX)) return null;
+  const dot = data.lastIndexOf('.');
+  if (dot < 0) return null;
+  const body = data.slice(0, dot);
+  const expected = b64u((await hmac(secret, body)).slice(0, SIG_BYTES));
+  if (!safeEqual(expected, data.slice(dot + 1))) return null;
+  const f = body.split('|');
+  if (f.length !== 4 || !['a', 'd', 's'].includes(f[1]) || !/^\d+$/.test(f[3])) return null;
+  return { kind: f[1], value: f[2], exp: Number(f[3]), expired: Number(f[3]) * 1000 < now };
+}
+
+// 「じどう」への返信(一覧カード)。戻り値 { flex, text }
+export async function buildAutoSettingsReply(env, { now = Date.now(), note = null } = {}) {
+  const [status, ex] = await Promise.all([autoStatus(env, now), loadExclusions(env, now)]);
+  const today = jstTodayIso(now);
+  const exp = Math.floor(now / 1000) + SETTINGS_BUTTON_TTL_SEC;
+  const secret = env.BOOKING_SIGNING_SECRET;
+  const dates = [];
+  for (const d of ex.dates) dates.push({ date: d, removeData: await signAutoData(secret, 'd', d.replace(/-/g, ''), exp) });
+  const slots = [];
+  for (const s of ex.slots) {
+    slots.push({ ...s, removeData: await signAutoData(secret, 's', `${s.park}_${s.date.replace(/-/g, '')}_${s.start.replace(':', '')}`, exp) });
+  }
+  const addData = await signAutoData(secret, 'a', '-', exp);
+  const model = { status, dates, slots, addData, today, maxDate: addDaysIso(today, MAX_DAYS_AHEAD), note };
+  return { flex: buildAutoSettingsFlex(model), text: autoSettingsText(model) };
+}
+
+export const MSG_AUTO_EXPIRED = '時間切れです。「じどう」からやり直してください';
+export const MSG_AUTO_BAD_DATE = 'その日は指定できません(今日から 35 日先まで)。「じどう」からやり直してください';
+
+// 「じどう」カードのボタン(postback)を処理する。戻り値 { flex, text } | { text } | null(無視)
+export async function handleAutoPostback(env, data, params, { now = Date.now() } = {}) {
+  const t = await verifyAutoData(env.BOOKING_SIGNING_SECRET, data, now);
+  if (!t) {
+    console.warn('[auto] 署名不正の postback を無視しました');
+    return null;
+  }
+  if (t.expired) return { text: MSG_AUTO_EXPIRED };
+  const today = jstTodayIso(now);
+  const fmt = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return `${m}/${d}(${'日月火水木金土'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]})`;
+  };
+  let note;
+  if (t.kind === 'a') {
+    const picked = params?.date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(picked || '') || picked < today || picked > addDaysIso(today, MAX_DAYS_AHEAD)) return { text: MSG_AUTO_BAD_DATE };
+    await addExcludedDate(env, picked, now);
+    note = `${fmt(picked)} を除外日に追加しました(この日は自動予約せず、空きは従来どおり通知します)`;
+    console.log(`[auto] 除外日を追加: ${picked}`);
+  } else if (t.kind === 'd') {
+    const iso = `${t.value.slice(0, 4)}-${t.value.slice(4, 6)}-${t.value.slice(6, 8)}`;
+    await removeExcludedDate(env, iso, now);
+    note = `${fmt(iso)} の除外を解除しました(この日も自動予約の対象になります)`;
+    console.log(`[auto] 除外日を解除: ${iso}`);
+  } else {
+    const [park, ymd, hhmm] = t.value.split('_');
+    const key = `${park}|${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}|${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}`;
+    await removeExcludedSlot(env, key, now);
+    note = `${fmt(key.split('|')[1])} ${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)} ${PARK_NAMES[park] || park} の除外を解除しました(空きが出れば自動予約の対象になります)`;
+    console.log(`[auto] 除外枠を解除: ${key}`);
+  }
+  return buildAutoSettingsReply(env, { now, note });
+}
