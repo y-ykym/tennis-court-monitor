@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, MIN_GAP_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -396,3 +396,15 @@ function deferredGate() {
   const promise = new Promise((r) => (resolve = r));
   return { promise, resolve };
 }
+
+test('照会の間隔: 前回の開始から 60 秒後に次を始める。照会が 60 秒を超えたら 15 秒だけ空ける', () => {
+  assert.equal(nextDelayMs({ startedAt: 0, finishedAt: 20_000, intervalMs: 60_000 }), 40_000);
+  assert.equal(nextDelayMs({ startedAt: 0, finishedAt: 100_000, intervalMs: 60_000 }), MIN_GAP_MS);
+  assert.equal(nextDelayMs({ startedAt: 0, finishedAt: 50_000, intervalMs: 60_000 }), MIN_GAP_MS, '残り 10 秒でも最低 15 秒');
+});
+
+test('毎周期 1 行の要約ログが出る', async () => {
+  const h = harness({ slots: [slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')] });
+  await h.runner.tick();
+  assert.ok(h.logs.some((l) => /照会: 監視対象 1 件\(全体 1 件\)、新規 0 件、所要 \d+ 秒/.test(l)));
+});

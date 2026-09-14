@@ -1,7 +1,8 @@
 // ============================================================
 // フェーズ3 自動予約の中核(Pi の予約支援サーバーの中で動く。server/server.mjs から起動)
 //
-//   1 分おき(AUTO_BOOKING.POLL_INTERVAL_MS。30 秒未満にはしない):
+//   1 分おき(AUTO_BOOKING.POLL_INTERVAL_MS。30 秒未満にはしない。「前回の開始から 1 分後」に次を始める。
+//   照会自体が 1 分を超えたときは MIN_GAP_MS だけ空けて次を始める):
 //     空き照会(lib/scrape.js。ログイン不要の JSON)→ 監視条件(lib/filter.js)→ 前回との差分 = 新しく出た空き
 //     → Worker に「生きている」合図(heartbeat)を送り、応答で除外日・除外枠を受け取る
 //     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り)、利用日ごとに公園→時間帯の優先順に並べる
@@ -41,6 +42,14 @@ const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, sta
 const EXCLUSIONS_MAX_AGE_MS = 30 * 60 * 1000;
 // これらの結果の枠は同じ枠が「新しく出た」扱いになっても再投入しない
 const NO_RETRY_STATUSES = new Set(['queued', 'running', 'success']);
+// 照会が間隔より長くかかったとき、次の照会までに最低これだけ空ける
+export const MIN_GAP_MS = 15 * 1000;
+
+// 次の照会までの待ち時間: 「前回の開始 + 間隔」を目標にし、既に過ぎていれば MIN_GAP_MS だけ空ける
+export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_GAP_MS }) {
+  return Math.max(startedAt + intervalMs - finishedAt, minGapMs);
+}
+
 // 結果カードを送らない結果: 見送りと、人が何もできない失敗(先に取られた・サイトが断った)。LINE の月 200 通の枠を節約する
 const SILENT_STATUSES = new Set(['capped', 'skipped', 'dry_run', 'taken', 'duplicate']);
 
@@ -124,6 +133,8 @@ export function createAutoRunner({
       lastCycle = { at: started, ms: now() - started, error: null, newSlots: newSlots.length };
       await heartbeat();
       state.save();
+      // 動いていることが分かるよう毎回 1 行(1 日 1,440 行程度。docker のログ上限 10MB×3 に収まる)
+      log(`照会: 監視対象 ${targets.length} 件(全体 ${slots.length} 件)、新規 ${newSlots.length} 件、所要 ${Math.round(lastCycle.ms / 1000)} 秒`);
 
       if (baseline) {
         log(`初回起動: いま見えている監視対象 ${targets.length} 件を既知として登録しました(この分は予約しません)`);
@@ -287,8 +298,9 @@ export function createAutoRunner({
     if (timer) return api;
     log(`自動予約の照会ループを開始: mode=${mode} 間隔=${Math.round(interval / 1000)}秒`);
     const loop = async () => {
+      const startedAt = now();
       await tick();
-      timer = setTimeout(loop, interval);
+      timer = setTimeout(loop, nextDelayMs({ startedAt, finishedAt: now(), intervalMs: interval }));
     };
     timer = setTimeout(loop, 3000);
     return api;
@@ -302,11 +314,12 @@ export function createAutoRunner({
   return api;
 }
 
-// 空き照会の関数を作る。MOCK_SLOTS_FILE があればファイルを読む(dry-run の確認用)
-export function createScraper({ mockFile = process.env.MOCK_SLOTS_FILE } = {}) {
+// 空き照会の関数を作る。MOCK_SLOTS_FILE があればファイルを読む(dry-run の確認用)。
+// 実サイトは 3 公園を並行して取る(AUTO_SCRAPE_CONCURRENCY、既定 3。1 にすると Actions と同じ順番取り)
+export function createScraper({ mockFile = process.env.MOCK_SLOTS_FILE, concurrency = Number(process.env.AUTO_SCRAPE_CONCURRENCY) || 3 } = {}) {
   if (mockFile) {
     return async () => JSON.parse(fs.readFileSync(mockFile, 'utf8'));
   }
   const { scrapeAvailability } = require('../../lib/scrape.js');
-  return scrapeAvailability;
+  return () => scrapeAvailability({ concurrency });
 }
