@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, MIN_GAP_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -407,4 +407,14 @@ test('毎周期 1 行の要約ログが出る', async () => {
   const h = harness({ slots: [slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')] });
   await h.runner.tick();
   assert.ok(h.logs.some((l) => /照会: 監視対象 1 件\(全体 1 件\)、新規 0 件、所要 \d+ 秒/.test(l)));
+});
+
+test('深夜(JST 1:00〜7:00)は照会間隔を 3 分に広げる。それ以外は 1 分', () => {
+  assert.equal(pollIntervalAt(jst('2026-09-15', '00:59'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '01:00'), 60_000), 180_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '04:30'), 60_000), 180_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '06:59'), 60_000), 180_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '07:00'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '23:30'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, null), 60_000, '設定が無ければ常に同じ');
 });
