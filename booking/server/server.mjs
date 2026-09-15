@@ -15,7 +15,7 @@
 //   GET /abort?token=…   人間が「やめる」を押した(予約せず終了)
 //   GET /warmup          監視・生存確認の空叩き
 //   GET /healthz
-//   GET /auto/status     フェーズ3 自動予約の状態(mode・行列・最終照会。Pi 自身からの確認用)
+//   GET /auto/status     フェーズ3 自動予約の状態(mode・行列・最終照会・起動時刻)。Pi 自身の確認用と、Worker が生存判定に使う(トンネル越し)
 //
 // 環境変数(.env と docker-compose.yml から):
 //   BOOKING_SIGNING_SECRET  トークン署名鍵(通知側・Worker と同じ値)
@@ -84,6 +84,7 @@ const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.e
 const PUBLIC_BASE = (process.env.BOOKING_PUBLIC_URL || process.env.WORKER_URL || '').replace(/\/$/, '');
 
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+const SERVER_STARTED_AT = Date.now();
 
 // LINE への push は「届くまで持ち越す」(回線断の間に送れなかった結果カードを取りこぼさない)。保存先は docker volume
 const lineQueue = createLineQueue({
@@ -382,6 +383,8 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         mode: AUTO_MODE,
         active: !!autoRunner?.active,
+        startedAt: SERVER_STARTED_AT,
+        now: Date.now(),
         intervalMs: autoRunner?.intervalMs ?? null,
         lastCycle: autoRunner?.lastCycle() ?? null,
         exclusions: autoRunner?.exclusions() ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, at: autoRunner.exclusions().at } : null,

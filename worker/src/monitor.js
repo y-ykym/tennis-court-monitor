@@ -61,8 +61,9 @@ export async function probeBookingServer(env, { attempts = PROBE_ATTEMPTS, retry
   return { ok: false, reason: `${reason}(${attempts} 回試行)` };
 }
 
-// フェーズ3: 予約サーバー自体は生きているのに自動予約の照会ループ(heartbeat)が止まっているとき用。
-// Pi が最後に申告したモードが 'on' で、最終チェックがこれより古ければ知らせる(1 回だけ。復帰でも 1 回)
+// フェーズ3: 予約サーバー自体は生きているのに自動予約の照会ループが止まっているとき用。
+// Pi の /auto/status(トンネル越し)で mode が 'on' なのに、最後の照会がこれより古ければ知らせる(1 回だけ。復帰でも 1 回)。
+// 起動直後(startedAt から AUTO_STALL_MS 以内)は初回の照会前なので判定しない
 export const AUTO_STALL_MS = 15 * 60 * 1000;
 
 // 確認して状態を更新し、必要なら LINE に知らせる。戻り値: { ok, fails, notified: 'down'|'up'|null, autoNotified: 'stalled'|'resumed'|null }
@@ -76,7 +77,8 @@ export async function runMonitor(env, { now = Date.now(), probe = probeBookingSe
   // 自動予約の照会ループの見張り(予約サーバーが応答しているときだけ判定する。サーバーごと落ちていれば上の ⚠️ で分かる)
   if (ok) {
     const auto = await autoStatus(env, now);
-    const stalled = auto.declaredMode?.mode === 'on' && (auto.lastSeenAt == null || now - auto.lastSeenAt > AUTO_STALL_MS);
+    const justStarted = auto.startedAt != null && now - auto.startedAt < AUTO_STALL_MS;
+    const stalled = auto.reachable && auto.mode === 'on' && !justStarted && (auto.lastSeenAt == null || now - auto.lastSeenAt > AUTO_STALL_MS);
     if (stalled && !prev.autoAlerted) {
       next.autoAlerted = true;
       autoNotified = 'stalled';
