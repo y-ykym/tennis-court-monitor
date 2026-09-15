@@ -3,12 +3,12 @@
 //
 //   KV(BOOKING_KV):
 //     auto_exclusions  { dates: ['YYYY-MM-DD'], slots: [{ park, date, start, end, facility, reason, at }] }  除外日・除外枠(A/B 共通)
-//     auto_alive       { at, active, mode }  Pi の最終チェック(heartbeat)。TTL 10 分(Pi が止まると自然に消える)
-//     auto_mode        { mode, at }          Pi が最後に申告したモード(TTL 無し。生存監視が「照会ループが止まった」を見分けるのに使う)
+//   Pi の生存・モードは KV に書かない(2026-09-16 変更)。1 分ごとに書くと KV 無料枠(書き込み 1 日 1,000 回)を URL 登録と合わせて超え、
+//   Worker がエラーを返して Pi が除外一覧を取れなくなった。代わりに、必要なときだけ登録済みの URL(トンネル)越しに Pi の /auto/status を聞く
 //
 //   API(Pi と Actions から。認証は lib/auto-client.js と同じ HMAC + 時刻):
-//     GET  /auto/state        → { alive, active, mode, lastSeenAt, dates, slots }   Actions が通知を絞る判断に使う
-//     POST /auto/heartbeat    { active, mode, ... } → 除外一覧 { dates, slots }     Pi が 1 分おきに呼ぶ(生存の合図 + 除外一覧の取得)
+//     GET  /auto/state        → { alive, active, mode, lastSeenAt, dates, slots }   Actions が通知を絞る判断に使う(Pi を直接 probe する)
+//     POST /auto/heartbeat    { active, mode, ... } → 除外一覧 { dates, slots }     Pi が 1 分おきに呼ぶ(除外一覧の取得。KV には書かない)
 //     POST /auto/exclusions   { addSlots: [{ park, date, start, end, facility, reason }] } → 除外一覧   Pi が「手放した枠」を登録
 //
 //   LINE:
@@ -25,12 +25,14 @@ import { buildAutoSettingsFlex, autoSettingsText } from './auto-flex.js';
 export const AUTO_COMMAND_TEXT = 'じどう';
 export const AUTO_POSTBACK_PREFIX = 'x|';
 export const KV_EXCLUSIONS = 'auto_exclusions';
-export const KV_ALIVE = 'auto_alive';
-export const KV_MODE = 'auto_mode';
-// Pi の最終チェックがこの時間以内なら生きている扱い(lib/config.js の AUTO_BOOKING.ALIVE_WITHIN_MS と同じ値。
-// Pi は日中 1 分・深夜 3 分おきに合図するので、その間隔 + 照会の所要でも切れない 5 分)
+const KV_URL_KEY = 'booking_url'; // booking.js と同じ(Pi のトンネル URL)
+// Pi の最後の照会がこの時間以内なら「照会ループは生きている」扱い(lib/config.js の AUTO_BOOKING.ALIVE_WITHIN_MS と同じ値。
+// Pi は日中 1 分・深夜 3 分おきに照会するので、その間隔 + 照会の所要でも切れない 5 分)
 export const ALIVE_WITHIN_MS = 5 * 60 * 1000;
-const ALIVE_TTL_SEC = 600;
+// Pi の /auto/status をトンネル越しに聞くときの再試行(瞬断対策)とタイムアウト
+export const PROBE_ATTEMPTS = 2;
+const PROBE_RETRY_MS = 1500;
+const PROBE_TIMEOUT_MS = 8000;
 // 署名付きリクエストの時刻のずれの許容(リプレイ防止)
 export const AUTH_WINDOW_MS = 5 * 60 * 1000;
 // 「じどう」カードのボタンの有効期限
@@ -150,23 +152,36 @@ export async function removeExcludedSlot(env, key, now = Date.now()) {
   return saveExclusions(env, ex, now);
 }
 
-// ---- Pi の生存 ----
-export async function autoStatus(env, now = Date.now()) {
-  let alive = null;
-  let mode = null;
-  try {
-    alive = JSON.parse((await env.BOOKING_KV.get(KV_ALIVE)) || 'null');
-  } catch {
-    alive = null;
+// ---- Pi の生存(KV ではなく、登録済みの URL 越しに Pi の /auto/status を聞く) ----
+// 戻り値: { registered, reachable, alive, active, mode, lastSeenAt, startedAt, reason }
+//   registered  Pi の URL 登録があるか(無ければ Pi・Docker・回線のどれかが止まっている)
+//   reachable   /auto/status が応答したか
+//   alive       reachable かつ照会ループが動いている(mode が on/dry-run で、最後の照会が ALIVE_WITHIN_MS 以内)
+//   active      alive かつ mode='on'(このときだけ Actions は対象期間の枠を通知しない)
+export async function autoStatus(env, now = Date.now(), { attempts = PROBE_ATTEMPTS, retryMs = PROBE_RETRY_MS } = {}) {
+  const base = { registered: false, reachable: false, alive: false, active: false, mode: null, lastSeenAt: null, startedAt: null, reason: '' };
+  const registered = await env.BOOKING_KV.get(KV_URL_KEY);
+  if (!registered) return { ...base, reason: 'Pi からの URL 登録がありません' };
+  let reason = '';
+  for (let n = 1; n <= attempts; n++) {
+    try {
+      const res = await fetch(`${registered}/auto/status`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      if (!res.ok) {
+        reason = `HTTP ${res.status}`;
+      } else {
+        const st = await res.json();
+        const mode = typeof st.mode === 'string' ? st.mode : 'off';
+        const lastSeenAt = typeof st.lastCycle?.at === 'number' ? st.lastCycle.at : null;
+        const looping = mode === 'on' || mode === 'dry-run';
+        const alive = looping && lastSeenAt != null && now - lastSeenAt <= ALIVE_WITHIN_MS;
+        return { registered: true, reachable: true, alive, active: alive && mode === 'on', mode, lastSeenAt, startedAt: typeof st.startedAt === 'number' ? st.startedAt : null, reason: '' };
+      }
+    } catch (e) {
+      reason = e.name === 'TimeoutError' ? 'タイムアウト' : e.message;
+    }
+    if (n < attempts) await new Promise((r) => setTimeout(r, retryMs));
   }
-  try {
-    mode = JSON.parse((await env.BOOKING_KV.get(KV_MODE)) || 'null');
-  } catch {
-    mode = null;
-  }
-  const lastSeenAt = alive?.at ?? null;
-  const isAlive = lastSeenAt != null && now - lastSeenAt <= ALIVE_WITHIN_MS;
-  return { alive: isAlive, active: isAlive && !!alive.active, mode: alive?.mode ?? mode?.mode ?? null, lastSeenAt, declaredMode: mode };
+  return { ...base, registered: true, reason: `Pi に届きません(${reason})` };
 }
 
 // ---- 署名付きリクエストの検証(lib/auto-client.js の signRequest と対) ----
@@ -208,12 +223,7 @@ export async function handleAuto(request, env, ctx, { now = Date.now() } = {}) {
     return Response.json({ ...status, ...ex });
   }
   if (p === '/auto/heartbeat' && request.method === 'POST') {
-    const active = json.active === true;
-    const mode = typeof json.mode === 'string' ? json.mode.slice(0, 16) : active ? 'on' : 'unknown';
-    await env.BOOKING_KV.put(KV_ALIVE, JSON.stringify({ at: now, active, mode }), { expirationTtl: ALIVE_TTL_SEC });
-    // 起きるたびに書くと KV の書き込み上限(無料 1,000/日)を圧迫するので、モードの申告は変わったときだけ
-    const prev = (await autoStatus(env, now)).declaredMode;
-    if (!prev || prev.mode !== mode) await env.BOOKING_KV.put(KV_MODE, JSON.stringify({ mode, at: now }));
+    // KV には何も書かない(書き込みは無料枠 1 日 1,000 回。生存は /auto/state が Pi を直接 probe して判定する)
     const ex = await loadExclusions(env, now);
     return Response.json({ ...ex, serverTime: now });
   }

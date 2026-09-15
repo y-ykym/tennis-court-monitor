@@ -7,7 +7,7 @@ import {
 } from '../src/auto.js';
 import { buildPostbackReply, MSG_AUTO_UNAVAILABLE } from '../src/index.js';
 import { signCancelToken } from '../src/cancel-token.js';
-import { runMonitor, AUTO_STALL_MS } from '../src/monitor.js';
+import { runMonitor, AUTO_STALL_MS, PROBE_ATTEMPTS as MONITOR_PROBE_ATTEMPTS } from '../src/monitor.js';
 import { pickTextCommandEvents } from '../src/line.js';
 
 const require = createRequire(import.meta.url);
@@ -27,6 +27,22 @@ function fakeKV(initial = {}) {
   };
 }
 const ctx = { waitUntil() {} };
+// Pi の /auto/status をトンネル越しに聞く fetch を差し替える。status が null なら「届かない」
+function withPiStatus(status, fn) {
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (u) => {
+    calls.push(String(u));
+    if (status === null) throw new TypeError('fetch failed');
+    if (status === 'http530') return new Response('error', { status: 530 });
+    return Response.json(status, { status: 200 });
+  };
+  return Promise.resolve()
+    .then(() => fn(calls))
+    .finally(() => {
+      globalThis.fetch = realFetch;
+    });
+}
 const envOf = (kv = fakeKV()) => ({ BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: kv, LINE_CHANNEL_ACCESS_TOKEN: 't', LINE_GROUP_ID: 'C1', LABEL_A: 'ゆう', SITE_USER_A: 'u', SITE_PASS_A: 'p' });
 const signed = (method, path, payload, ts = Date.now()) => {
   const body = payload === undefined ? '' : JSON.stringify(payload);
@@ -63,34 +79,53 @@ test('署名: Actions/Pi(Node crypto)の signRequest を Worker(Web Crypto)で�
   assert.equal(await verifyAutoRequest(SECRET, { ...args, auth: '' }, NOW), false);
 });
 
-test('API: 認証なしは 401。heartbeat で生存を記録して除外一覧を返し、/auto/state で Actions が生存と除外を読める', async () => {
+test('API: 認証なしは 401。heartbeat は KV に書かず除外一覧だけ返す。/auto/state は Pi の /auto/status を直接聞いて生存を判定する', async () => {
   const env = envOf();
   const r401 = await handleAuto(new Request('https://w.example/auto/state'), env, ctx);
   assert.equal(r401.status, 401);
   assert.equal(await handleAuto(new Request('https://w.example/webhook', { method: 'POST' }), env, ctx), null, '他のパスは触らない');
 
-  // Pi が生きていないときの state
-  const s0 = await (await handleAuto(signed('GET', '/auto/state'), env, ctx)).json();
-  assert.deepEqual([s0.alive, s0.active, s0.dates, s0.slots], [false, false, [], []]);
+  // URL 登録が無い = Pi が止まっている
+  const s0 = await (await handleAuto(signed('GET', '/auto/state', undefined, NOW), env, ctx, { now: NOW })).json();
+  assert.deepEqual([s0.registered, s0.alive, s0.active, s0.dates, s0.slots], [false, false, false, [], []]);
 
-  // heartbeat(on)
-  const hb = await handleAuto(signed('POST', '/auto/heartbeat', { active: true, mode: 'on', at: Date.now() }), env, ctx);
+  // heartbeat は除外一覧を返すだけで KV には書かない
+  const before = [...env.BOOKING_KV.store.keys()];
+  const hb = await handleAuto(signed('POST', '/auto/heartbeat', { active: true, mode: 'on', at: NOW }, NOW), env, ctx, { now: NOW });
   assert.equal(hb.status, 200);
-  const body = await hb.json();
-  assert.deepEqual([body.dates, body.slots], [[], []]);
-  const s1 = await (await handleAuto(signed('GET', '/auto/state'), env, ctx)).json();
-  assert.deepEqual([s1.alive, s1.active, s1.mode], [true, true, 'on']);
-  assert.equal(JSON.parse(env.BOOKING_KV.store.get('auto_mode')).mode, 'on');
+  assert.deepEqual([(await hb.json()).dates, [...env.BOOKING_KV.store.keys()]], [[], before], 'KV の書き込みなし');
 
-  // dry-run の heartbeat は alive だが active=false
-  await handleAuto(signed('POST', '/auto/heartbeat', { active: false, mode: 'dry-run' }), env, ctx);
-  const s2 = await (await handleAuto(signed('GET', '/auto/state'), env, ctx)).json();
-  assert.deepEqual([s2.alive, s2.active, s2.mode], [true, false, 'dry-run']);
-
-  // 4 分より古い合図は死んでいる扱い
-  const st = await autoStatus(env, Date.now() + ALIVE_WITHIN_MS + 1000);
-  assert.equal(st.alive, false);
-  assert.equal(st.active, false);
+  env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
+  // Pi が on で 1 分前に照会
+  await withPiStatus({ mode: 'on', active: true, startedAt: NOW - 3600000, lastCycle: { at: NOW - 60000 } }, async (calls) => {
+    const s1 = await (await handleAuto(signed('GET', '/auto/state', undefined, NOW), env, ctx, { now: NOW })).json();
+    assert.deepEqual([s1.registered, s1.reachable, s1.alive, s1.active, s1.mode], [true, true, true, true, 'on']);
+    assert.equal(calls[0], 'https://abc.trycloudflare.com/auto/status');
+  });
+  // dry-run は alive だが active=false
+  await withPiStatus({ mode: 'dry-run', active: false, lastCycle: { at: NOW - 60000 } }, async () => {
+    const s2 = await autoStatus(env, NOW);
+    assert.deepEqual([s2.alive, s2.active, s2.mode], [true, false, 'dry-run']);
+  });
+  // 最後の照会が 5 分より古い = 照会ループが止まっている
+  await withPiStatus({ mode: 'on', active: true, lastCycle: { at: NOW - ALIVE_WITHIN_MS - 1000 } }, async () => {
+    const s3 = await autoStatus(env, NOW);
+    assert.deepEqual([s3.reachable, s3.alive, s3.active], [true, false, false]);
+  });
+  // off なら alive ではない
+  await withPiStatus({ mode: 'off', active: false, lastCycle: null }, async () => {
+    assert.equal((await autoStatus(env, NOW)).alive, false);
+  });
+  // トンネル越しに届かない(瞬断は 2 回試す)
+  await withPiStatus(null, async (calls) => {
+    const s4 = await autoStatus(env, NOW, { retryMs: 0 });
+    assert.deepEqual([s4.registered, s4.reachable, s4.alive], [true, false, false]);
+    assert.match(s4.reason, /届きません/);
+    assert.equal(calls.length, 2);
+  });
+  await withPiStatus('http530', async () => {
+    assert.equal((await autoStatus(env, NOW, { retryMs: 0 })).alive, false);
+  });
 });
 
 test('API: /auto/exclusions で Pi が手放した枠を登録できる(公園名・終了時刻を補い、重複は 1 件)', async () => {
@@ -155,9 +190,9 @@ test('「じどう」カード: 状態・除外日(解除)・除外枠(解除)�
   const d = new Date(NOW + 13 * 86400000).toISOString().slice(0, 10);
   await addExcludedSlots(env, [{ park: '1160', date: d, start: '13:00', reason: 'cancel' }], NOW);
   env.BOOKING_KV.store.set('auto_exclusions', JSON.stringify({ ...(await loadExclusions(env, NOW)), dates: [d] }));
-  await handleAuto(signed('POST', '/auto/heartbeat', { active: true, mode: 'on' }, NOW), env, ctx, { now: NOW });
+  env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
 
-  const reply = await buildAutoSettingsReply(env, { now: NOW + 1000 });
+  const reply = await withPiStatus({ mode: 'on', active: true, lastCycle: { at: NOW } }, () => buildAutoSettingsReply(env, { now: NOW + 1000 }));
   const t = texts(reply.flex.contents);
   assert.ok(t.includes('🤖 自動予約の設定'));
   assert.ok(t.some((s) => s.includes('稼働中')));
@@ -214,26 +249,29 @@ test('「じどう」の抽出は pickTextCommandEvents で(「よやく」と�
   assert.equal(pickTextCommandEvents(raw, 'C1', ['よやく']).length, 1);
 });
 
-test('生存監視: Pi は動いているのに自動予約の合図が 15 分以上無ければ 1 回知らせ、戻れば 1 回知らせる', async () => {
+test('生存監視: Pi は動いているのに自動予約の照会が 15 分以上止まっていれば 1 回知らせ、戻れば 1 回知らせる(起動直後は判定しない)', async () => {
   const env = envOf();
+  env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
   const pushed = [];
   const push = async (_t, _to, text) => pushed.push(text);
   const up = async () => ({ ok: true });
-  env.BOOKING_KV.store.set('auto_mode', JSON.stringify({ mode: 'on', at: NOW }));
-  env.BOOKING_KV.store.set('auto_alive', JSON.stringify({ at: NOW, active: true, mode: 'on' }));
-  let r = await runMonitor(env, { now: NOW + 60000, probe: up, push });
+  const started = NOW - 3600000;
+  let r = await withPiStatus({ mode: 'on', startedAt: started, lastCycle: { at: NOW } }, () => runMonitor(env, { now: NOW + 60000, probe: up, push }));
   assert.equal(r.autoNotified, null);
-  r = await runMonitor(env, { now: NOW + AUTO_STALL_MS + 60000, probe: up, push });
+  r = await withPiStatus({ mode: 'on', startedAt: started, lastCycle: { at: NOW } }, () => runMonitor(env, { now: NOW + AUTO_STALL_MS + 60000, probe: up, push }));
   assert.equal(r.autoNotified, 'stalled');
   assert.match(pushed[0], /自動予約の空きチェックが止まっています/);
-  r = await runMonitor(env, { now: NOW + AUTO_STALL_MS + 120000, probe: up, push });
+  r = await withPiStatus({ mode: 'on', startedAt: started, lastCycle: { at: NOW } }, () => runMonitor(env, { now: NOW + AUTO_STALL_MS + 120000, probe: up, push }));
   assert.equal(r.autoNotified, null, '連続では鳴らさない');
-  env.BOOKING_KV.store.set('auto_alive', JSON.stringify({ at: NOW + AUTO_STALL_MS + 170000, active: true, mode: 'on' }));
-  r = await runMonitor(env, { now: NOW + AUTO_STALL_MS + 180000, probe: up, push });
+  const t2 = NOW + AUTO_STALL_MS + 180000;
+  r = await withPiStatus({ mode: 'on', startedAt: started, lastCycle: { at: t2 - 10000 } }, () => runMonitor(env, { now: t2, probe: up, push }));
   assert.equal(r.autoNotified, 'resumed');
   assert.equal(pushed.length, 2);
-  // dry-run / off を申告しているときは鳴らさない
+  // dry-run / off、起動直後(初回の照会前)、Pi に届かないときは鳴らさない
   const env2 = envOf();
-  env2.BOOKING_KV.store.set('auto_mode', JSON.stringify({ mode: 'dry-run', at: NOW }));
-  assert.equal((await runMonitor(env2, { now: NOW + 3600000, probe: up, push })).autoNotified, null);
+  env2.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
+  assert.equal((await withPiStatus({ mode: 'dry-run', startedAt: started, lastCycle: null }, () => runMonitor(env2, { now: NOW + 3600000, probe: up, push }))).autoNotified, null);
+  assert.equal((await withPiStatus({ mode: 'on', startedAt: NOW, lastCycle: null }, () => runMonitor(env2, { now: NOW + 60000, probe: up, push }))).autoNotified, null, '起動直後');
+  assert.equal((await withPiStatus(null, () => runMonitor(env2, { now: NOW + 3600000, probe: up, push }))).autoNotified, null, '届かない');
+  assert.equal(MONITOR_PROBE_ATTEMPTS, 4);
 });
