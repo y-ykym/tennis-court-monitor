@@ -57,6 +57,7 @@ import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 const require = createRequire(import.meta.url);
 const { sendHeartbeat, addExcludedSlots } = require('../../lib/auto-client.js');
 const { AUTO_BOOKING } = require('../../lib/config.js');
+const { slotKey } = require('../../lib/auto-rules.js');
 // 従来の空き通知カード(予約ボタン付き)。予約直前に対象外になった枠を Pi から通知するのに使う。
 // ボタンの署名と宛先は lib/notify.js が環境変数から読む(BOOKING_BASE_URL は Pi では WORKER_URL と同じ)
 process.env.BOOKING_BASE_URL ||= process.env.WORKER_URL || process.env.BOOKING_PUBLIC_URL || '';
@@ -230,7 +231,8 @@ if (AUTO_MODE !== 'off') {
   if (!WORKER_URL || !SECRET) {
     log('自動予約: WORKER_URL と BOOKING_SIGNING_SECRET が必要です。起動しません');
   } else {
-    const state = createAutoState({ file: process.env.AUTO_STATE_FILE || '/var/lib/booking/auto-state.json' });
+    const stateFile = process.env.AUTO_STATE_FILE || '/var/lib/booking/auto-state.json';
+    const state = createAutoState({ file: stateFile });
     autoRunner = createAutoRunner({
       mode: AUTO_MODE,
       scrape: createScraper(),
@@ -259,6 +261,8 @@ if (AUTO_MODE !== 'off') {
       signingSecret: SECRET,
       log: (m) => log(`[auto] ${m}`),
       pollMs: Number(process.env.AUTO_POLL_MS) || AUTO_BOOKING.POLL_INTERVAL_MS,
+      // 実枠テスト用(README「フェーズ3」参照): このファイルに枠キーを書くと、その枠を「新しく出た」扱いにする
+      forgetFile: path.join(path.dirname(stateFile), 'forget-keys.txt'),
     }).start();
   }
 }
@@ -387,6 +391,8 @@ const server = http.createServer((req, res) => {
         now: Date.now(),
         intervalMs: autoRunner?.intervalMs ?? null,
         lastCycle: autoRunner?.lastCycle() ?? null,
+        // 直近の照会で見えていた監視対象の空き(実枠テストで枠を選ぶときに見る)
+        targets: autoRunner ? autoRunner.lastTargets().map((s) => ({ key: slotKey(s), ...s })) : null,
         exclusions: autoRunner?.exclusions() ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, at: autoRunner.exclusions().at } : null,
         queue: { running: queue.current() ? { kind: queue.current().kind, id: queue.current().id } : null, waiting: queue.waiting().map((j) => ({ kind: j.kind, id: j.id })) },
       }),

@@ -22,6 +22,9 @@
 //         'dry-run' 照会と振り分けだけ行い、予約するはずの枠をログに出す(active=false → Actions は従来どおり全部通知)
 //
 //   初回起動(状態ファイルが無い・古い): いま見えている空きを既知として登録し、予約しない(起動直後の暴走防止)
+//   実枠テスト用: forgetFile(既定 /var/lib/booking/forget-keys.txt)に枠キーを 1 行ずつ書いておくと、次の周期でその枠を
+//   「既知」から外す = いま見えている空きを「新しく出た」扱いにして予約の流れに乗せる(ファイルは読んだら消す)。
+//   Pi 上で: docker compose exec booking sh -c 'echo "1160|2026-09-27|15:00" > /var/lib/booking/forget-keys.txt'
 //   Worker に繋がらない: 直近 EXCLUSIONS_MAX_AGE_MS 以内に取れた除外一覧があればそれで続行、無ければ予約しない(除外日を守れないため)
 //
 //   ログには利用者番号・パスワード・鍵・Cookie を出さない。見送りの理由は必ず出す
@@ -76,6 +79,7 @@ export function createAutoRunner({
   now = Date.now,
   pollMs = AUTO_BOOKING.POLL_INTERVAL_MS,
   maintenance = inMaintenanceWindow,
+  forgetFile = null,
 }) {
   const interval = Math.max(Number(pollMs) || AUTO_BOOKING.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
   const active = mode === 'on';
@@ -83,6 +87,7 @@ export function createAutoRunner({
   let running = false;
   let exclusions = null; // { dates, slots, at }
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
+  let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
   // 利用日ごとの残り枚数(予約一覧を見た結果から。null = まだ分からない)
   const dayRemaining = new Map();
 
@@ -132,8 +137,14 @@ export function createAutoRunner({
         return { skipped: 'scrape_failed' };
       }
       const targets = filterTargetSlots(slots);
+      lastTargets = targets;
       const keys = targets.map(slotKey);
       const known = state.knownKeys();
+      // 実枠テスト用: 指定された枠を既知から外して「新しく出た」扱いにする
+      for (const k of readForgetKeys()) {
+        if (known.delete(k)) log(`テスト用に既知から外しました(次の判定で新しい空きとして扱う): ${k}`);
+        else log(`テスト用の指定 ${k} は既知の一覧にありません(いま空いていないか、キーの書き方が違う)`);
+      }
       const newSlots = state.needsBaseline() ? [] : targets.filter((s) => !known.has(slotKey(s)));
       const baseline = state.needsBaseline();
       state.setKnown(keys);
@@ -302,6 +313,18 @@ export function createAutoRunner({
 
   const bookingSlot = (c) => ({ park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE });
 
+  // forgetFile を読んで枠キーの配列を返し、ファイルは消す(無ければ空)
+  function readForgetKeys() {
+    if (!forgetFile) return [];
+    try {
+      const keys = fs.readFileSync(forgetFile, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      fs.rmSync(forgetFile, { force: true });
+      return keys;
+    } catch {
+      return [];
+    }
+  }
+
   function start() {
     if (timer) return api;
     const night = AUTO_BOOKING.NIGHT;
@@ -319,7 +342,7 @@ export function createAutoRunner({
     timer = null;
   }
 
-  const api = { tick, start, stop, mode, active, intervalMs: interval, exclusions: () => exclusions, lastCycle: () => lastCycle, dayRemaining };
+  const api = { tick, start, stop, mode, active, intervalMs: interval, exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining };
   return api;
 }
 
