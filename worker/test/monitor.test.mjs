@@ -123,5 +123,6 @@ test('月初のお知らせ: グループに手順つきのテキストを 1 通
   assert.equal(pushed[0].to, 'C1');
   assert.equal(pushed[0].text, MAINTENANCE_TEXT);
   assert.match(pushed[0].text, /docker compose build --pull booking/);
+  assert.match(pushed[0].text, /利用状況/, '10/1 に無料枠へ戻るので通数の確認も促す');
   assert.ok(pushed[0].text.length <= 5000);
 });
