@@ -31,6 +31,9 @@ export const MAINTENANCE_TEXT = [
   'cd ~/tennis-court-monitor/booking/pc && git pull && docker compose build --pull booking && docker compose up -d && ./pi-check.sh',
   '',
   '毎時 0 分前後は避けてください(監視と重なって「繋がりません」が誤って届きます)。',
+  '',
+  '📊 ついでに今月の LINE の通数も見ておいてください(LINE Official Account Manager →「利用状況」)。',
+  '無料枠は月 200 通。グループ宛なので 1 回の通知で 2 通消費します(「よやく」への返信は無料)。',
 ].join('\n');
 
 export async function sendMaintenanceReminder(env, { push = pushText } = {}) {
