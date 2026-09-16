@@ -10,7 +10,7 @@
 //                                  PC の noVNC 画面・API・WebSocket を中継(reCAPTCHA の「確認が必要です」カードのボタンが /vnc を開く)。
 //                                  スマホは常にこの Worker(固定 URL)だけと通信し、
 //                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する。
-//                                  全部失敗しても登録は消さない(瞬断で消すと直後の予約まで巻き込む。TTL 5 分で自然に消える)
+//                                  全部失敗しても登録は消さない(瞬断で消すと直後の予約まで巻き込む。TTL 10 分で自然に消える)
 //   POST /booking/register         PC 側(server/register.mjs)が自分の URL を登録。ヘッダ x-booking-auth = HMAC(secret, url)
 //                                  KV に TTL 付きで保存(PC が落ちると自然に消える)
 //   GET  /warmup                   登録先の /warmup を叩く(通知と同時にブラウザを起こす)
@@ -29,8 +29,9 @@ const PROXY_PATHS = new Set(['/book', '/status', '/result', '/vnc', '/abort', '/
 // トンネルの一時エラー時のやり直し(回数・間隔)
 const PROXY_RETRIES = 4;
 const PROXY_RETRY_MS = 1500;
-// PC からの登録の有効期限(秒)。PC は 2 分ごとに登録し直す(PC 停止後、古い URL が残る時間を短くする)
-const REGISTER_TTL_SEC = 300;
+// PC からの登録の有効期限(秒)。PC は 4 分ごとに登録し直す(= 1 日 360 回。KV の書き込みは無料枠 1 日 1,000 回なので
+// 間隔を縮めないこと。2026-09-16 に上限超過で 10 時間止めた)。TTL は間隔の 2 倍以上にして、1 回取りこぼしても消えないようにする
+const REGISTER_TTL_SEC = 600;
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 
 const enc = new TextEncoder();

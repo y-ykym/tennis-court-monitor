@@ -18,7 +18,8 @@ enabled = true
 
 # フェーズ2 予約支援の玄関で使う KV(自宅 PC の現在の URL を TTL 付きで保存)。
 # フェーズ3 では 除外日・除外枠(auto_exclusions)もここに置く(src/auto.js)。Pi の生存は KV に書かず、Pi の /auto/status を直接聞く
-# (KV の書き込みは無料枠 1 日 1,000 回。URL 登録の 720 回/日と合わせて超えないようにする)。
+# (KV の書き込みは無料枠 1 日 1,000 回。URL 登録の 360 回/日・監視の 24 回/日と合わせて超えないようにする。
+#  上限に当たると日本時間の翌朝 9 時=UTC 0 時のリセットまで書けない)。
 # 初回: `npx wrangler kv namespace create BOOKING_KV` を実行し、表示された id を下に書く
 [[kv_namespaces]]
 binding = "BOOKING_KV"
