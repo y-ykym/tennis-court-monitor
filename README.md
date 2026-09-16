@@ -392,8 +392,16 @@ cd booking && node scripts/auto-tick.mjs --mock ../test/mock-slots.json --all-ne
 1. Worker を deploy → LINE で `じどう` と送ってカードが返ることを確認(除外日の追加・解除を試す)
 2. Pi の `.env` に `AUTO_BOOKING=dry-run` を書いて再ビルド → 数日、`[auto]` のログで「予約するはず」「見送り」の振り分けを本人と確認。
    この間 Actions の通知は従来どおり全部届く(dry-run は active=false の合図を送るため)。「じどう」カードの「Pi の自動予約」は「停止中(dry-run)」と出る
-3. 実枠テスト(本人の了解を得てから。利用日が 5 日以上先の枠。取消は「よやく」→「キャンセル」で当日中は無料)
-4. `AUTO_BOOKING=on` にして再ビルド → 「じどう」カードが「稼働中」になり、Actions は対象期間の枠を通知しなくなる
+3. 実枠テスト(本人の了解を得てから。利用日が 5 日以上先の枠。取消は「よやく」→「キャンセル」で当日中は無料)。手順:
+   1. いま見えている監視対象の空きを Pi で確認し、テストに使う枠のキーを選ぶ(`key` の値。例 `1160|2026-09-27|15:00`):
+      `curl -s http://localhost:8080/auto/status | jq '.targets[] | .key'`
+   2. `.env` を `AUTO_BOOKING=on` にして `docker compose up -d`(再ビルド不要)。この時点から、新しく出た対象の空きは本当に予約される
+   3. 選んだ枠を「新しく出た」扱いにする(既知の一覧から外す。次の周期で予約の流れに乗る):
+      `docker compose exec booking sh -c 'echo "1160|2026-09-27|15:00" > /var/lib/booking/forget-keys.txt'`
+   4. 1〜2 分で `[auto] 自動予約 開始` → `結果: success` と出て、LINE に「🎾 予約完了(自動予約)」が届く。「よやく」で一覧に載っていることを確認
+   5. 「よやく」→ その行の「キャンセル」→「はい」で取り消す → 「じどう」の除外枠にその枠が載る(取り直さないことの確認)
+   6. 続けて運用するなら `on` のまま。いったん止めるなら `.env` を `dry-run` に戻して `docker compose up -d`
+4. `AUTO_BOOKING=on` のまま運用開始 → 「じどう」カードが「稼働中」になり、Actions は対象期間の枠を通知しなくなる
 
 ### ログの読み方(`docker compose logs booking | grep '\[auto\]'`)
 

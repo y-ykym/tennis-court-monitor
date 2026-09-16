@@ -418,3 +418,33 @@ test('深夜(JST 1:00〜7:00)は照会間隔を 3 分に広げる。それ以外
   assert.equal(pollIntervalAt(jst('2026-09-15', '23:30'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, null), 60_000, '設定が無ければ常に同じ');
 });
+
+test('実枠テスト用: forgetFile に書いた枠キーは既知から外れ、次の周期で「新しく出た」扱いになる(ファイルは消える)', async () => {
+  const forget = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fg-')), 'forget-keys.txt');
+  const logs = [];
+  const bookings = [];
+  let t = T0;
+  const runner = createAutoRunner({
+    mode: 'on',
+    scrape: async () => [slot('大島小松川公園', '2026-09-27', '15:00-17:00'), slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')],
+    queue: createBookingQueue(),
+    state: createAutoState({ file: tmpFile(), now: () => t }),
+    worker: { heartbeat: async () => ({ dates: [], slots: [] }), addExcludedSlots: async () => {} },
+    book: async (c, { beforeApply }) => { bookings.push(c.key); await beforeApply({ reservations: [] }); return { status: 'success', reservationNo: 'R1', facility: c.facility }; },
+    credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
+    log: (m) => logs.push(m), now: () => t, maintenance: () => false, forgetFile: forget,
+  });
+  await runner.tick(); // 初回: 2 件を既知に
+  assert.deepEqual(runner.lastTargets().length, 2);
+  t += 60_000;
+  assert.deepEqual(await runner.tick(), { newSlots: 0 });
+  fs.writeFileSync(forget, '1160|2026-09-27|15:00\n9999|nope|00:00\n');
+  t += 60_000;
+  const r = await runner.tick();
+  assert.deepEqual(r, { newSlots: 1, planned: 1 });
+  await flush();
+  assert.deepEqual(bookings, ['1160|2026-09-27|15:00']);
+  assert.equal(fs.existsSync(forget), false, '読んだら消す');
+  assert.ok(logs.some((l) => l.includes('テスト用に既知から外しました')));
+  assert.ok(logs.some((l) => l.includes('9999|nope|00:00') && l.includes('ありません')));
+});
