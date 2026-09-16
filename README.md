@@ -58,7 +58,7 @@ booking/                     フェーズ2 予約支援 + フェーズ3 自動�
   src/auto-runner.js         フェーズ3 の中核: 1 分おきの空き照会 → 差分 → 振り分け → 行列へ → 結果カード。Worker への heartbeat
   server/server.mjs          Web アプリ(/book は Worker 向け JSON、/vnc は reCAPTCHA 時の noVNC 画面、/status /result /abort、/auto/status)。
                              WebSocket 橋渡しも内蔵。AUTO_BOOKING=on|dry-run で自動予約ループを起動
-  server/register.mjs        Tunnel の現在の URL を 2 分ごとに Worker へ登録
+  server/register.mjs        Tunnel の現在の URL を 4 分ごとに Worker へ登録
   scripts/reserve-cli.mjs    予約実行を手元から動かす CLI(--dry-run で予約直前まで)
   scripts/auto-tick.mjs      自動予約の照会・振り分けを手元で 1 周期だけ動かす(予約しない。モック可)
   scripts/explore-flow.mjs   予約フローの調査スクリプト(本人ログイン。確定は押さない)
