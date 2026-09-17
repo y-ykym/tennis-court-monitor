@@ -60,7 +60,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
   if (newSlots.length > 0 && process.env.BOOKING_BASE_URL && process.env.BOOKING_SIGNING_SECRET) {
     const autoState = await fetchAutoState(process.env.BOOKING_BASE_URL, process.env.BOOKING_SIGNING_SECRET);
     const { notify, suppressed, piAlive } = splitForNotification(newSlots, { now: Date.now(), autoState });
-    console.log(`自動予約(Pi): ${autoState ? (piAlive ? '稼働中' : autoState.alive ? `生存(mode=${autoState.mode || '?'}, 自動予約は停止中)` : '停止中(生存の合図なし)') : '状態不明'}`);
+    console.log(`自動予約(Pi): ${autoState ? (piAlive ? '稼働中' : autoState.alive ? `生存(mode=${autoState.mode || '?'}, 自動予約は停止中)` : '停止中(生存の合図なし)') : '状態不明'}${autoState?.notifyEnabled === false ? ' / 空き通知は LINE の「つうちおふ」で停止中' : ''}`);
     for (const s of suppressed) console.log(`  通知しない: ${s.slot.date} ${s.slot.time} ${s.slot.facility} (${s.reason})`);
     toNotify = notify;
   }
