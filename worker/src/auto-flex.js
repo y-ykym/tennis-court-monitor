@@ -38,8 +38,10 @@ const fmtTime = (hhmm) => String(hhmm).replace(/^0/, '');
 const jstHHMM = (ms) => new Date(ms + 9 * 3600 * 1000).toISOString().slice(11, 16);
 
 function statusLine(status) {
+  // LINE で OFF にした直後は Pi がまだ「稼働中」を申告していることがある(次の照会で反映)ので、スイッチの表示を優先する
+  if (status.enabled === false) return { label: `停止中(LINE の「じどうおふ」で OFF${status.active ? '。Pi への反映待ち 1〜3 分' : ''}。空きは従来どおり通知。再開は「じどうおん」)`, color: COLOR_NG };
   if (status.alive && status.active) return { label: `稼働中(最終チェック ${jstHHMM(status.lastSeenAt)})`, color: COLOR_OK };
-  if (status.alive) return { label: `停止中(${status.mode === 'dry-run' ? '照会だけの試運転 dry-run' : `mode=${status.mode || '?'}`}。空きは従来どおり通知)`, color: COLOR_NG };
+  if (status.alive) return { label: `停止中(${status.mode === 'dry-run' ? '照会だけの試運転 dry-run' : status.mode === 'paused' ? 'OFF の反映待ち' : `mode=${status.mode || '?'}`}。空きは従来どおり通知)`, color: COLOR_NG };
   return { label: `停止中(Pi からの合図なし${status.lastSeenAt ? `。最後は ${jstHHMM(status.lastSeenAt)}` : ''}。空きは従来どおり通知)`, color: COLOR_NG };
 }
 
@@ -84,7 +86,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。除外した日・枠の空きは自動予約されず、空き通知も届きません。', { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xl' }));
+  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。除外した日・枠の空きは自動予約されず、空き通知も届きません。自動予約そのものを止める/戻すのは「じどうおふ」「じどうおん」。', { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xl' }));
 
   const [, tm, td] = today.split('-').map(Number);
   return {

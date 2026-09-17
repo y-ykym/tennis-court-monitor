@@ -53,7 +53,7 @@ import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotTe
 
 export { MSG_BOOK };
 import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
-import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, AUTO_COMMAND_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
+import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, handleAutoSwitchCommand, AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
@@ -140,7 +140,7 @@ async function handleWebhook(request, env, ctx) {
   }
 
   const targets = pickCommandEvents(rawBody, env.LINE_GROUP_ID);
-  const autoCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [AUTO_COMMAND_TEXT]);
+  const autoCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
   console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, postback ${postbacks.length}件`);
 
@@ -149,7 +149,8 @@ async function handleWebhook(request, env, ctx) {
     ctx.waitUntil(replyReservations(env, ev.replyToken));
   }
   for (const ev of autoCommands) {
-    ctx.waitUntil(replyAutoSettings(env, ev.replyToken));
+    const t = ev.message.text.trim();
+    ctx.waitUntil(replyAutoSettings(env, ev.replyToken, t === AUTO_ON_TEXT ? true : t === AUTO_OFF_TEXT ? false : null));
   }
   for (const ev of postbacks) {
     ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data, ev.postback.params));
@@ -335,14 +336,15 @@ export async function buildReservationReply(
 // ---- フェーズ3 「じどう」(自動予約の除外設定) ----
 export const MSG_AUTO_UNAVAILABLE = '自動予約の設定は現在使えません(署名鍵または KV が未設定)';
 
-async function replyAutoSettings(env, replyToken) {
+// switchTo: null = 「じどう」(表示のみ)/ true = 「じどうおん」/ false = 「じどうおふ」
+async function replyAutoSettings(env, replyToken, switchTo = null) {
   const started = Date.now();
   try {
     if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) {
       await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, MSG_AUTO_UNAVAILABLE);
       return;
     }
-    const reply = await buildAutoSettingsReply(env);
+    const reply = switchTo === null ? await buildAutoSettingsReply(env) : await handleAutoSwitchCommand(env, switchTo);
     await replyFlexOrText(env, replyToken, reply.flex, reply.text);
     console.log(`[auto] 設定カードを返信しました (${Date.now() - started}ms)`);
   } catch (e) {
