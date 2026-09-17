@@ -551,3 +551,48 @@ test('ログイン拒否(auth_error): その予約者の自動予約を 6 時間
   await flush();
   assert.equal(n, 3);
 });
+
+test('LINE の「じどうおふ」: heartbeat の応答 enabled=false で予約を止め(照会は続く)、Worker には mode=paused/active=false を申告。「じどうおん」で再開', async () => {
+  let enabled = true;
+  const heartbeats = [];
+  const logs = [];
+  const bookings = [];
+  let t = T0;
+  let current = [];
+  const runner = createAutoRunner({
+    mode: 'on',
+    scrape: async () => current,
+    queue: createBookingQueue(),
+    state: createAutoState({ file: tmpFile(), now: () => t }),
+    worker: { heartbeat: async (p) => { heartbeats.push(p); return { dates: [], slots: [], enabled }; }, addExcludedSlots: async () => {} },
+    book: async (c, { beforeApply }) => { bookings.push(c.key); await beforeApply({ reservations: [] }); return { status: 'success', reservationNo: 'R', facility: c.facility }; },
+    credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
+    log: (m) => logs.push(m), now: () => t, maintenance: () => false,
+  });
+  await runner.tick();
+  assert.deepEqual([runner.effectiveMode(), heartbeats.at(-1).mode, heartbeats.at(-1).active], ['on', 'on', true]);
+  // OFF にされた
+  enabled = false;
+  t += 60_000;
+  current = [slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')];
+  const r = await runner.tick();
+  await flush();
+  assert.deepEqual(r, { newSlots: 1, planned: 0 });
+  assert.equal(bookings.length, 0);
+  assert.ok(logs.some((l) => l.includes('じどうおふ')));
+  assert.ok(logs.some((l) => l.includes('[LINE で停止中] 予約するはず')));
+  assert.equal(runner.effectiveMode(), 'paused');
+  t += 60_000;
+  await runner.tick();
+  assert.deepEqual([heartbeats.at(-1).mode, heartbeats.at(-1).active], ['paused', false], '次の合図から paused を申告');
+  // ON に戻す → 次に新しく出た枠から予約する(OFF 中に出ていた枠は既知なので取り直さない)
+  enabled = true;
+  t += 60_000;
+  current = [slot('猿江恩賜公園', '2026-09-25', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')];
+  const r2 = await runner.tick();
+  await flush();
+  assert.equal(r2.planned, 1);
+  assert.deepEqual(bookings, ['1040|2026-09-29|19:00']);
+  assert.equal(runner.effectiveMode(), 'on');
+  assert.ok(logs.some((l) => l.includes('じどうおん')));
+});

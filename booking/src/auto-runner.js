@@ -20,6 +20,8 @@
 //
 //   mode: 'on'     予約まで行う(heartbeat の active=true → Actions は対象期間の枠を通知しない)
 //         'dry-run' 照会と振り分けだけ行い、予約するはずの枠をログに出す(active=false → Actions は従来どおり全部通知)
+//   LINE の「じどうおふ」/「じどうおん」: Worker の KV のスイッチを heartbeat の応答(enabled)で受け取る。OFF の間は mode='on' でも
+//         予約せず(dry-run と同じ動き。ログは [LINE で停止中])、Worker には mode='paused'・active=false を申告する
 //
 //   初回起動(状態ファイルが無い・古い): いま見えている空きを既知として登録し、予約しない(起動直後の暴走防止)
 //   実枠テスト用: forgetFile(既定 /var/lib/booking/forget-keys.txt)に枠キーを 1 行ずつ書いておくと、次の周期でその枠を
@@ -96,6 +98,9 @@ export function createAutoRunner({
   let timer = null;
   let running = false;
   let exclusions = null; // { dates, slots, at }
+  let remoteEnabled = true; // LINE の「じどうおふ」で false(Worker の応答で更新)
+  const effectiveMode = () => (mode === 'on' && !remoteEnabled ? 'paused' : mode);
+  const bookingEnabled = () => mode === 'on' && remoteEnabled;
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
   let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
   // 利用日ごとの残り枚数(予約一覧を見た結果から)。DAY_REMAINING_TTL_MS を過ぎたら忘れて、次はまた一覧を見て数える
@@ -115,9 +120,13 @@ export function createAutoRunner({
   const describe = (s) => `${s.date} ${s.time || `${startHHMM(s.startHour)}-`} ${s.facility || parkOf(s.park)?.name || s.park}`;
 
   async function heartbeat(extra = {}) {
-    const payload = { active, mode, at: now(), queued: queue.waiting().length, running: queue.isBusy(), lastCycle, ...extra };
+    const payload = { active: bookingEnabled(), mode: effectiveMode(), at: now(), queued: queue.waiting().length, running: queue.isBusy(), lastCycle, ...extra };
     try {
       const res = await worker.heartbeat(payload);
+      if (res && typeof res.enabled === 'boolean' && res.enabled !== remoteEnabled) {
+        remoteEnabled = res.enabled;
+        log(remoteEnabled ? 'LINE の「じどうおん」で自動予約を再開します' : 'LINE の「じどうおふ」で自動予約を停止します(照会は続け、予約はしない)');
+      }
       if (res && Array.isArray(res.dates) && Array.isArray(res.slots)) {
         const changed = !exclusions || JSON.stringify([res.dates, res.slots.map(slotKey)]) !== JSON.stringify([exclusions.dates, exclusions.slots.map(slotKey)]);
         exclusions = { dates: res.dates, slots: res.slots, at: now() };
@@ -211,8 +220,8 @@ export function createAutoRunner({
             log(`  見送り: ${describe(c)} (この枠は ${st === 'success' ? '既に自動予約済み' : '実行中または待ち行列にある'})`);
             continue;
           }
-          if (mode !== 'on') {
-            log(`  [dry-run] 予約するはず: ${describe(c)} 予約者=${creds.label}(${person})`);
+          if (!bookingEnabled()) {
+            log(`  [${mode === 'on' ? 'LINE で停止中' : 'dry-run'}] 予約するはず: ${describe(c)} 予約者=${creds.label}(${person})`);
             state.markAttempt(c.key, 'dry_run');
             continue;
           }
@@ -239,6 +248,13 @@ export function createAutoRunner({
   // 行列の中で実行される 1 候補分
   async function runCandidate(c, creds) {
     const key = c.key;
+    // 行列で待っている間に「じどうおふ」が来ていたら予約しない(カードも送らない。Actions が従来どおり通知する)
+    if (!bookingEnabled()) {
+      log(`見送り(実行直前): ${describe(c)} (LINE で自動予約が停止中)`);
+      state.markAttempt(key, 'dry_run');
+      state.save();
+      return { status: 'skipped', message: 'LINE で自動予約が停止中' };
+    }
     // 予約の直前に「いま」で対象かどうかをもう一度判定する(見つけた時の判定を使い回さない。日付が変わる・23:35 を過ぎる)
     const t = now();
     const today = jstTodayIso(t);
@@ -381,7 +397,11 @@ export function createAutoRunner({
     timer = null;
   }
 
-  const api = { tick, start, stop, mode, active, intervalMs: interval, exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining };
+  const api = {
+    tick, start, stop, mode, active, intervalMs: interval,
+    effectiveMode, remoteEnabled: () => remoteEnabled,
+    exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining,
+  };
   return api;
 }
 
