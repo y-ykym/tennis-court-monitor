@@ -203,3 +203,41 @@ test('cron は JST の 9:00 と 23:35(UTC で書く)', () => {
   assert.equal(MORNING_CRON, '0 0 * * *');
   assert.equal(DEADLINE_CRON, '35 14 * * *');
 });
+
+test('23:35 は朝 9:00 と同じ内容(または減っているだけ)なら送らない。朝に無かった予約が増えていれば送る。控えは KV に 1 日分', async () => {
+  const store = new Map();
+  const kv = { async get(k) { return store.has(k) ? store.get(k) : null; }, async put(k, v) { store.set(k, v); }, async delete(k) { store.delete(k); } };
+  const env2 = { ...env, BOOKING_KV: kv };
+  const pushed = [];
+  const push = async (_t, _to, messages) => pushed.push(messages);
+  const two = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '1' }), res({ id: '2', start: '13:00', end: '15:00' })] }];
+  const one = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '2', start: '13:00', end: '15:00' })] }];
+  const three = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '1' }), res({ id: '2', start: '13:00', end: '15:00' }), res({ id: '3', start: '15:00', end: '17:00' })] }];
+
+  // 朝: 2 件送る → 控えが残る
+  const m = await runPenaltyAlert(env2, { kind: 'morning', now: MORNING, fetchResults: async () => two, push });
+  assert.equal(m.sent, 'flex');
+  assert.deepEqual(JSON.parse(store.get('penalty_alert_sent')), { date: TODAY, ids: ['1', '2'] });
+  // 夜: 同じ 2 件 → 送らない
+  const d1 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  assert.deepEqual([d1.sent, d1.skipped, pushed.length], [null, 'same_as_morning', 1]);
+  // 夜: 1 件取り消して減っただけ → 送らない
+  const d2 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => one, push });
+  assert.deepEqual([d2.sent, pushed.length], [null, 1]);
+  // 夜: 日中に自動予約で 1 件増えた → 送る(全件載せる)
+  const d3 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => three, push });
+  assert.equal(d3.sent, 'flex');
+  assert.equal(pushed.length, 2);
+  assert.match(allText(pushed[1][0].contents), /15:00 - 17:00|15:00-17:00/);
+  assert.deepEqual(JSON.parse(store.get('penalty_alert_sent')).ids, ['1', '2', '3']);
+  // 別の日の控えは無視して送る
+  store.set('penalty_alert_sent', JSON.stringify({ date: '2026-09-16', ids: ['1', '2'] }));
+  const d4 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  assert.equal(d4.sent, 'flex');
+  // 朝に送れていなければ(控えなし)夜は送る。KV が無い環境でも動く
+  store.clear();
+  const d5 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  assert.equal(d5.sent, 'flex');
+  const d6 = await runPenaltyAlert(env, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  assert.equal(d6.sent, 'flex');
+});
