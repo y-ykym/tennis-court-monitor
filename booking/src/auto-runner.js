@@ -49,6 +49,9 @@ const NO_RETRY_STATUSES = new Set(['queued', 'running', 'success']);
 export const MIN_GAP_MS = 15 * 1000;
 // 「その日は既に上限まで予約がある」という記憶の有効時間。過ぎたら次の候補でまた一覧を見て数える
 export const DAY_REMAINING_TTL_MS = 15 * 60 * 1000;
+// ログインが拒否された(auth_error)予約者は、この時間はその人の自動予約を止める(パスワード誤り等で繰り返すとアカウントロックの恐れ。
+// カードも最初の 1 回だけ)。時間が過ぎたら次の候補で 1 回だけ試し直す
+export const AUTH_PAUSE_MS = 6 * 60 * 60 * 1000;
 
 // 次の照会までの待ち時間: 「前回の開始 + 間隔」を目標にし、既に過ぎていれば MIN_GAP_MS だけ空ける
 export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_GAP_MS }) {
@@ -97,6 +100,7 @@ export function createAutoRunner({
   // 利用日ごとの残り枚数(予約一覧を見た結果から)。DAY_REMAINING_TTL_MS を過ぎたら忘れて、次はまた一覧を見て数える
   // (本人が LINE やサイトで取り消した後に「まだ 1 件ある」と思い込み続けないため)
   const dayRemaining = new Map(); // date → { remaining, at }
+  const authFailedAt = new Map(); // person → ログインが拒否された時刻
   const remainingFor = (date) => {
     const r = dayRemaining.get(date);
     if (!r) return null;
@@ -194,6 +198,12 @@ export function createAutoRunner({
           for (const c of cands) log(`  見送り: ${describe(c)} (予約者 ${person} の利用者情報が未設定)`);
           continue;
         }
+        const failedAt = authFailedAt.get(person);
+        if (failedAt != null && now() - failedAt < AUTH_PAUSE_MS) {
+          const left = Math.ceil((AUTH_PAUSE_MS - (now() - failedAt)) / 60000);
+          for (const c of cands) log(`  見送り: ${describe(c)} (予約者 ${person} はログインが拒否されたため ${left} 分間は自動予約を止めている。利用者番号・パスワード・カード有効期限を確認)`);
+          continue;
+        }
         for (const c of cands) {
           const st = state.attemptStatus(c.key);
           if (NO_RETRY_STATUSES.has(st)) {
@@ -274,6 +284,18 @@ export function createAutoRunner({
     }
     const ok = result.status === 'success';
     if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() });
+    if (result.status === 'auth_error') {
+      const first = !authFailedAt.has(c.person) || now() - authFailedAt.get(c.person) >= AUTH_PAUSE_MS;
+      authFailedAt.set(c.person, now());
+      log(`予約者 ${c.person} のログインが拒否されたため、${Math.round(AUTH_PAUSE_MS / 3600000)} 時間は ${c.person} の自動予約を止めます`);
+      if (!first) {
+        state.markAttempt(key, result.status);
+        state.save();
+        return result;
+      }
+    } else if (ok) {
+      authFailedAt.delete(c.person);
+    }
     state.markAttempt(key, result.status);
     log(`自動予約 結果: ${result.status} ${describe(c)} ${result.message || ''}`.trim());
 
@@ -302,7 +324,7 @@ export function createAutoRunner({
       }
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData }), '自動予約の結果カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
-      await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true }), '自動予約の結果カード');
+      await notify(buildResultFlex({ slot: bookingSlot(c), ...result, facility: result.facility || parkOf(c.park)?.name || c.facility }, creds.label, { auto: true }), '自動予約の結果カード');
     } else if (result.status === 'taken' || result.status === 'duplicate' || result.status === 'error') {
       log(`結果カードは送りません(${result.status}。人が対応できる失敗ではないため。LINE の通数節約)`);
     }
