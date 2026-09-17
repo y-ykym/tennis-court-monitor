@@ -298,7 +298,7 @@ test('flex: 同じ日の予定は 1 つの日付タイルの右に時間順で�
   assert.equal(column.contents.length, 2);
   assert.ok(texts(column.contents[0]).includes('13:00 - 15:00') && pills(column.contents[0]).length === 1);
   assert.ok(texts(column.contents[1]).includes('19:00 - 21:00') && texts(column.contents[1]).includes('\n🐻 ストローク多め練') && pills(column.contents[1]).length === 0);
-  assert.equal(column.contents[1].margin, 'md', '同じ日の 2 件目は少し空ける');
+  assert.equal(column.contents[1].margin, 'lg', '同じ日の 2 件目は 12px 空ける(罫線は引かない)');
 });
 
 test('flex: 同じ日に終了済みとこれからの予定が混ざれば、タイルは通常色・終了した枝だけグレー。全部終了ならタイルもグレー', () => {
