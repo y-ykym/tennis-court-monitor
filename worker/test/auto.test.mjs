@@ -6,7 +6,7 @@ import {
   buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE,
 } from '../src/auto.js';
 import { buildPostbackReply, MSG_AUTO_UNAVAILABLE } from '../src/index.js';
-import { handleAutoSwitchCommand, loadAutoSwitch, AUTO_ON_TEXT, AUTO_OFF_TEXT } from '../src/auto.js';
+import { handleAutoSwitchCommand, loadAutoSwitch, AUTO_ON_TEXT, AUTO_OFF_TEXT, handleNotifySwitchCommand, loadNotifySwitch } from '../src/auto.js';
 import { signCancelToken } from '../src/cancel-token.js';
 import { runMonitor, AUTO_STALL_MS, PROBE_ATTEMPTS as MONITOR_PROBE_ATTEMPTS } from '../src/monitor.js';
 import { pickTextCommandEvents } from '../src/line.js';
@@ -301,4 +301,21 @@ test('「じどうおふ」「じどうおん」: KV のスイッチを切り替
   const ev = (text) => ({ type: 'message', replyToken: 'rt', source: { type: 'group', groupId: 'C1' }, message: { type: 'text', text } });
   const raw = JSON.stringify({ events: [ev('じどうおん'), ev('じどうおふ'), ev('じどう'), ev('じどう おん')] });
   assert.equal(pickTextCommandEvents(raw, 'C1', ['じどう', AUTO_ON_TEXT, AUTO_OFF_TEXT]).length, 3);
+});
+
+test('「つうちおふ」「つうちおん」: 空き通知のスイッチを KV に持ち、/auto/state と heartbeat に notifyEnabled が載る。カードに状態行が出る', async () => {
+  const env = envOf();
+  assert.equal((await loadNotifySwitch(env)).enabled, true, '既定は届く');
+  const off = await withPiStatus(null, () => handleNotifySwitchCommand(env, false, { now: NOW }));
+  assert.ok(texts(off.flex.contents).some((s) => s.includes('空き通知を OFF にしました')));
+  assert.ok(texts(off.flex.contents).some((s) => s.includes('止めている') && s.includes('つうちおん')));
+  assert.equal((await loadNotifySwitch(env)).enabled, false);
+  const st = await (await handleAuto(signed('GET', '/auto/state', undefined, NOW), env, ctx, { now: NOW })).json();
+  assert.equal(st.notifyEnabled, false);
+  const hb = await (await handleAuto(signed('POST', '/auto/heartbeat', { active: true, mode: 'on' }, NOW), env, ctx, { now: NOW })).json();
+  assert.equal(hb.notifyEnabled, false);
+  const on = await withPiStatus(null, () => handleNotifySwitchCommand(env, true, { now: NOW }));
+  assert.ok(texts(on.flex.contents).some((s) => s.includes('空き通知を ON にしました')));
+  assert.equal((await loadNotifySwitch(env)).enabled, true);
+  assert.match(on.text, /空き通知カード: 届く/);
 });

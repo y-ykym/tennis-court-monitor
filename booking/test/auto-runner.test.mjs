@@ -596,3 +596,37 @@ test('LINE の「じどうおふ」: heartbeat の応答 enabled=false で予約
   assert.equal(runner.effectiveMode(), 'on');
   assert.ok(logs.some((l) => l.includes('じどうおん')));
 });
+
+test('LINE の「つうちおふ」: 予約直前に対象外になった枠の空き通知カードを Pi からも送らない(結果カードは別)', async () => {
+  const gate = deferredGate();
+  const vac = [];
+  const logs = [];
+  const state = createAutoState({ file: tmpFile(), now: () => T0 });
+  const queue = createBookingQueue();
+  let current = [];
+  let notifyEnabled = true;
+  let t = jst('2026-09-14', '23:33');
+  const runner = createAutoRunner({
+    mode: 'on', scrape: async () => current, queue, state,
+    worker: { heartbeat: async () => ({ dates: [], slots: [], enabled: true, notifyEnabled }), addExcludedSlots: async () => {} },
+    book: async () => { throw new Error('予約してはいけない'); },
+    credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
+    notifyVacancy: async (s) => vac.push(...s),
+    log: (m) => logs.push(m), now: () => t, maintenance: () => false,
+  });
+  await runner.tick();
+  t += 60_000; // 23:34
+  current = [slot('猿江恩賜公園', '2026-09-18', '19:00-21:00')];
+  queue.submit({ id: 'manual:v', kind: 'manual', run: () => gate.promise });
+  assert.equal((await runner.tick()).planned, 1);
+  notifyEnabled = false;
+  current = [];
+  t += 60_000;
+  await runner.tick(); // つうちおふ を受け取る
+  t += 60_000; // 23:36
+  gate.resolve();
+  await flush();
+  assert.equal(vac.length, 0, 'カードを送らない');
+  assert.ok(logs.some((l) => l.includes('つうちおふ') && l.includes('送らない')));
+  assert.equal(runner.remoteNotify(), false);
+});
