@@ -410,14 +410,17 @@ test('毎周期 1 行の要約ログが出る', async () => {
   assert.ok(h.logs.some((l) => /照会: 監視対象 1 件\(全体 1 件\)、新規 0 件、所要 \d+ 秒/.test(l)));
 });
 
-test('深夜(JST 1:00〜7:00)は照会間隔を 3 分に広げる。それ以外は 1 分', () => {
+test('照会間隔(JST): 21:00〜翌 1:00 は 1 分、7:00〜21:00 は 2 分、1:00〜7:00 は 3 分', () => {
   assert.equal(pollIntervalAt(jst('2026-09-15', '00:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '01:00'), 60_000), 180_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '04:30'), 60_000), 180_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '06:59'), 60_000), 180_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '07:00'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '07:00'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '14:00'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '20:59'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '21:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '23:30'), 60_000), 60_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, null), 60_000, '設定が無ければ常に同じ');
+  assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, []), 60_000, '設定が無ければ常に同じ');
 });
 
 test('実枠テスト用: forgetFile に書いた枠キーは既知から外れ、次の周期で「新しく出た」扱いになる(ファイルは消える)', async () => {
