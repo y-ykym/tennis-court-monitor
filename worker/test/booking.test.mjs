@@ -5,7 +5,8 @@ import { verifyBookingToken, registerAuth, handleBooking } from '../src/booking.
 import { sign, slotExpiry } from '../../booking/src/token.js';
 
 const SECRET = 'test-secret';
-const payload = { park: '1050', date: '2026-09-17', startHour: 15, people: 2, exp: slotExpiry('2026-09-17', 15) };
+// 利用日は十分先の固定日にする(exp = 利用開始時刻なので、日付が過ぎるとトークンが期限切れになりテストが落ちる。2026-09-17 に実際に落ちた)
+const payload = { park: '1050', date: '2027-09-16', startHour: 15, people: 2, exp: slotExpiry('2027-09-16', 15) };
 
 function fakeKV(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -29,7 +30,7 @@ test('通知側(Node crypto)で署名したトークンを Worker 側(Web Crypto
   assert.deepEqual(await verifyBookingToken(token, SECRET, Date.UTC(2026, 8, 4)), payload);
   assert.equal(await verifyBookingToken(token, 'other', Date.UTC(2026, 8, 4)), null);
   assert.equal(await verifyBookingToken(token.slice(0, -1) + 'x', SECRET, Date.UTC(2026, 8, 4)), null);
-  assert.equal(await verifyBookingToken(token, SECRET, Date.UTC(2026, 8, 17, 6, 1)), null);
+  assert.equal(await verifyBookingToken(token, SECRET, Date.UTC(2027, 8, 16, 6, 1)), null, '利用開始時刻(15:00 JST)を過ぎたら無効');
 });
 
 test('/book(ブラウザから): PC が未登録なら 503 の案内、登録があれば PC の /book を叩いて「受け付けました」画面', async () => {
@@ -52,7 +53,7 @@ test('/book(ブラウザから): PC が未登録なら 503 の案内、登録が
     assert.equal(r2.status, 200);
     const body = await r2.text();
     assert.match(body, /受け付けました/);
-    assert.match(body, /ゆうたそ: 9\/17\(木\) 15:00-17:00 亀戸中央公園/);
+    assert.match(body, /ゆうたそ: 9\/16\(木\) 15:00-17:00 亀戸中央公園/);
     assert.equal(calls.length, 1);
     const t = new URL(calls[0]);
     assert.equal(t.origin + t.pathname, 'https://abc-def.trycloudflare.com/book');
