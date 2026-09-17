@@ -463,3 +463,32 @@ reserve.js をマウス移動・1文字ずつ入力・操作間の小休止を�
 - 対策(reserve.js `verifyByList`): 完了画面に到達しなかったとき・「予約」押下後の例外時は、同じログイン済みブラウザで
   `form1.action = /web/rsvWGetCancelRsvDataAction.do` を submit して予約の確認一覧(prwha1000)を開き、日付・開始時刻・公園が一致する行があれば
   `success`(予約番号は一覧から。`verifiedByList: true`)。無ければ従来どおりの判定
+
+---
+
+# フェーズ5 テニスベア(www.tennisbear.net)の API 調査(2026-09-17、ブラウザで本人ログインのうえ確認)
+
+都の予約サイトとは別のサービス。Nuxt の SPA で、画面は JSON API を叩いて描いている。**HTML 解析・Shift_JIS・reCAPTCHA いずれも不要**。
+
+| 項目 | 内容 |
+|---|---|
+| ログイン | `POST /api/v3/auth/login/email` に JSON `{ email, password }` → `{ user, token: { accessToken } }`。以後 `Authorization: Bearer <accessToken>` |
+| 今後の予定 | `GET /api/v3/events/me/future` → イベントの**配列が直接**返る(主催・参加が混ざる)。過去分は `/api/v3/events/me/past` |
+| 使わない | `GET /api/v3/events/participating-event-in-progress` は「開催中」用(予定があっても空)。`/my-page/reserved-court` はテニスベア経由のコート予約で今回は対象外 |
+| マイページ | `/my-page/organized-and-participated-event`(`/my-page/participated-event` は 500) |
+| トークン | cookie の有効期間 94,608,000 秒(約 3 年)。パスワードでなくトークンを預ける案は失効時に手作業が要るため不採用 |
+| reCAPTCHA | 無し。ログイン画面の `google.com/recaptcha/api2/aframe` は広告スクリプトが埋める非表示 iframe で認証とは無関係 |
+
+1 件の主なフィールド(実測):
+
+| フィールド | 例 | Worker での扱い(`worker/src/tennisbear.js`) |
+|---|---|---|
+| `id` | `1621297` | 文字列にして保持(イベント URL `/event/<id>`) |
+| `eventTitle` | `ストローク多め練` | 行の見出し(`🐻 ` を付ける) |
+| `startDatetimeString` | `2026-09-22T19:00:00.000+09:00` | 末尾 `+09:00` なら先頭 10 文字を日付、11〜16 文字目を開始時刻に。別表記なら Date で JST に直す |
+| `datetimeForDisplay` | `9/22(火祝) 19:00-21:00` | **終了時刻はここからしか取れない**。`9:00` のように 1 桁で来るので `HH:MM` に 0 埋め(都と桁を揃えないと日付順がずれる) |
+| `place.name` | `亀戸中央公園テニスコート` | 行の 2 段目 |
+| `myInfo.isOrganizer` | `true`/`false` | `organizer` として保持(表示には使わない) |
+
+注意: 非公開の内部 API なので予告なく形が変わりうる。Worker は 1 件の形が崩れていてもその件だけ飛ばし、配列以外が返ったときだけ失敗扱いにする(都の予約の表示は壊さない)。
+利用規約は 2026-09-17 に本人が確認し、自動アクセスの禁止条項は無かった。

@@ -9,7 +9,8 @@
     "deploy": "wrangler deploy",
     "tail": "wrangler tail --format pretty",
     "test": "node --test \"test/**/*.test.mjs\"",
-    "send-test-event": "node scripts/send-test-event.mjs"
+    "send-test-event": "node scripts/send-test-event.mjs",
+    "probe-tennisbear": "node scripts/probe-tennisbear.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.128.0"

@@ -4,7 +4,8 @@
 //   LINEグループで「よやく」と送る → LINEがこのWorkerの POST /webhook を呼ぶ
 //   → 署名を検証 → 対象グループの「よやく」だけ拾う
 //   → A・B それぞれの利用者番号で予約サイトにログインして予約一覧を取得(並行)
-//   → §11.2 の形に整形して reply で返信(各行に「キャンセル」ボタン。§12)
+//   → 同時にテニスベアの「今後の予定」も取り(フェーズ5。TB_EMAIL_*/TB_PASS_* がある人だけ)、人ごとのカードで日付順に混ぜる
+//   → §11.2 の形に整形して reply で返信(都の予約の行だけ「キャンセル」ボタン。§12)
 //
 //   一覧カードの「キャンセル」(postback) → 署名・期限を検証 → 確認カードを reply(サイトへは行かない)
 //   確認カードの「はい」(postback)       → 署名・期限を検証 → その人でログイン → 一覧から予約番号で行を探し
@@ -25,6 +26,8 @@
 //   LINE_GROUP_ID              受け付けるグループのID(C〜)
 //   SITE_USER_A / SITE_PASS_A / LABEL_A   Aの利用者番号・パスワード・表示名
 //   SITE_USER_B / SITE_PASS_B / LABEL_B   Bの同上(未登録なら A だけで動く)
+//   TB_EMAIL_A / TB_PASS_A                 A のテニスベアのメールアドレス・パスワード(フェーズ5。未登録なら黙って飛ばす)
+//   TB_EMAIL_B / TB_PASS_B                 B の同上
 //   BOOKING_SIGNING_SECRET     「予約」ボタン(フェーズ2)と「キャンセル」ボタン(フェーズ1.6)の署名鍵。KV BOOKING_KV も必要(wrangler.toml)
 // 設定(wrangler.toml [vars]):
 //   CANCEL_ENABLED             "1" のときキャンセルボタンを出し、postback を受け付ける
@@ -36,10 +39,13 @@
 //   - waitUntil で応答後に処理できるのは Cloudflare の仕様で最長30秒。予約サイトは1通信 1〜4.5秒と
 //     遅いので、取得は 25秒で打ち切り、再試行は開始10秒以内の失敗のみ、ログアウトは返信後に回す
 //   - 取消の POST は絶対に再試行しない(成否不明のまま2回送らない)
+//   - テニスベアは都と並行で取り、12 秒で打ち切る。失敗しても都の予約は普通に返し、カード末尾に 1 行だけ知らせる(§15.2)
+//   - テニスベアの行にキャンセル用の署名を付けてはならない。署名(attachCancelData)は都の一覧だけに済ませてから合流する
 //   - ログに利用者番号・パスワード・トークン・Cookie・グループID・表示名・予約番号は出さない
 // ============================================================
 import { verifySignature, pickCommandEvents, pickTextCommandEvents, pickPostbackEvents, replyText, replyMessages } from './line.js';
 import { fetchReservations, cancelReservation, AuthError } from './site.js';
+import { fetchTennisbearEvents, TennisbearAuthError } from './tennisbear.js';
 import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS, jstTodayIso } from './format.js';
 import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, isPast, jstNowHHMM } from './flex.js';
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
@@ -54,6 +60,8 @@ import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DE
 const FETCH_BUDGET_MS = 25000;
 // これより後に失敗した場合は再試行せず諦める(再試行しても30秒枠に収まらないため)
 const RETRY_UNTIL_MS = 10000;
+// テニスベアの取得全体の上限(都より短く。遅れても都の予約は返す)
+const TB_BUDGET_MS = 12000;
 // キャンセルボタン(kind='c')と「はい」(kind='y')の有効期限
 const CANCEL_BUTTON_TTL_SEC = 60 * 60;
 const CANCEL_CONFIRM_TTL_SEC = 10 * 60;
@@ -191,6 +199,14 @@ export function configuredPeople(env) {
   ].filter((p) => p.userId && p.password);
 }
 
+// テニスベアの取得対象(フェーズ5)。TB_EMAIL_*/TB_PASS_* が揃っている人だけ。都の利用者番号が無い人は「よやく」のカードが無いので対象外
+export function configuredTennisbear(env) {
+  return [
+    { slot: 'A', email: env.TB_EMAIL_A, password: env.TB_PASS_A },
+    { slot: 'B', email: env.TB_EMAIL_B, password: env.TB_PASS_B },
+  ].filter((p) => p.email && p.password);
+}
+
 // 一覧の各予約に「キャンセル」ボタン用の署名付き data を付ける(終了済みの予約には付けない)
 export async function attachCancelData(env, results, { today = jstTodayIso(), nowHHMM = jstNowHHMM(), now = Date.now(), exp: expOverride } = {}) {
   if (!cancelEnabled(env)) return results;
@@ -258,14 +274,61 @@ export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, de
   }
 }
 
-// 「よやく」への返信内容を組む。
+// テニスベアの今後の予定を A・B ぶん並行取得する(フェーズ5)。全体で budgetMs を超えたら打ち切る。
+// 戻り値: [{ slot, events } | { slot, error }](未登録の人は含めない)。例外は投げず、失敗はその人の error に入れる
+export async function fetchAllTennisbear(env, { budgetMs = TB_BUDGET_MS, fetchEvents = fetchTennisbearEvents } = {}) {
+  const people = configuredTennisbear(env);
+  if (people.length === 0) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), budgetMs);
+  try {
+    const settled = await Promise.allSettled(
+      people.map((p) => fetchEvents({ email: p.email, password: p.password }, { signal: controller.signal, log: (msg) => console.log(`[tb:${p.slot}] ${msg}`) }))
+    );
+    return settled.map((r, i) => {
+      const p = people[i];
+      if (r.status === 'fulfilled') return { slot: p.slot, events: r.value };
+      const kind = r.reason instanceof TennisbearAuthError ? '認証エラー' : controller.signal.aborted ? 'タイムアウト' : 'エラー';
+      console.error(`[tb:${p.slot}] 取得失敗(${kind}): ${r.reason?.message}`);
+      return { slot: p.slot, error: r.reason };
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 都の一覧(results)に、同じ人のテニスベアの結果を p.tennisbear として添える(§15.2)。
+//   { events } なら予定あり(0 件もありうる)、{ error } なら取得失敗、登録が無い人には何も付けない。
+//   都の reservations 配列には混ぜない(キャンセルの署名・フェーズ4 の対象にしないため。混ぜるのは表示側 format.js / flex.js)
+export function mergeTennisbear(results, tb) {
+  for (const p of results) {
+    const t = tb.find((x) => x.slot === p.slot);
+    if (!t) continue;
+    p.tennisbear = t.error ? { error: t.error } : { events: t.events };
+  }
+  return results;
+}
+
+// 「よやく」への返信内容を組む。都の予約とテニスベアの予定を並行で取り、人ごとに合流する。
 // 戻り値: { text }(全員失敗・全員0件はテキストのみ)または { flex, text }(Flex + 400時のテキスト版)
-export async function buildReservationReply(env, { budgetMs = FETCH_BUDGET_MS, deferLogout } = {}) {
-  const results = await fetchAllReservations(env, { budgetMs, deferLogout });
+//   fetchSite / fetchTb はテストで差し替える
+export async function buildReservationReply(
+  env,
+  { budgetMs = FETCH_BUDGET_MS, deferLogout, fetchSite = fetchAllReservations, fetchTb = fetchAllTennisbear } = {}
+) {
+  const [results, tb] = await Promise.all([
+    fetchSite(env, { budgetMs, deferLogout }),
+    fetchTb(env).catch((e) => {
+      console.error(`[tb] 取得に失敗: ${e.message}`);
+      return [];
+    }),
+  ]);
   if (results.length === 0) return { text: MSG_FETCH_FAILED };
+  // 署名は都の一覧にだけ付け、その後でテニスベアを添える(テニスベアの行にキャンセルボタンが付かないように)
+  await attachCancelData(env, results);
+  mergeTennisbear(results, tb);
   const text = formatReply(results);
   if (text === MSG_FETCH_FAILED || text === MSG_NO_RESERVATIONS) return { text };
-  await attachCancelData(env, results);
   return { flex: buildReservationFlex(results), text };
 }
 
