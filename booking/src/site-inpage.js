@@ -69,6 +69,9 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
     if (pageId(home.body) === 'pawab2100.jsp') {
       const alert = (home.body.match(/showAlert\(["']([^"']{1,120})/) || [])[1] || '';
       if (/データ通信|時間をあけ|再度操作/.test(alert)) return fail('error', `ログイン時にサイトの一時エラー: ${alert}`);
+      // 理由の文言が無いままログイン画面に戻された = サイト側の不調の可能性が高い(2026-09-17 に Worker では通るのに Pi だけ拒否された)。
+      // auth_error にすると 6 時間止まるので、ここでは error にして UI 操作の経路で 1 回やり直す(本当にパスワード誤りなら UI 側で alert が出て auth_error になる)
+      if (!alert) return fail('error', 'ログイン画面に戻されました(理由の表示なし。サイトの一時的な不調の可能性。UI 操作でやり直す)');
       return fail('auth_error', `ログインが拒否されました(利用者番号・パスワード・カード有効期限を確認) ${alert}`);
     }
     if (!home.body.includes('gRsvWTransUserAttestationEndAction);')) return fail('error', `ログイン後の画面が想定外です (${pageId(home.body) || '不明'})`);
