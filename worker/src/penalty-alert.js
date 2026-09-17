@@ -16,6 +16,9 @@
 //   送らない場合: 対象が 0 件なら何も送らない(グループ宛の push は 1 回で 2 通消費し、無料枠は月 200 通)。
 //         ただし 23:35 に予約サイトへ繋がらず確認できなかったときだけ、テキスト 1 通で「確認できませんでした」と知らせる
 //         (朝 9 時は 23:35 に再挑戦できるので黙っておく)。
+//         23:35 の対象が 朝 9:00 に送った内容と同じ(または減っているだけ)なら送らない(2026-09-17 本人決定。通数の節約)。
+//         朝に送った予約番号を KV の penalty_alert_sent に控え(1 日 1 回の書き込み)、23:35 は朝に無かった予約があるときだけ送る。
+//         朝のカードのボタンは 23:59 まで押せるので、同じ内容をもう一度送る必要はない。
 //
 //   手元で試す: cd worker && npx wrangler dev --test-scheduled
 //              curl "http://localhost:8787/__scheduled?cron=0+0+*+*+*"    (朝 9 時ぶん)
@@ -33,6 +36,8 @@ export const PENALTY_ALERT_CRONS = [MORNING_CRON, DEADLINE_CRON];
 
 // 一覧から penaltyday が取れなかった予約の既定値(サイトの hidden と lib/config.js の AUTO_BOOKING.PENALTY_DAYS は 3)
 export const DEFAULT_PENALTY_DAYS = 3;
+// その日に送った予約番号の控え(KV)。{ date: 'YYYY-MM-DD', ids: ['予約番号', ...] }
+export const KV_SENT_KEY = 'penalty_alert_sent';
 
 const JST_OFFSET_MS = 9 * 3600 * 1000;
 const DAY_MS = 86400000;
@@ -148,6 +153,16 @@ export async function runPenaltyAlert(env, { kind = 'morning', now = Date.now(),
 
   const { rows, failed } = pickDeadlineToday(results, { today, tomorrow });
 
+  // 23:35: 朝 9:00 に送った内容と同じ(または減っているだけ)なら送らない。朝のカードのボタンは 23:59 まで使える
+  const sentToday = await loadSentToday(env, today);
+  if (deadline && rows.length > 0 && sentToday) {
+    const newOnes = rows.filter((r) => !sentToday.ids.includes(r.reservation.id));
+    if (newOnes.length === 0) {
+      console.log(`[alert] ${kind}: 対象 ${rows.length} 件はすべて朝 9:00 に送った内容と同じ → 送信なし (${Date.now() - started}ms)`);
+      return { rows: rows.length, failed, sent: null, skipped: 'same_as_morning' };
+    }
+  }
+
   if (rows.length === 0) {
     // 対象なしは送らない(通数の節約)。ただし 23:35 に「確認できなかった」ときだけは知らせる
     if (deadline && failed.length > 0) {
@@ -162,5 +177,26 @@ export async function runPenaltyAlert(env, { kind = 'morning', now = Date.now(),
   const flex = buildPenaltyAlertFlex({ rows, kind, nowText: asOfText(now), failedLabels: failed });
   const sent = await pushFlexOrText(env, flex, alertText(rows, { deadline }), push);
   console.log(`[alert] ${kind}: 対象 ${rows.length} 件を ${sent} で送信${failed.length ? ` / 取得失敗 ${failed.length} 人` : ''} (${Date.now() - started}ms)`);
+  await saveSentToday(env, today, [...(sentToday?.ids || []), ...rows.map((r) => r.reservation.id)]);
   return { rows: rows.length, failed, sent };
+}
+
+// 今日送った予約番号の控えを読む(無い・別の日・KV なし → null)
+async function loadSentToday(env, today) {
+  if (!env.BOOKING_KV) return null;
+  try {
+    const v = JSON.parse((await env.BOOKING_KV.get(KV_SENT_KEY)) || 'null');
+    return v && v.date === today && Array.isArray(v.ids) ? v : null;
+  } catch {
+    return null;
+  }
+}
+// 送った予約番号を控える(KV の書き込みは 1 日 1〜2 回。失敗しても送信自体には影響させない)
+async function saveSentToday(env, today, ids) {
+  if (!env.BOOKING_KV) return;
+  try {
+    await env.BOOKING_KV.put(KV_SENT_KEY, JSON.stringify({ date: today, ids: [...new Set(ids.filter(Boolean))] }), { expirationTtl: 2 * 86400 });
+  } catch (e) {
+    console.error(`[alert] 送信済みの控えを保存できませんでした(次回は同じ内容でも送る): ${e.message}`);
+  }
 }
