@@ -1,8 +1,8 @@
 // ============================================================
 // フェーズ3 自動予約の中核(Pi の予約支援サーバーの中で動く。server/server.mjs から起動)
 //
-//   1 分おき(AUTO_BOOKING.POLL_INTERVAL_MS。30 秒未満にはしない。「前回の開始から 1 分後」に次を始める。
-//   照会自体が 1 分を超えたときは MIN_GAP_MS だけ空けて次を始める。深夜 1〜7 時は AUTO_BOOKING.NIGHT の間隔(3 分)に広げる):
+//   定期的に(AUTO_BOOKING.POLL_INTERVAL_MS と POLL_SCHEDULE。21:00〜翌 1:00 は 1 分、7:00〜21:00 は 2 分、1:00〜7:00 は 3 分。
+//   30 秒未満にはしない。「前回の開始から間隔ぶん後」に次を始め、照会自体が間隔を超えたときは MIN_GAP_MS だけ空けて次を始める):
 //     空き照会(lib/scrape.js。ログイン不要の JSON)→ 監視条件(lib/filter.js)→ 前回との差分 = 新しく出た空き
 //     → Worker に「生きている」合図(heartbeat)を送り、応答で除外日・除外枠を受け取る
 //     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り)、利用日ごとに公園→時間帯の優先順に並べる
@@ -55,12 +55,15 @@ export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_
   return Math.max(startedAt + intervalMs - finishedAt, minGapMs);
 }
 
-// その時刻(JST)に使う照会間隔。深夜(AUTO_BOOKING.NIGHT の FROM〜TO)は広い間隔にする
-export function pollIntervalAt(nowMs, dayIntervalMs, night = AUTO_BOOKING.NIGHT) {
-  if (!night) return dayIntervalMs;
+// その時刻(JST)に使う照会間隔。AUTO_BOOKING.POLL_SCHEDULE の時間帯(FROM <= 時刻 < TO)に当たればその間隔、当たらなければ baseIntervalMs
+export function pollIntervalAt(nowMs, baseIntervalMs, schedule = AUTO_BOOKING.POLL_SCHEDULE) {
+  if (!schedule || schedule.length === 0) return baseIntervalMs;
   const hhmm = jstHHMM(nowMs);
-  const inNight = night.FROM < night.TO ? hhmm >= night.FROM && hhmm < night.TO : hhmm >= night.FROM || hhmm < night.TO;
-  return inNight ? Math.max(night.POLL_INTERVAL_MS, dayIntervalMs) : dayIntervalMs;
+  for (const w of schedule) {
+    const hit = w.FROM < w.TO ? hhmm >= w.FROM && hhmm < w.TO : hhmm >= w.FROM || hhmm < w.TO;
+    if (hit) return Math.max(w.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
+  }
+  return baseIntervalMs;
 }
 
 // 結果カードを送らない結果: 見送りと、人が何もできない失敗(先に取られた・サイトが断った・サイトのエラー)。LINE の月 200 通の枠を節約する。
@@ -340,8 +343,8 @@ export function createAutoRunner({
 
   function start() {
     if (timer) return api;
-    const night = AUTO_BOOKING.NIGHT;
-    log(`自動予約の照会ループを開始: mode=${mode} 間隔=${Math.round(interval / 1000)}秒${night ? `(${night.FROM}〜${night.TO} は ${Math.round(night.POLL_INTERVAL_MS / 1000)} 秒)` : ''}`);
+    const sched = (AUTO_BOOKING.POLL_SCHEDULE || []).map((w) => `${w.FROM}〜${w.TO} は ${Math.round(w.POLL_INTERVAL_MS / 1000)} 秒`).join('、');
+    log(`自動予約の照会ループを開始: mode=${mode} 間隔=${Math.round(interval / 1000)}秒${sched ? `(${sched})` : ''}`);
     const loop = async () => {
       const startedAt = now();
       await tick();
