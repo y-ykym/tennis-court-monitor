@@ -89,13 +89,14 @@ booking/                     フェーズ2 予約支援 + フェーズ3 自動�
                              tunnel-watchdog.sh + systemd/(Tunnel の見張り)、apt/(OS 自動更新の方針)
   test/                      node --test(トークン署名・カード・持ち越し・一覧の解析・行列・自動予約の振り分けと実行)
 
-worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル + フェーズ3 の状態置き場 + フェーズ4 予告アラート(Cloudflare Workers。lib/ とは独立)
-  src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得→reply。postback→確認カード/取消実行)。Cron の振り分けもここ
+worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル + フェーズ3 の状態置き場 + フェーズ4 予告アラート + フェーズ5 テニスベア合流(Cloudflare Workers。lib/ とは独立)
+  src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得(都+テニスベア)→reply。postback→確認カード/取消実行)。Cron の振り分けもここ
   src/line.js                LINE署名検証・イベント抽出(テキスト・postback)・reply送信・push送信
   src/site.js                予約サイトへログインして「予約の確認」一覧を取得。cancelReservation で取消 POST(1回だけ)
+  src/tennisbear.js          フェーズ5: テニスベアにログインして今後の予定(JSON API)を取り、都の予約と同じ形に正規化(表示のみ)
   src/cancel-token.js        「キャンセル」「はい」ボタンに載せる署名付き postback data(HMAC、期限付き)とペナルティ判定
-  src/format.js              テキスト整形(0件・失敗時の文言)
-  src/flex.js                予約一覧(人ごとのカルーセル)・キャンセル確認・結果・フェーズ4 予告アラートのFlex Message。30KB/50KB制限に収まるよう行数を自動調整
+  src/format.js              テキスト整形(0件・失敗時の文言)。都とテニスベアの行を日付順に混ぜる mergedRows もここ
+  src/flex.js                予約一覧(人ごとのカルーセル。🐻 テニスベアの行も)・キャンセル確認・結果・フェーズ4 予告アラートのFlex Message。30KB/50KB制限に収まるよう行数を自動調整
   src/booking.js             フェーズ2 予約支援の玄関(予約ボタンの postback → 自宅サーバーの /book を叩く。noVNC の中継、URL 登録)
   src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初のメンテのお知らせ。自動予約の照会ループが止まったときの ⚠️ も
   src/auto.js                フェーズ3: 除外日・除外枠・Pi の最終チェックを KV に持つ。/auto/state /auto/heartbeat /auto/exclusions(署名付き API)、
@@ -104,6 +105,7 @@ worker/                      フェーズ1.5 予約確認ボット + 1.6 予約�
   src/penalty-alert.js       フェーズ4: Cron(9:00 / 23:35)で「今日 23:59 までにキャンセルすれば無料」の予約を抽出し、
                              キャンセルボタン付きカードを LINE に push(対象 0 件なら送らない)
   scripts/probe-site.mjs     ローカルからログイン確認(パスワード変更後の疎通確認にも)
+  scripts/probe-tennisbear.mjs テニスベアのログイン確認(フェーズ5。Secrets 登録前・パスワード変更後に)
   scripts/send-test-event.mjs 署名付きの模擬Webhookを wrangler dev に送る
   test/                      node --test のユニットテスト(fixturesは個人情報をダミー化済み)
   wrangler.toml              Workers設定(Secretsは含めない)
