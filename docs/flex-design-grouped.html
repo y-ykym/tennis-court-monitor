@@ -1,0 +1,81 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>予約一覧カード: 同じ日付を 1 行にまとめる案</title>
+<style>
+  body{margin:0;background:#fff;font-family:"Hiragino Sans","Noto Sans JP",-apple-system,sans-serif;color:#222}
+  .page{padding:24px 28px 32px;box-sizing:border-box}
+  h1{font-size:20px;margin:0 0 4px}
+  .lead{font-size:13px;color:#555;margin:0 0 16px;line-height:1.5}
+  .panes{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+  .pane{flex:0 0 320px}
+  .pane h2{font-size:14px;margin:0 0 8px;color:#333}
+  .pane h2 small{font-weight:400;color:#777;font-size:12px;margin-left:8px}
+  .card{width:300px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.18);border:1px solid #e3e3e3}
+  .hd{background:#1F2A44;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+  .hd b{font-size:16px}.hd span{font-size:11px;color:#C7D2E5}
+  .bd{padding:2px 16px 14px}
+  .row{display:flex;align-items:center;gap:10px;margin-top:12px}
+  .row + .row{border-top:1px solid #E5E7EB;padding-top:12px}
+  .tile{width:58px;flex:0 0 auto;border-radius:8px;text-align:center;padding:6px 0;align-self:center}
+  .tile b{display:block;font-size:17px;line-height:1.1}.tile small{font-size:10.5px}
+  .tile.sat{background:#E3EEFB;color:#1D4F91}.tile.sun{background:#FBE4E4;color:#9B2C2C}.tile.wd{background:#EEF0F3;color:#374151}
+  .mid{flex:1;min-width:0}
+  .ent{display:flex;align-items:center;gap:8px}
+  .ent + .ent{margin-top:8px}
+  .txt{flex:1;min-width:0}
+  .time{font-size:15px;font-weight:700;color:#111827;line-height:1.25;white-space:nowrap}
+  .park{font-size:13px;color:#4B5563;margin-top:1px}
+  .ev{font-size:13px;font-weight:700;color:#111827;margin-top:1px}
+  .court{font-size:11px;color:#4B5563}
+  .pill{flex:0 0 auto;background:#FDECEC;color:#B91C1C;font-size:10px;font-weight:700;padding:5px 8px;border-radius:12px;white-space:nowrap}
+  .ft{border-top:1px solid #E5E7EB;padding:9px 12px;display:flex;justify-content:space-between;color:#1F4E8C;font-size:13px}
+  .note{font-size:12px;color:#555;margin:10px 0 0;line-height:1.55;max-width:300px}
+  .note b{color:#222}
+</style></head><body><div class="page">
+<h1>「よやく」カード: 同じ日付を 1 つのタイルにまとめる案</h1>
+<p class="lead">左が今の見え方(9/17 の実物と同じデータ)、右が提案。9/22 と 9/23 に都の予約とテニスベアの練習会が両方入っている日を、1 つの日付タイルの下に並べる。</p>
+<div class="panes">
+
+<div class="pane"><h2>現在<small>1 予定 = 1 行(タイル 10 個)</small></h2>
+<div class="card">
+ <div class="hd"><b>ゆうたそ</b><span>9/17 現在 ・ 10件</span></div>
+ <div class="bd">
+  <div class="row"><div class="tile sun"><b>9/21</b><small>月</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">17:00 - 19:00</div><div class="park">猿江恩賜公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile sun"><b>9/22</b><small>火</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">13:00 - 15:00</div><div class="park">猿江恩賜公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile sun"><b>9/22</b><small>火</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">19:00 - 21:00</div><div class="ev">🐻 ストローク多め練</div><div class="court">大島小松川公園Ａ</div></div></div></div></div>
+  <div class="row"><div class="tile wd"><b>9/23</b><small>水</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">15:00 - 17:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile wd"><b>9/23</b><small>水</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">19:00 - 21:00</div><div class="ev">🐻 ストローク多め練</div><div class="court">大島小松川公園Ａ</div></div></div></div></div>
+  <div class="row"><div class="tile wd"><b>9/24</b><small>木</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">9:00 - 11:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile wd"><b>9/25</b><small>金</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">9:00 - 11:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile wd"><b>9/25</b><small>金</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">11:00 - 13:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile sat"><b>9/26</b><small>土</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">13:00 - 15:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile sun"><b>9/27</b><small>日</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">13:00 - 15:00</div><div class="ev">🐻 ひたすらラリー練習　亀戸中央公園【前半２時間】</div><div class="court">亀戸中央公園</div></div></div></div></div>
+ </div>
+ <div class="ft"><span>予約サイトを開く</span><span>一覧を更新</span></div>
+</div></div>
+
+<div class="pane"><h2>提案<small>1 日 = 1 行(タイル 7 個)</small></h2>
+<div class="card">
+ <div class="hd"><b>ゆうたそ</b><span>9/17 現在 ・ 10件</span></div>
+ <div class="bd">
+  <div class="row"><div class="tile sun"><b>9/21</b><small>月</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">17:00 - 19:00</div><div class="park">猿江恩賜公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile sun"><b>9/22</b><small>火</small></div><div class="mid">
+    <div class="ent"><div class="txt"><div class="time">13:00 - 15:00</div><div class="park">猿江恩賜公園</div></div><div class="pill">キャンセル</div></div>
+    <div class="ent"><div class="txt"><div class="time">19:00 - 21:00</div><div class="ev">🐻 ストローク多め練</div><div class="court">大島小松川公園Ａ</div></div></div>
+  </div></div>
+  <div class="row"><div class="tile wd"><b>9/23</b><small>水</small></div><div class="mid">
+    <div class="ent"><div class="txt"><div class="time">15:00 - 17:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div>
+    <div class="ent"><div class="txt"><div class="time">19:00 - 21:00</div><div class="ev">🐻 ストローク多め練</div><div class="court">大島小松川公園Ａ</div></div></div>
+  </div></div>
+  <div class="row"><div class="tile wd"><b>9/24</b><small>木</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">9:00 - 11:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile wd"><b>9/25</b><small>金</small></div><div class="mid">
+    <div class="ent"><div class="txt"><div class="time">9:00 - 11:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div>
+    <div class="ent"><div class="txt"><div class="time">11:00 - 13:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div>
+  </div></div>
+  <div class="row"><div class="tile sat"><b>9/26</b><small>土</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">13:00 - 15:00</div><div class="park">大島小松川公園</div></div><div class="pill">キャンセル</div></div></div></div>
+  <div class="row"><div class="tile sun"><b>9/27</b><small>日</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">13:00 - 15:00</div><div class="ev">🐻 ひたすらラリー練習　亀戸中央公園【前半２時間】</div><div class="court">亀戸中央公園</div></div></div></div></div>
+ </div>
+ <div class="ft"><span>予約サイトを開く</span><span>一覧を更新</span></div>
+</div>
+<p class="note"><b>変わるところ</b>: 同じ日は 1 つのタイルの右に時間順で縦に並ぶ。タイルは行の縦中央。キャンセルボタンは都の予定ごとに付き、🐻 には付かない。日と日の間だけ罫線。<br><b>変わらないところ</b>: ヘッダーの件数(予定の数)、フッター、色、「…ほかN件」の調整。</p>
+</div>
+
+</div></div></body></html>

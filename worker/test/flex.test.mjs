@@ -273,3 +273,53 @@ test('flex(§15): テニスベアの行も 30KB 制限の行数調整に入る(�
   assert.ok(bubbleBytes(msg.contents) <= MAX_BUBBLE_BYTES);
   assert.ok(texts(msg.contents).some((s) => /^…ほか\d+件$/.test(s)));
 });
+
+// ---- 同じ日付を 1 つのタイルにまとめる(2026-09-17 変更) ----
+test('flex: 同じ日の予定は 1 つの日付タイルの右に時間順で縦に並ぶ。キャンセルボタンは予定ごと、罫線は日と日の間だけ', () => {
+  const reservations = [
+    { id: '2', date: '2026-09-23', start: '15:00', end: '17:00', facility: '大島小松川公園', cancelData: DATA },
+    { id: '1', date: '2026-09-22', start: '13:00', end: '15:00', facility: '猿江恩賜公園', cancelData: DATA },
+    { id: '3', date: '2026-09-25', start: '09:00', end: '11:00', facility: '大島小松川公園', cancelData: DATA },
+    { id: '4', date: '2026-09-25', start: '11:00', end: '13:00', facility: '大島小松川公園', cancelData: DATA },
+  ];
+  const TBX = [
+    { source: 'tennisbear', id: 'a', title: 'ストローク多め練', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園Ａ' },
+    { source: 'tennisbear', id: 'b', title: 'ストローク多め練', date: '2026-09-23', start: '19:00', end: '21:00', facility: '大島小松川公園Ａ' },
+  ];
+  const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations, tennisbear: { events: TBX } }], { today: '2026-09-17', nowHHMM: '12:00' });
+  assert.deepEqual(texts(msg.contents.header), ['ゆうたそ', '9/17 現在 ・ 6件'], '件数は予定の数のまま');
+  assert.deepEqual(tiles(msg).map(([t]) => t), ['9/22 火', '9/23 水', '9/25 金'], 'タイルは日ごとに 1 つ');
+  assert.equal(pills(msg).length, 4, 'キャンセルボタンは都の 4 件ぶん');
+  assert.equal(find(msg.contents.body, (n) => n.type === 'separator').length, 2, '罫線は日と日の間(2 本)だけ');
+  // 9/22 の行: タイルの右の縦積みに 13:00(都・ボタン付き)→ 19:00(🐻・ボタン無し)の順
+  const day22 = find(msg.contents.body, (n) => n.margin === 'lg' && n.layout === 'horizontal')[0];
+  const column = day22.contents[1];
+  assert.equal(column.layout, 'vertical');
+  assert.equal(column.contents.length, 2);
+  assert.ok(texts(column.contents[0]).includes('13:00 - 15:00') && pills(column.contents[0]).length === 1);
+  assert.ok(texts(column.contents[1]).includes('19:00 - 21:00') && texts(column.contents[1]).includes('\n🐻 ストローク多め練') && pills(column.contents[1]).length === 0);
+  assert.equal(column.contents[1].margin, 'md', '同じ日の 2 件目は少し空ける');
+});
+
+test('flex: 同じ日に終了済みとこれからの予定が混ざれば、タイルは通常色・終了した枝だけグレー。全部終了ならタイルもグレー', () => {
+  const reservations = [
+    { id: '1', date: '2026-09-02', start: '09:00', end: '11:00', facility: '亀戸中央公園', cancelData: DATA }, // 終了
+    { id: '2', date: '2026-09-02', start: '17:00', end: '19:00', facility: '猿江恩賜公園', cancelData: DATA }, // これから
+  ];
+  const msg = buildReservationFlex([{ label: 'A', reservations }], { today: '2026-09-02', nowHHMM: '12:00' });
+  assert.deepEqual(tiles(msg), [['9/2 水', '#EEF0F3']], '平日の通常色');
+  assert.equal(pills(msg).length, 1, 'ボタンはこれからの 1 件だけ');
+  const t = texts(msg.contents.body);
+  assert.ok(t.includes('  終了') && t.includes('  今日'));
+  const allPast = buildReservationFlex([{ label: 'A', reservations }], { today: '2026-09-02', nowHHMM: '20:00' });
+  assert.deepEqual(tiles(allPast), [['9/2 水', '#F3F4F6']], '全部終了ならグレー');
+  assert.equal(pills(allPast).length, 0);
+});
+
+test('flex: 「…ほかN件」は予定の数で数える(同じ日にまとめても上限の意味は変わらない)', () => {
+  const same = Array.from({ length: 30 }, (_, i) => ({ id: String(i), date: '2026-10-01', start: `${String(6 + (i % 16)).padStart(2, '0')}:00`, end: '23:00', facility: '大島小松川公園', cancelData: DATA }));
+  const msg = buildReservationFlex([{ label: 'A', reservations: same }, { label: 'B', reservations: same }], opts);
+  for (const b of msg.contents.contents) assert.ok(bubbleBytes(b) <= MAX_BUBBLE_BYTES, `${bubbleBytes(b)} bytes`);
+  assert.equal(tiles(msg).length, 2, '1 人 1 日なのでタイルは 1 人 1 個');
+  assert.ok(texts(msg.contents).some((s) => /^…ほか\d+件$/.test(s)));
+});
