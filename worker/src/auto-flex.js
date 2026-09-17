@@ -71,7 +71,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
   }
   body.push({ type: 'text', margin: 'md', wrap: true, contents: [{ type: 'span', text: 'Pi の自動予約: ', size: 'xs', color: COLOR_SUB }, { type: 'span', text: st.label, size: 'xs', weight: 'bold', color: st.color }] });
 
-  body.push(heading('除外日(この日は自動予約しない)'));
+  body.push(heading('除外日(この日は自動予約も空き通知もしない)'));
   if (dates.length === 0) body.push(text('なし', { size: 'sm', color: COLOR_MUTED, margin: 'sm' }));
   dates.slice(0, MAX_ROWS).forEach((d) => body.push(row(fmtDate(d.date), removePill(d.removeData, `${fmtDate(d.date)} の除外を解除`))));
   if (dates.length > MAX_ROWS) body.push(text(`…ほか${dates.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
@@ -84,7 +84,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。除外した日の空きは従来どおり通知され、ボタンで手動予約できます。', { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xl' }));
+  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。除外した日・枠の空きは自動予約されず、空き通知も届きません。', { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xl' }));
 
   const [, tm, td] = today.split('-').map(Number);
   return {

@@ -10,7 +10,7 @@
 //   各候補の実行(行列の中):
 //     まず「いま」の時刻で対象かどうかをもう一度判定する(要件 #11。23:59 に見つけて 00:01 に実行すると +3 日 = ペナルティ期間になる。
 //     +4 日の枠は 23:35 以降は自動予約しない)。対象外になっていたら予約せず、Pi 自身が従来の空き通知カード(予約ボタン付き)を送る
-//     (Actions は見つけた時点で「対象枠だから通知しない」と処理済みのことがあるため)。除外枠になっていたらカードも送らない。
+//     (Actions は見つけた時点で「対象枠だから通知しない」と処理済みのことがあるため)。除外日・除外枠になっていたらカードも送らない。
 //     その利用日の残り枚数が 0 なら見送り(ログイン不要)。そうでなければ reserve() を reservationList + beforeApply 付きで呼び、
 //     ログイン直後の予約一覧でその日の件数を数え、上限(2 件)なら予約せず 'capped'。成立したら結果カード(自動予約の表記。
 //     利用日 = 今日+4 日なら「無料キャンセルは今日 23:59 まで」とキャンセルボタン)。見送りはカードなし。
@@ -61,8 +61,9 @@ export function pollIntervalAt(nowMs, dayIntervalMs, night = AUTO_BOOKING.NIGHT)
   return inNight ? Math.max(night.POLL_INTERVAL_MS, dayIntervalMs) : dayIntervalMs;
 }
 
-// 結果カードを送らない結果: 見送りと、人が何もできない失敗(先に取られた・サイトが断った)。LINE の月 200 通の枠を節約する
-const SILENT_STATUSES = new Set(['capped', 'skipped', 'dry_run', 'taken', 'duplicate']);
+// 結果カードを送らない結果: 見送りと、人が何もできない失敗(先に取られた・サイトが断った・サイトのエラー)。LINE の月 200 通の枠を節約する。
+// 送るのは 成功、ログインできない(auth_error)、reCAPTCHA で拒否(rejected)、人に渡したが完了しなかった(abandoned)
+const SILENT_STATUSES = new Set(['capped', 'skipped', 'dry_run', 'taken', 'duplicate', 'error']);
 
 export function createAutoRunner({
   mode = 'dry-run',
@@ -168,7 +169,7 @@ export function createAutoRunner({
         return { newSlots: newSlots.length, planned: 0, reason: 'no_exclusions' };
       }
       const { byDate, skipped } = planAutoBooking(newSlots, { now: started, exclusions: ex });
-      for (const s of skipped) log(`  見送り: ${describe(s.slot)} (${s.reason}${s.kind === 'penalty' || s.kind === 'excluded_date' ? '。通知は Actions が行う' : ''})`);
+      for (const s of skipped) log(`  見送り: ${describe(s.slot)} (${s.reason}${s.kind === 'penalty' || s.kind === 'deadline' ? '。通知は Actions が行う' : s.kind === 'excluded_date' || s.kind === 'excluded_slot' ? '。通知もしない' : ''})`);
 
       let planned = 0;
       for (const [date, cands] of byDate) {
@@ -219,7 +220,7 @@ export function createAutoRunner({
     if (again.kind !== 'auto') {
       state.markAttempt(key, `skipped_${again.kind}`);
       state.save();
-      if (again.kind === 'excluded_slot') {
+      if (again.kind === 'excluded_slot' || again.kind === 'excluded_date') {
         log(`見送り(予約直前の再判定): ${describe(c)} (${again.reason}。通知もしない)`);
         return { status: 'skipped', message: again.reason };
       }
@@ -287,7 +288,7 @@ export function createAutoRunner({
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData }), '自動予約の結果カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true }), '自動予約の結果カード');
-    } else if (result.status === 'taken' || result.status === 'duplicate') {
+    } else if (result.status === 'taken' || result.status === 'duplicate' || result.status === 'error') {
       log(`結果カードは送りません(${result.status}。人が対応できる失敗ではないため。LINE の通数節約)`);
     }
     state.save();
