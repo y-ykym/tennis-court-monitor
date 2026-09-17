@@ -487,7 +487,7 @@ test('除外日: 見つけた時点で除外日なら見送り(通知は Actions
   assert.ok(logs.some((l) => l.includes('13:00') && l.includes('除外日') && l.includes('通知もしない')));
 });
 
-test('「その日は上限」の記憶は 15 分で忘れ、次はまた一覧を見て数える(取り消した後に見送り続けない)', async () => {
+test('「その日は上限」の記憶は 60 分で忘れ、次はまた一覧を見て数える(取り消した後に見送り続けない)', async () => {
   const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00' }] };
   const h = harness({
     reservations,
@@ -511,7 +511,7 @@ test('「その日は上限」の記憶は 15 分で忘れ、次はまた一覧�
   await flush();
   assert.equal(h.bookings.length, 1, 'ログインしていない');
   assert.equal(h.state.attemptStatus('1160|2026-09-27|13:00'), 'capped');
-  // 本人が取り消した。16 分後に出た枠は、記憶を忘れて一覧を見直す → 0 件なので予約する
+  // 本人が取り消した。60 分を過ぎて出た枠は、記憶を忘れて一覧を見直す → 0 件なので予約する
   reservations.A = [];
   h.advance(DAY_REMAINING_TTL_MS + 60_000);
   h.setSlots([slot('大島小松川公園', '2026-09-27', '15:00-17:00')]);
