@@ -190,7 +190,8 @@ function entry(r, today, nowHHMM, { first }) {
   const contents = [detailText(r, { past, rel })];
   // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)
   if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
-  return { type: 'box', layout: 'horizontal', alignItems: 'center', ...(first ? {} : { margin: 'md' }), contents };
+  // 同じ日の 2 件目以降は 12px 空ける(8px では 1 件目の公園名と 2 件目の時間が近すぎて 1 つの塊に見えた。2026-09-17 実機)
+  return { type: 'box', layout: 'horizontal', alignItems: 'center', ...(first ? {} : { margin: 'lg' }), contents };
 }
 
 // 1 日 = 1 行: [日付タイル] その日の予定を時間順に縦積み(1 件ならこれまでと同じ見え方)。
