@@ -4,7 +4,7 @@
 //   buildResultFlex({ slot, status, message, reservationNo, fee, facility }, label, opts?) → 予約結果(成功/失敗)
 //     opts = { auto: true }              フェーズ3 自動予約の結果(見出しに「自動予約」と入る)
 //            { cancelData: 'c|…' }      成功カードに「キャンセル」ボタン(postback。Worker の取消処理に流れる)を付ける。
-//                                       利用日 = 今日+4 日 の自動予約で使う(無料キャンセルが今日 23:59 まで)
+//                                       利用日 = 今日+4 日 の自動予約で使う(ペナルティなしで取り消せるのが今日 23:59 まで)
 //   buildChallengeFlex({ slot, facility, label, url, minutes })                      → reCAPTCHA の確認をお願いするカード
 //                                                                                     (url を開くと予約サイトの確認画面がそのまま出る)
 //   pushResult(message, { token, to })                                              → LINE push(失敗時は例外)
@@ -76,7 +76,7 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
   const title = ok ? `🎾 予約完了${suffix}` : `⚠️ 予約できませんでした${suffix}`;
   const rows = [row('予約者', label), row('日時', slotText(r.slot)), row('公園', r.facility || r.slot.park)];
   if (ok && cancelData) {
-    // 利用日が 4 日後: 無料で取り消せるのは今日中だけなので目立たせる
+    // 利用日が 4 日後: ペナルティなしで取り消せるのは今日中だけなので目立たせる(取消自体に費用はかからない。付くのはペナルティ 1 点)
     rows.push({
       type: 'box',
       layout: 'vertical',
@@ -84,7 +84,7 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
       backgroundColor: '#FFF7E6',
       cornerRadius: 'md',
       paddingAll: '10px',
-      contents: [{ type: 'text', text: '⚠ 無料キャンセルは今日 23:59 まで(利用日が 4 日後のため。明日からはペナルティが付きます)', size: 'xs', color: '#8A4B00', wrap: true }],
+      contents: [{ type: 'text', text: '⚠ ペナルティなしで取り消せるのは今日 23:59 まで(利用日が 4 日後のため。明日からは取消にペナルティ 1 点が付きます)', size: 'xs', color: '#8A4B00', wrap: true }],
     });
   }
   if (ok) {
@@ -104,7 +104,7 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
         type: 'text',
         text: cancelData
           ? '取り消すときは下の「キャンセル」(今日中)。明日以降は「予約一覧を見る」→ その行の「キャンセル」(ペナルティ付き)。'
-          : '取り消すときは「予約一覧を見る」→ その行の「キャンセル」。利用日の4日前まで無料です。',
+          : '取り消すときは「予約一覧を見る」→ その行の「キャンセル」。利用日の4日前までならペナルティは付きません。',
         size: 'xs',
         color: '#777777',
         wrap: true,
@@ -133,7 +133,7 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
               style: 'primary',
               color: COLOR_NG,
               height: 'sm',
-              action: { type: 'postback', label: 'キャンセル(今日中は無料)', data: cancelData, displayText: `${slotText(r.slot)} ${r.facility || ''} をキャンセル`.trim() },
+              action: { type: 'postback', label: 'キャンセル(今日中はペナルティなし)', data: cancelData, displayText: `${slotText(r.slot)} ${r.facility || ''} をキャンセル`.trim() },
             },
           ],
         },
