@@ -385,8 +385,11 @@ const server = http.createServer((req, res) => {
       res,
       200,
       JSON.stringify({
-        mode: AUTO_MODE,
-        active: !!autoRunner?.active,
+        // mode: 'on' | 'paused'(LINE の「じどうおふ」で停止中) | 'dry-run' | 'off'。Worker が生存判定に使う
+        mode: autoRunner ? autoRunner.effectiveMode() : AUTO_MODE,
+        envMode: AUTO_MODE,
+        active: !!autoRunner && autoRunner.effectiveMode() === 'on',
+        enabled: autoRunner ? autoRunner.remoteEnabled() : null,
         startedAt: SERVER_STARTED_AT,
         now: Date.now(),
         intervalMs: autoRunner?.intervalMs ?? null,

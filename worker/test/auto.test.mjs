@@ -6,6 +6,7 @@ import {
   buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE,
 } from '../src/auto.js';
 import { buildPostbackReply, MSG_AUTO_UNAVAILABLE } from '../src/index.js';
+import { handleAutoSwitchCommand, loadAutoSwitch, AUTO_ON_TEXT, AUTO_OFF_TEXT } from '../src/auto.js';
 import { signCancelToken } from '../src/cancel-token.js';
 import { runMonitor, AUTO_STALL_MS, PROBE_ATTEMPTS as MONITOR_PROBE_ATTEMPTS } from '../src/monitor.js';
 import { pickTextCommandEvents } from '../src/line.js';
@@ -274,4 +275,30 @@ test('生存監視: Pi は動いているのに自動予約の照会が 15 分�
   assert.equal((await withPiStatus({ mode: 'on', startedAt: NOW, lastCycle: null }, () => runMonitor(env2, { now: NOW + 60000, probe: up, push }))).autoNotified, null, '起動直後');
   assert.equal((await withPiStatus(null, () => runMonitor(env2, { now: NOW + 3600000, probe: up, push }))).autoNotified, null, '届かない');
   assert.equal(MONITOR_PROBE_ATTEMPTS, 4);
+});
+
+test('「じどうおふ」「じどうおん」: KV のスイッチを切り替え、heartbeat と /auto/state に enabled が載る。カードに結果を添える', async () => {
+  const env = envOf();
+  env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
+  assert.equal((await loadAutoSwitch(env)).enabled, true, '既定は ON');
+  // OFF
+  const off = await withPiStatus({ mode: 'on', active: true, lastCycle: { at: NOW } }, () => handleAutoSwitchCommand(env, false, { now: NOW }));
+  assert.ok(texts(off.flex.contents).some((s) => s.includes('自動予約を OFF にしました')));
+  assert.ok(texts(off.flex.contents).some((s) => s.includes('じどうおふ') && s.includes('OFF')), '状態行が OFF 表示');
+  assert.equal((await loadAutoSwitch(env)).enabled, false);
+  const hb = await (await handleAuto(signed('POST', '/auto/heartbeat', { active: true, mode: 'on' }, NOW), env, ctx, { now: NOW })).json();
+  assert.equal(hb.enabled, false, 'Pi は heartbeat の応答で受け取る');
+  // Pi が paused を申告 → alive だが active=false
+  await withPiStatus({ mode: 'paused', active: false, lastCycle: { at: NOW } }, async () => {
+    const st = await (await handleAuto(signed('GET', '/auto/state', undefined, NOW), env, ctx, { now: NOW })).json();
+    assert.deepEqual([st.alive, st.active, st.mode, st.enabled], [true, false, 'paused', false]);
+  });
+  // ON(Pi の .env が dry-run なら注意書き)
+  const on = await withPiStatus({ mode: 'dry-run', active: false, lastCycle: { at: NOW } }, () => handleAutoSwitchCommand(env, true, { now: NOW }));
+  assert.ok(texts(on.flex.contents).some((s) => s.includes('自動予約を ON にしました') && s.includes('dry-run')));
+  assert.equal((await loadAutoSwitch(env)).enabled, true);
+  // 合言葉の抽出
+  const ev = (text) => ({ type: 'message', replyToken: 'rt', source: { type: 'group', groupId: 'C1' }, message: { type: 'text', text } });
+  const raw = JSON.stringify({ events: [ev('じどうおん'), ev('じどうおふ'), ev('じどう'), ev('じどう おん')] });
+  assert.equal(pickTextCommandEvents(raw, 'C1', ['じどう', AUTO_ON_TEXT, AUTO_OFF_TEXT]).length, 3);
 });

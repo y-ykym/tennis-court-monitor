@@ -13,6 +13,8 @@
 //
 //   LINE:
 //     「じどう」→ 除外日・除外枠の一覧カード(各行に「解除」、フッターに「日を追加」= 日付ピッカー)。auto-flex.js
+//     「じどうおふ」/「じどうおん」→ 自動予約の一時停止 / 再開(KV auto_switch。Pi は heartbeat の応答で受け取り、次の照会から従う。
+//       停止中は Pi が mode='paused' を申告し、Actions は従来どおり全部通知する。Pi 側の .env が dry-run/off のときは LINE から ON にはできない)
 //     postback 'x|a|-|<exp>.<sig>'(日を追加。params.date に選んだ日)/ 'x|d|YYYYMMDD|<exp>.<sig>'(除外日を解除)/
 //              'x|s|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(除外枠を解除)。署名は cancel-token.js と同じ HMAC 先頭 16 バイト
 //     キャンセル成功時(index.js)→ addExcludedSlots() で除外枠に(LINE の返信より先に KV へ書く)
@@ -23,6 +25,9 @@ import { PARK_NAMES } from './booking.js';
 import { buildAutoSettingsFlex, autoSettingsText } from './auto-flex.js';
 
 export const AUTO_COMMAND_TEXT = 'じどう';
+export const AUTO_ON_TEXT = 'じどうおん';
+export const AUTO_OFF_TEXT = 'じどうおふ';
+export const KV_SWITCH = 'auto_switch'; // { enabled: boolean, at }。無ければ有効
 export const AUTO_POSTBACK_PREFIX = 'x|';
 export const KV_EXCLUSIONS = 'auto_exclusions';
 const KV_URL_KEY = 'booking_url'; // booking.js と同じ(Pi のトンネル URL)
@@ -152,6 +157,22 @@ export async function removeExcludedSlot(env, key, now = Date.now()) {
   return saveExclusions(env, ex, now);
 }
 
+// ---- LINE からの一時停止スイッチ(既定は有効) ----
+export async function loadAutoSwitch(env) {
+  try {
+    const v = JSON.parse((await env.BOOKING_KV.get(KV_SWITCH)) || 'null');
+    return v && typeof v.enabled === 'boolean' ? v : { enabled: true, at: null };
+  } catch {
+    return { enabled: true, at: null };
+  }
+}
+export async function setAutoSwitch(env, enabled, now = Date.now()) {
+  const v = { enabled: !!enabled, at: now };
+  await env.BOOKING_KV.put(KV_SWITCH, JSON.stringify(v));
+  console.log(`[auto] LINE から自動予約を ${enabled ? 'ON' : 'OFF'} にしました`);
+  return v;
+}
+
 // ---- Pi の生存(KV ではなく、登録済みの URL 越しに Pi の /auto/status を聞く) ----
 // 戻り値: { registered, reachable, alive, active, mode, lastSeenAt, startedAt, reason }
 //   registered  Pi の URL 登録があるか(無ければ Pi・Docker・回線のどれかが止まっている)
@@ -170,9 +191,9 @@ export async function autoStatus(env, now = Date.now(), { attempts = PROBE_ATTEM
         reason = `HTTP ${res.status}`;
       } else {
         const st = await res.json();
-        const mode = typeof st.mode === 'string' ? st.mode : 'off';
+        const mode = typeof st.mode === 'string' ? st.mode : 'off'; // 'on' | 'paused'(LINE で OFF) | 'dry-run' | 'off'
         const lastSeenAt = typeof st.lastCycle?.at === 'number' ? st.lastCycle.at : null;
-        const looping = mode === 'on' || mode === 'dry-run';
+        const looping = mode === 'on' || mode === 'dry-run' || mode === 'paused';
         const alive = looping && lastSeenAt != null && now - lastSeenAt <= ALIVE_WITHIN_MS;
         return { registered: true, reachable: true, alive, active: alive && mode === 'on', mode, lastSeenAt, startedAt: typeof st.startedAt === 'number' ? st.startedAt : null, reason: '' };
       }
@@ -219,13 +240,13 @@ export async function handleAuto(request, env, ctx, { now = Date.now() } = {}) {
   }
 
   if (p === '/auto/state' && request.method === 'GET') {
-    const [status, ex] = await Promise.all([autoStatus(env, now), loadExclusions(env, now)]);
-    return Response.json({ ...status, ...ex });
+    const [status, ex, sw] = await Promise.all([autoStatus(env, now), loadExclusions(env, now), loadAutoSwitch(env)]);
+    return Response.json({ ...status, ...ex, enabled: sw.enabled });
   }
   if (p === '/auto/heartbeat' && request.method === 'POST') {
     // KV には何も書かない(書き込みは無料枠 1 日 1,000 回。生存は /auto/state が Pi を直接 probe して判定する)
-    const ex = await loadExclusions(env, now);
-    return Response.json({ ...ex, serverTime: now });
+    const [ex, sw] = await Promise.all([loadExclusions(env, now), loadAutoSwitch(env)]);
+    return Response.json({ ...ex, enabled: sw.enabled, serverTime: now });
   }
   if (p === '/auto/exclusions' && request.method === 'POST') {
     const ex = await addExcludedSlots(env, Array.isArray(json.addSlots) ? json.addSlots : [], now);
@@ -256,9 +277,28 @@ export async function verifyAutoData(secret, data, now = Date.now()) {
   return { kind: f[1], value: f[2], exp: Number(f[3]), expired: Number(f[3]) * 1000 < now };
 }
 
+// 「じどうおん」「じどうおふ」への返信。スイッチを KV に保存し、状態カードに結果を添えて返す
+export async function handleAutoSwitchCommand(env, enabled, { now = Date.now() } = {}) {
+  await setAutoSwitch(env, enabled, now);
+  const status = await autoStatus(env, now);
+  let note;
+  if (enabled) {
+    note = '自動予約を ON にしました。Pi は次の照会(1〜3 分以内)から予約を再開します';
+    if (status.reachable && status.mode !== 'on' && status.mode !== 'paused') {
+      note += `。ただし Pi 側の設定が ${status.mode}(.env の AUTO_BOOKING)のため、Pi の設定を on にするまで実際には予約しません`;
+    } else if (!status.reachable) {
+      note += '(いま Pi に届いていません。Pi が動いていれば、復帰後に反映されます)';
+    }
+  } else {
+    note = '自動予約を OFF にしました。Pi は次の照会(1〜3 分以内)から予約せず、空きは従来どおり通知カードで届きます。再開は「じどうおん」';
+  }
+  return buildAutoSettingsReply(env, { now, note });
+}
+
 // 「じどう」への返信(一覧カード)。戻り値 { flex, text }
 export async function buildAutoSettingsReply(env, { now = Date.now(), note = null } = {}) {
-  const [status, ex] = await Promise.all([autoStatus(env, now), loadExclusions(env, now)]);
+  const [status, ex, sw] = await Promise.all([autoStatus(env, now), loadExclusions(env, now), loadAutoSwitch(env)]);
+  status.enabled = sw.enabled;
   const today = jstTodayIso(now);
   const exp = Math.floor(now / 1000) + SETTINGS_BUTTON_TTL_SEC;
   const secret = env.BOOKING_SIGNING_SECRET;
