@@ -47,6 +47,8 @@ const EXCLUSIONS_MAX_AGE_MS = 30 * 60 * 1000;
 const NO_RETRY_STATUSES = new Set(['queued', 'running', 'success']);
 // 照会が間隔より長くかかったとき、次の照会までに最低これだけ空ける
 export const MIN_GAP_MS = 15 * 1000;
+// 「その日は既に上限まで予約がある」という記憶の有効時間。過ぎたら次の候補でまた一覧を見て数える
+export const DAY_REMAINING_TTL_MS = 15 * 60 * 1000;
 
 // 次の照会までの待ち時間: 「前回の開始 + 間隔」を目標にし、既に過ぎていれば MIN_GAP_MS だけ空ける
 export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_GAP_MS }) {
@@ -89,8 +91,18 @@ export function createAutoRunner({
   let exclusions = null; // { dates, slots, at }
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
   let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
-  // 利用日ごとの残り枚数(予約一覧を見た結果から。null = まだ分からない)
-  const dayRemaining = new Map();
+  // 利用日ごとの残り枚数(予約一覧を見た結果から)。DAY_REMAINING_TTL_MS を過ぎたら忘れて、次はまた一覧を見て数える
+  // (本人が LINE やサイトで取り消した後に「まだ 1 件ある」と思い込み続けないため)
+  const dayRemaining = new Map(); // date → { remaining, at }
+  const remainingFor = (date) => {
+    const r = dayRemaining.get(date);
+    if (!r) return null;
+    if (now() - r.at > DAY_REMAINING_TTL_MS) {
+      dayRemaining.delete(date);
+      return null;
+    }
+    return r.remaining;
+  };
 
   const describe = (s) => `${s.date} ${s.time || `${startHHMM(s.startHour)}-`} ${s.facility || parkOf(s.park)?.name || s.park}`;
 
@@ -232,7 +244,7 @@ export function createAutoRunner({
       }
       return { status: 'skipped', message: again.reason, notified: true };
     }
-    const remaining = dayRemaining.get(c.date);
+    const remaining = remainingFor(c.date);
     if (remaining != null && remaining <= 0) {
       log(`見送り: ${describe(c)} (${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため。ログインせず)`);
       state.markAttempt(key, 'capped');
@@ -258,7 +270,7 @@ export function createAutoRunner({
       result = { status: 'error', message: e.message };
     }
     const ok = result.status === 'success';
-    if (listCount != null) dayRemaining.set(c.date, AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0));
+    if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() });
     state.markAttempt(key, result.status);
     log(`自動予約 結果: ${result.status} ${describe(c)} ${result.message || ''}`.trim());
 
