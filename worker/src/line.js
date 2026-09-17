@@ -120,12 +120,14 @@ export function replyText(accessToken, replyToken, text) {
   return replyMessages(accessToken, replyToken, [{ type: 'text', text }]);
 }
 
-// push API でテキスト 1 件を送る(replyToken 不要。Cron からの監視通知などボットが自発的に送るとき)
-export async function pushText(accessToken, to, text) {
+// push API でメッセージ(最大5件)を送る(replyToken 不要。Cron からの監視通知などボットが自発的に送るとき)。
+// reply と違い push は LINE の通数を消費する(グループ宛は 1 回で人数分)。例外には status を持たせ、
+// 400(メッセージ形式の不備)ならテキストで送り直す判断に使う
+export async function pushMessages(accessToken, to, messages) {
   const res = await fetch(LINE_PUSH_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ to, messages: [{ type: 'text', text }] }),
+    body: JSON.stringify({ to, messages }),
     signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
@@ -133,4 +135,9 @@ export async function pushText(accessToken, to, text) {
     err.status = res.status;
     throw err;
   }
+}
+
+// テキスト1件を送る
+export function pushText(accessToken, to, text) {
+  return pushMessages(accessToken, to, [{ type: 'text', text }]);
 }

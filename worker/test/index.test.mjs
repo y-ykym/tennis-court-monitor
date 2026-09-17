@@ -65,6 +65,22 @@ test('postback: 「キャンセル」ボタン → 確認カード(はい=10分�
   assert.equal(pb[0].displayText, 'はい');
 });
 
+test('postback: 明日からペナルティ対象になる予約は「はい」も今日 23:59 で切れる(0時をまたいで押させない。フェーズ4)', async () => {
+  // JST 9/6 23:55。9/10 は「今日はまだ無料、明日になると 3 日以内」の境目 → 「はい」は 10 分後(0:05)ではなく 23:59:59 まで
+  const late = Date.parse('2026-09-06T14:55:00Z');
+  const token = await signCancelToken(SECRET, { ...base, date: '2026-09-10', kind: 'c', exp: Math.floor(late / 1000) + 3600 });
+  const reply = await buildPostbackReply(env, token, { now: late });
+  const yes = await verifyCancelToken(SECRET, postbacks(reply.flex.contents)[0].data, late);
+  assert.equal(new Date(yes.exp * 1000).toISOString(), '2026-09-06T14:59:59.000Z', 'JST 9/6 23:59:59');
+  assert.equal(texts(reply.flex.contents).some((s) => s.includes('ペナルティ')), false, '今日のうちはまだ無料なので警告は出さない');
+
+  // 期限がまだ先の予約(9/18)は従来どおり 10 分。0 時をまたいでも取消は無料なので切らない
+  const far = await signCancelToken(SECRET, { ...base, kind: 'c', exp: Math.floor(late / 1000) + 3600 });
+  const farReply = await buildPostbackReply(env, far, { now: late });
+  const farYes = await verifyCancelToken(SECRET, postbacks(farReply.flex.contents)[0].data, late);
+  assert.equal(farYes.exp, Math.floor(late / 1000) + 600);
+});
+
 test('postback: 利用日が3日以内ならペナルティ警告が付く', async () => {
   const token = await signCancelToken(SECRET, { ...base, date: '2026-09-08', kind: 'c', exp: Math.floor(NOW / 1000) + 3600 });
   const reply = await buildPostbackReply(env, token, { now: NOW });
@@ -89,6 +105,12 @@ test('attachCancelData: 終了済み以外の予約に署名付き data を付�
   assert.equal(v.person, 'A');
   assert.equal(v.exp, Math.floor(NOW / 1000) + 3600, 'ボタンの期限は60分');
   assert.equal(results[0].reservations[1].cancelData, undefined, '終了済みにはボタン無し');
+
+  // フェーズ4 のアラートは期限を指定して渡す(今日 23:59 まで)
+  const alert = [{ slot: 'A', label: 'A', reservations: [{ id: '1', date: '2026-09-10', start: '17:00', end: '19:00', facility: 'x', penaltyDay: 3 }] }];
+  const endOfDay = Math.floor(Date.parse('2026-09-06T14:59:59Z') / 1000);
+  await attachCancelData(env, alert, { today: '2026-09-06', nowHHMM: '12:00', now: NOW, exp: endOfDay });
+  assert.equal((await verifyCancelToken(SECRET, alert[0].reservations[0].cancelData, NOW)).exp, endOfDay);
 
   const off = [{ slot: 'A', label: 'A', reservations: [{ id: '1', date: '2026-09-18', start: '17:00', end: '19:00', facility: 'x' }] }];
   await attachCancelData({ ...env, CANCEL_ENABLED: '0' }, off, { today: '2026-09-06', nowHHMM: '12:00', now: NOW });

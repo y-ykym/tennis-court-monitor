@@ -402,3 +402,90 @@ export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
     },
   };
 }
+
+// ---- フェーズ4 ペナルティ予告アラート ----
+//
+// 「今日 23:59 までにキャンセルすればペナルティが付かない」予約だけを並べたカード(src/penalty-alert.js から使う)。
+// 一覧カードと違い人ごとに分けず、1 枚に A・B 混ぜて日付順に並べる(対象は普通 0〜2 件で、
+// カルーセルにすると横スワイプが必要になり、締切前に見落とすため)。
+//
+//   ┌────────────────────────────────────────┐
+//   │ ⏰ 今日中にキャンセル          9/17 9:00 現在 │ ← 琥珀ヘッダー(確認カードと同色)
+//   ├────────────────────────────────────────┤
+//   │ 今日 23:59 までなら、ペナルティなしで取り消せます │
+//   │ ┌────┐ 9:00 - 11:00            (キャンセル) │
+//   │ │9/21│ 猿江恩賜公園  ゆうたそ                │
+//   │ │ 日 │                                    │
+//   │ └────┘                                    │
+//   │ ⚠ 明日 0:00 を過ぎると、取り消しにペナルティ(1点) │
+//   ├────────────────────────────────────────┤
+//   │ 予約サイトを開く            一覧を更新        │
+//   └────────────────────────────────────────┘
+
+const ALERT_MAX_ROWS = 15;
+
+// 1 行: [日付タイル] 時間 / 公園名 + 予約者 [キャンセル]
+function penaltyRow(label, r) {
+  const spans = [
+    span(r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : '時間不明', { size: 'md', weight: 'bold', color: COLOR_TEXT }),
+    span(`\n${r.facility || '施設不明'}`, { size: 'sm', color: COLOR_SUB }),
+    span(`  ${label}`, { size: 'xs', weight: 'bold', color: COLOR_LABEL_FG }),
+  ];
+  const contents = [dateTile(r.date, false), { type: 'text', flex: 1, margin: 'md', wrap: true, contents: spans }];
+  if (r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
+  return { type: 'box', layout: 'horizontal', margin: 'lg', alignItems: 'center', contents };
+}
+
+// rows: [{ label, reservation }](日付・開始時刻の昇順で渡す)
+// kind: 'morning'(朝 9 時の予告)| 'deadline'(23:35 の最終確認)
+// failedLabels: 予約サイトから取得できなかった人の名前(いれば「確認できていません」の断り書きを出す)
+export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', failedLabels = [] }) {
+  const deadline = kind === 'deadline';
+  const contents = [
+    text(deadline ? 'まもなく期限です。今日 23:59 までならペナルティなしで取り消せます' : '今日 23:59 までにキャンセルすれば、ペナルティは付きません', {
+      size: 'sm',
+      weight: 'bold',
+      color: COLOR_TEXT,
+      margin: 'lg',
+      wrap: true,
+    }),
+  ];
+  // 対象は普通 0〜2 件だが、念のため 30KB 制限に当たらないよう上限を設ける
+  const shown = rows.slice(0, ALERT_MAX_ROWS);
+  shown.forEach(({ label, reservation }, i) => {
+    if (i > 0) contents.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
+    contents.push(penaltyRow(label, reservation));
+  });
+  if (rows.length > shown.length) {
+    contents.push(text(`…ほか${rows.length - shown.length}件(「よやく」で全部見られます)`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+  }
+  contents.push({
+    type: 'box',
+    layout: 'vertical',
+    margin: 'lg',
+    backgroundColor: COLOR_WARN_BG,
+    cornerRadius: 'md',
+    paddingAll: '10px',
+    contents: [
+      text('⚠ 日付が変わると取り消しにペナルティ(1点)が付きます。このボタンも 23:59 で使えなくなります', { size: 'xxs', color: COLOR_WARN_FG, wrap: true }),
+    ],
+  });
+  if (failedLabels.length > 0) {
+    contents.push(text(`※ ${failedLabels.join('・')} は予約サイトに繋がらず確認できていません`, { size: 'xxs', color: COLOR_ERROR, margin: 'md', wrap: true }));
+  }
+  const first = rows[0];
+  const alt = first
+    ? `⏰ 今日23:59までにキャンセル: ${reservationText(first.label, first.reservation)}${rows.length > 1 ? ` ほか${rows.length - 1}件` : ''}`
+    : '⏰ 今日23:59までにキャンセル';
+  return {
+    type: 'flex',
+    altText: alt.slice(0, 400),
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      header: header(deadline ? '⏰ まもなく期限(23:59)' : '⏰ 今日中にキャンセル', nowText || null, COLOR_CONFIRM_BG),
+      body: body(contents),
+      footer: linkFooter([siteLinkButton(), refreshButton()]),
+    },
+  };
+}

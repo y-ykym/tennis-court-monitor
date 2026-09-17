@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, jstNowHHMM, bubbleBytes, MAX_BUBBLE_BYTES, MAX_CAROUSEL_BYTES } from '../src/flex.js';
+import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, buildPenaltyAlertFlex, jstNowHHMM, bubbleBytes, MAX_BUBBLE_BYTES, MAX_CAROUSEL_BYTES } from '../src/flex.js';
 
 const A = [
   { id: '2026000001', date: '2026-09-13', start: '11:00', end: '13:00', facility: '亀戸中央公園', status: '支払前' },
@@ -180,4 +180,25 @@ test('flex: 結果カード(成功=緑・打ち消し線 / 失敗=グレー・�
   assert.equal(t2[0], 'キャンセルできませんでした');
   assert.ok(t2.some((s) => s.includes('予約サイトで状態を確認')));
   assert.equal(ng.contents.header.backgroundColor, '#6B7280');
+});
+
+// ---- フェーズ4 ペナルティ予告アラートのカード ----
+test('buildPenaltyAlertFlex: 23:35 版は見出しが変わり、取得失敗した人の断り書きと行数上限が付く', () => {
+  const r = (over = {}) => ({ id: '1', date: '2026-09-21', start: '09:00', end: '11:00', facility: '猿江恩賜公園', cancelData: 'c|A|x', ...over });
+  const rows = Array.from({ length: 18 }, (_, i) => ({ label: i % 2 ? 'B' : 'ゆうたそ', reservation: r({ id: String(i) }) }));
+
+  const morning = buildPenaltyAlertFlex({ rows: [{ label: 'ゆうたそ', reservation: r() }], kind: 'morning', nowText: '9/17 9:00 現在' });
+  const mt = texts(morning.contents);
+  assert.ok(mt.includes('⏰ 今日中にキャンセル'));
+  assert.ok(mt.some((s) => s.includes('今日 23:59 までにキャンセルすれば')));
+  assert.ok(mt.some((s) => s.includes('ペナルティ(1点)')));
+  assert.equal(find(morning.contents, (n) => n.type === 'postback').length, 1);
+
+  const night = buildPenaltyAlertFlex({ rows, kind: 'deadline', nowText: '9/17 23:35 現在', failedLabels: ['B'] });
+  const nt = texts(night.contents);
+  assert.ok(nt.includes('⏰ まもなく期限(23:59)'));
+  assert.ok(nt.some((s) => s.includes('まもなく期限です')));
+  assert.ok(nt.some((s) => s.includes('…ほか3件')), '15行を超えた分はまとめる');
+  assert.ok(nt.some((s) => s.includes('B は予約サイトに繋がらず確認できていません')));
+  assert.ok(bubbleBytes(night.contents) <= MAX_BUBBLE_BYTES);
 });
