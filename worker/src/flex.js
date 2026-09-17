@@ -11,8 +11,9 @@
 //   │ │ 日 │                         │ │ │ 月 │                         │     右端: 「キャンセル」ピル(postback。フェーズ1.6)
 //   │ └────┘                         │ │ └────┘                         │
 //   │ ┌────┐ 17:00 - 19:00 (キャンセル)│ │                               │
-//   │ │9/7 │ 大島小松川公園  明日     │ │                               │
-//   │ └────┘                         │ │                               │
+//   │ │9/7 │ 大島小松川公園  明日     │ │                               │  ← 同じ日の予定は 1 つのタイルの右に時間順で縦に並ぶ
+//   │ │ 月 │ 19:00 - 21:00            │ │                               │     (2026-09-17 変更。キャンセルボタンは予定ごと)
+//   │ └────┘ 🐻 ストローク多め練      │ │                               │
 //   ├──────────────────────────────┤ ├──────────────────────────────┤
 //   │ 予約サイトを開く   一覧を更新  │ │ 予約サイトを開く   一覧を更新  │  ← フッター
 //   └──────────────────────────────┘ └──────────────────────────────┘
@@ -181,15 +182,40 @@ function cancelPill(r, data) {
   };
 }
 
-// 1予約 = 1行: [日付タイル] 時間 / 公園名 + 補足 [キャンセル]
-// 終了済み(当日で時間を過ぎたもの)は全体をグレーにして「終了」を添え、ボタンは付けない
-function reservationRow(r, today, nowHHMM) {
+// 1 予定ぶん: 時間 / 公園名 + 補足 [キャンセル](日付タイルは持たない。同じ日の予定と 1 つのタイルを共有する)
+// 終了済み(当日で時間を過ぎたもの)は文字をグレーにして「終了」を添え、ボタンは付けない
+function entry(r, today, nowHHMM, { first }) {
   const past = isPast(r, today, nowHHMM);
   const rel = past ? '終了' : r.date ? relativeLabel(r.date, today) : null;
-  const contents = [dateTile(r.date, past), detailText(r, { past, rel })];
+  const contents = [detailText(r, { past, rel })];
   // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)
   if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
-  return { type: 'box', layout: 'horizontal', margin: 'lg', alignItems: 'center', contents };
+  return { type: 'box', layout: 'horizontal', alignItems: 'center', ...(first ? {} : { margin: 'md' }), contents };
+}
+
+// 1 日 = 1 行: [日付タイル] その日の予定を時間順に縦積み(1 件ならこれまでと同じ見え方)。
+// タイルはその日の予定が全部終了していればグレー。日付の無い予定は 1 件ずつ別の行にする
+function dayRow(group, today, nowHHMM) {
+  const allPast = group.every((r) => isPast(r, today, nowHHMM));
+  const entries = group.map((r, i) => entry(r, today, nowHHMM, { first: i === 0 }));
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    margin: 'lg',
+    alignItems: 'center',
+    contents: [dateTile(group[0].date, allPast), { type: 'box', layout: 'vertical', flex: 1, contents: entries }],
+  };
+}
+
+// 日付・開始時刻の昇順に並んだ予定を、同じ日付ごとにまとめる(日付が無いものは 1 件ずつ)
+export function groupByDate(rows) {
+  const groups = [];
+  for (const r of rows) {
+    const last = groups[groups.length - 1];
+    if (r.date && last && last[0].date === r.date) last.push(r);
+    else groups.push([r]);
+  }
+  return groups;
 }
 
 // 人の名前ラベル(薄い紺の角丸)
@@ -284,15 +310,13 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
     } else {
       right = `${asOf} ・ ${merged.length}件`;
     }
-    let hidden = 0;
-    merged.forEach((r, j) => {
-      if (j >= maxRows) {
-        hidden++;
-        return;
-      }
-      // 行と行の間に薄い罫線(目が滑らないように)
+    // maxRows は「予定の数」で数える(同じ日をまとめても件数の上限の意味は変えない)
+    const shown = merged.slice(0, maxRows);
+    const hidden = merged.length - shown.length;
+    groupByDate(shown).forEach((group, j) => {
+      // 日と日の間に薄い罫線(目が滑らないように)。同じ日の中は罫線を引かない
       if (j > 0 || p.error) rows.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
-      rows.push(reservationRow(r, today, nowHHMM));
+      rows.push(dayRow(group, today, nowHHMM));
     });
     if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
     // テニスベアだけ失敗: 黙って 0 件に見せず、末尾に小さく 1 行(§15.2)
