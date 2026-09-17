@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -482,4 +482,38 @@ test('除外日: 見つけた時点で除外日なら見送り(通知は Actions
   const r = await runner.tick();
   assert.equal(r.planned, 0);
   assert.ok(logs.some((l) => l.includes('13:00') && l.includes('除外日') && l.includes('通知もしない')));
+});
+
+test('「その日は上限」の記憶は 15 分で忘れ、次はまた一覧を見て数える(取り消した後に見送り続けない)', async () => {
+  const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00' }] };
+  const h = harness({
+    reservations,
+    book: async (c, { beforeApply }) => {
+      h.bookings.push(c.key);
+      const stop = await beforeApply({ reservations: reservations.A });
+      if (stop) return stop;
+      return { status: 'success', reservationNo: 'R1', facility: c.facility };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'capped', '一覧に 1 件あるので見送り');
+  // 5 分後に別の枠が出ても、記憶が生きているのでログインせずに見送り
+  h.advance(5 * 60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.bookings.length, 1, 'ログインしていない');
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|13:00'), 'capped');
+  // 本人が取り消した。16 分後に出た枠は、記憶を忘れて一覧を見直す → 0 件なので予約する
+  reservations.A = [];
+  h.advance(DAY_REMAINING_TTL_MS + 60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '15:00-17:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.bookings.length, 2, 'また一覧を見た');
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|15:00'), 'success');
 });
