@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -519,4 +519,35 @@ test('「その日は上限」の記憶は 15 分で忘れ、次はまた一覧�
   await flush();
   assert.equal(h.bookings.length, 2, 'また一覧を見た');
   assert.equal(h.state.attemptStatus('1160|2026-09-27|15:00'), 'success');
+});
+
+test('ログイン拒否(auth_error): その予約者の自動予約を 6 時間止め、カードは最初の 1 回だけ。カードの公園は名前で出す', async () => {
+  let n = 0;
+  const h = harness({ book: async () => { n++; return { status: 'auth_error', message: 'ログインが拒否されました' }; } });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-26', '09:00-11:00')]); // 土 → A
+  await h.runner.tick();
+  await flush();
+  assert.equal(n, 1);
+  assert.equal(h.notified.length, 1);
+  assert.match(JSON.stringify(h.notified[0].m.contents.body), /猿江恩賜公園/, '公園コードではなく名前');
+  // 10 分後に別の A の枠 → ログインせず見送り(B の枠は影響なし)
+  h.advance(10 * 60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-26', '09:00-11:00'), slot('大島小松川公園', '2026-09-27', '13:00-15:00'), slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')]);
+  const r = await h.runner.tick();
+  await flush();
+  assert.equal(r.planned, 1, 'B(9/25 金)だけ行列へ');
+  assert.equal(n, 2, 'B の分だけログインを試した');
+  assert.equal(h.notified.length, 2, 'B の auth_error は B としては最初なのでカードあり');
+  assert.ok(h.logs.some((l) => l.includes('予約者 A はログインが拒否されたため')));
+  // 6 時間過ぎたら A も 1 回だけ試し直す(カードは 6 時間ぶりなので出す)
+  h.advance(AUTH_PAUSE_MS);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '13:00-15:00'), slot('亀戸中央公園', '2026-09-27', '15:00-17:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(n, 3);
 });
