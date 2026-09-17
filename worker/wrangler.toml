@@ -1,4 +1,4 @@
-# Cloudflare Workers の設定(フェーズ1.5 予約確認ボット)
+# Cloudflare Workers の設定(フェーズ1.5 予約確認ボット + 1.6 キャンセル + フェーズ3 の状態置き場 + フェーズ4 予告アラート + フェーズ5 テニスベア合流)
 #
 # ここに Secrets(トークン・パスワード・利用者番号)は絶対に書かない。
 # Secrets は `npx wrangler secret put <NAME>` で登録する(一覧は .dev.vars.example / README 参照)。
