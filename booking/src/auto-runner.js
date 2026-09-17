@@ -99,6 +99,7 @@ export function createAutoRunner({
   let running = false;
   let exclusions = null; // { dates, slots, at }
   let remoteEnabled = true; // LINE の「じどうおふ」で false(Worker の応答で更新)
+  let remoteNotify = true; // LINE の「つうちおふ」で false(予約直前に対象外になった枠の空き通知カードを送らない)
   const effectiveMode = () => (mode === 'on' && !remoteEnabled ? 'paused' : mode);
   const bookingEnabled = () => mode === 'on' && remoteEnabled;
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
@@ -126,6 +127,10 @@ export function createAutoRunner({
       if (res && typeof res.enabled === 'boolean' && res.enabled !== remoteEnabled) {
         remoteEnabled = res.enabled;
         log(remoteEnabled ? 'LINE の「じどうおん」で自動予約を再開します' : 'LINE の「じどうおふ」で自動予約を停止します(照会は続け、予約はしない)');
+      }
+      if (res && typeof res.notifyEnabled === 'boolean' && res.notifyEnabled !== remoteNotify) {
+        remoteNotify = res.notifyEnabled;
+        log(remoteNotify ? 'LINE の「つうちおん」で空き通知カードを再開します' : 'LINE の「つうちおふ」で空き通知カードを止めます(結果カードは送る)');
       }
       if (res && Array.isArray(res.dates) && Array.isArray(res.slots)) {
         const changed = !exclusions || JSON.stringify([res.dates, res.slots.map(slotKey)]) !== JSON.stringify([exclusions.dates, exclusions.slots.map(slotKey)]);
@@ -266,6 +271,10 @@ export function createAutoRunner({
         log(`見送り(予約直前の再判定): ${describe(c)} (${again.reason}。通知もしない)`);
         return { status: 'skipped', message: again.reason };
       }
+      if (!remoteNotify) {
+        log(`見送り(予約直前の再判定): ${describe(c)} (${again.reason}。空き通知カードは「つうちおふ」で止めているため送らない)`);
+        return { status: 'skipped', message: again.reason, notified: false };
+      }
       log(`見送り(予約直前の再判定): ${describe(c)} (${again.reason}。従来の空き通知カードを送る)`);
       try {
         await notifyVacancy([{ facility: c.facility, date: c.date, time: c.time || `${startHHMM(c.startHour)}-${startHHMM(Number(c.startHour) + 2)}`, count: c.count ?? 1 }]);
@@ -399,7 +408,7 @@ export function createAutoRunner({
 
   const api = {
     tick, start, stop, mode, active, intervalMs: interval,
-    effectiveMode, remoteEnabled: () => remoteEnabled,
+    effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
     exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining,
   };
   return api;

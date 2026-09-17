@@ -72,6 +72,8 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
     body.push({ type: 'box', layout: 'vertical', margin: 'md', backgroundColor: COLOR_NOTE_BG, cornerRadius: 'md', paddingAll: '10px', contents: [text(note, { size: 'xs', color: COLOR_NOTE_FG, wrap: true })] });
   }
   body.push({ type: 'text', margin: 'md', wrap: true, contents: [{ type: 'span', text: 'Pi の自動予約: ', size: 'xs', color: COLOR_SUB }, { type: 'span', text: st.label, size: 'xs', weight: 'bold', color: st.color }] });
+  const notifyOn = status.notifyEnabled !== false;
+  body.push({ type: 'text', margin: 'sm', wrap: true, contents: [{ type: 'span', text: '空き通知カード: ', size: 'xs', color: COLOR_SUB }, { type: 'span', text: notifyOn ? '届く' : '止めている(LINE の「つうちおふ」。戻すのは「つうちおん」)', size: 'xs', weight: 'bold', color: notifyOn ? COLOR_OK : COLOR_NG }] });
 
   body.push(heading('除外日(この日は自動予約も空き通知もしない)'));
   if (dates.length === 0) body.push(text('なし', { size: 'sm', color: COLOR_MUTED, margin: 'sm' }));
@@ -86,7 +88,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。除外した日・枠の空きは自動予約されず、空き通知も届きません。自動予約そのものを止める/戻すのは「じどうおふ」「じどうおん」。', { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xl' }));
+  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。除外した日・枠の空きは自動予約されず、空き通知も届きません。自動予約そのものを止める/戻すのは「じどうおふ」「じどうおん」、空き通知カードを止める/戻すのは「つうちおふ」「つうちおん」。', { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xl' }));
 
   const [, tm, td] = today.split('-').map(Number);
   return {
@@ -128,7 +130,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
 
 // テキスト版(Flex が 400 で弾かれたときの再送と altText)
 export function autoSettingsText({ status, dates, slots, today }) {
-  const lines = [`🤖 自動予約の設定(${fmtDate(today)})`, `Pi: ${statusLine(status).label}`];
+  const lines = [`🤖 自動予約の設定(${fmtDate(today)})`, `Pi: ${statusLine(status).label}`, `空き通知カード: ${status.notifyEnabled !== false ? '届く' : '止めている(「つうちおん」で戻す)'}`];
   lines.push(`除外日: ${dates.length ? dates.map((d) => fmtDate(d.date)).join('、') : 'なし'}`);
   lines.push(`除外枠: ${slots.length ? slots.map((s) => `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`).join('、') : 'なし'}`);
   return lines.join('\n');

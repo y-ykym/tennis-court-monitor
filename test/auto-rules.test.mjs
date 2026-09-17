@@ -179,3 +179,12 @@ test('空き通知カード: ペナルティ期間(今日+3 日以内)の日に�
   assert.match(lines[0], /取消にペナルティ/);
   assert.doesNotMatch(lines[1], /取消にペナルティ/);
 });
+
+test('通知の振り分け: LINE の「つうちおふ」(notifyEnabled=false)なら空き通知は全部止める', () => {
+  const slots = [slot('猿江恩賜公園', '2026-09-16', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')];
+  const r = splitForNotification(slots, { today: TODAY, autoState: { alive: false, active: false, dates: [], slots: [], notifyEnabled: false } });
+  assert.deepEqual(r.notify, []);
+  assert.deepEqual(r.suppressed.map((s) => s.kind), ['notify_off', 'notify_off']);
+  const on = splitForNotification(slots, { today: TODAY, autoState: { alive: false, active: false, dates: [], slots: [], notifyEnabled: true } });
+  assert.equal(on.notify.length, 2);
+});

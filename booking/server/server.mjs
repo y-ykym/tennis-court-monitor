@@ -390,6 +390,7 @@ const server = http.createServer((req, res) => {
         envMode: AUTO_MODE,
         active: !!autoRunner && autoRunner.effectiveMode() === 'on',
         enabled: autoRunner ? autoRunner.remoteEnabled() : null,
+        notifyEnabled: autoRunner ? autoRunner.remoteNotify() : null,
         startedAt: SERVER_STARTED_AT,
         now: Date.now(),
         intervalMs: autoRunner?.intervalMs ?? null,
