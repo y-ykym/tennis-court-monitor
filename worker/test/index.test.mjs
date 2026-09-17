@@ -143,3 +143,37 @@ test('postback: 予約ボタン(book|トークン)は自宅サーバーの /book
   const bad = await buildPostbackReply(env, 'book|abc.def', { now: Date.UTC(2026, 8, 13) });
   assert.equal(bad.text, MSG_BOOK.invalid());
 });
+
+// ---- フェーズ5 テニスベアの合流(§15) ----
+test('buildReservationReply(§15): 都とテニスベアを並行で取り、人ごとに合流。署名は都の行だけ・テニスベアには付かない', async () => {
+  const { buildReservationReply, configuredTennisbear, fetchAllTennisbear, mergeTennisbear } = await import('../src/index.js');
+  const tbEnv = { ...env, TB_EMAIL_A: 'a@example.com', TB_PASS_A: 'pw' };
+  assert.deepEqual(configuredTennisbear(tbEnv).map((p) => p.slot), ['A'], 'B は未登録なので飛ばす');
+  assert.deepEqual(configuredTennisbear(env), []);
+
+  const mkSite = () => [{ slot: 'A', label: 'ゆうたそ', reservations: [{ id: '1', date: '2099-09-18', start: '17:00', end: '19:00', facility: '大島小松川公園', penaltyDay: 3 }] }];
+  const site = mkSite();
+  const tb = [{ slot: 'A', events: [{ source: 'tennisbear', id: '9', title: 'ストローク多め練', date: '2099-09-10', start: '19:00', end: '21:00', facility: '亀戸中央公園テニスコート' }] }];
+  const reply = await buildReservationReply(tbEnv, { fetchSite: async () => site, fetchTb: async () => tb });
+  assert.ok(reply.flex);
+  const pb = postbacks(reply.flex.contents);
+  assert.equal(pb.length, 1, 'キャンセルボタンは都の 1 行だけ');
+  assert.equal((await verifyCancelToken(SECRET, pb[0].data, Date.now())).id, '1');
+  assert.equal(site[0].tennisbear.events[0].cancelData, undefined, 'テニスベアの行に署名を付けない');
+  assert.match(reply.text, /🐻 ストローク多め練/);
+  assert.ok(reply.text.indexOf('ストローク') < reply.text.indexOf('大島小松川'), '日付順(9/10 🐻 → 9/18 都)');
+
+  // テニスベアの取得そのものが例外を投げても都の返信は壊れない
+  const safe = await buildReservationReply(tbEnv, { fetchSite: async () => mkSite(), fetchTb: async () => { throw new Error('boom'); } });
+  assert.ok(safe.flex);
+  assert.doesNotMatch(safe.text, /🐻/);
+
+  // fetchAllTennisbear: 失敗はその人の error に入れ、例外にしない
+  const results = await fetchAllTennisbear(tbEnv, { fetchEvents: async () => { throw new Error('x'); } });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].slot, 'A');
+  assert.ok(results[0].error);
+  const merged = mergeTennisbear([{ slot: 'A', label: 'A', reservations: [] }, { slot: 'B', label: 'B', reservations: [] }], results);
+  assert.ok(merged[0].tennisbear.error);
+  assert.equal(merged[1].tennisbear, undefined, '登録のない B には何も付けない');
+});
