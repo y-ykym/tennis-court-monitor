@@ -20,6 +20,12 @@
 //
 // 取得に失敗した人のカードはグレーのヘッダー「取得失敗」、0 件は「予約なし」と本文に 1 行。
 //
+// フェーズ5(§15): 人に tennisbear が添えられていれば、テニスベアの予定を同じカードに日付順で混ぜる。
+//   │ ┌────┐ 19:00 - 21:00                  │
+//   │ │9/22│ 🐻 ストローク多め練              │  ← テニスベアの行: 🐻 + イベント名、その下にコート名。キャンセルボタンは付けない
+//   │ │ 火 │ 亀戸中央公園テニスコート         │
+//   テニスベアだけ失敗 → カード末尾に小さく「🐻 テニスベアの取得に失敗しました」。都だけ失敗 → 「繋がりませんでした」の下に予定を出す
+//
 // 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
 // 「今日/明日/明後日/終了」の補足は公園名の右(ピルの幅を確保するため時間の行には置かない)。
 //
@@ -30,7 +36,7 @@
 // フッターの「一覧を更新」はメッセージアクション(押すとその人が「よやく」と送った扱いになり、この Worker が一覧を返す)。
 // ============================================================
 import Holidays from 'japanese-holidays';
-import { formatTime, jstTodayIso } from './format.js';
+import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
@@ -102,12 +108,6 @@ function span(str, extra = {}) {
   return { type: 'span', text: String(str), ...extra };
 }
 
-function sortReservations(list) {
-  return [...list].sort(
-    (a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || '')
-  );
-}
-
 // JSTの現在時刻を "HH:MM" で
 export function jstNowHHMM(now = new Date()) {
   return new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(11, 16);
@@ -144,15 +144,19 @@ function dateTile(iso, past) {
   };
 }
 
-// 「時間(太字) / 公園名 + 補足(今日/明日/終了)」の span 1テキスト
+// 「時間(太字) / 公園名 + 補足(今日/明日/終了)」の span 1テキスト。
+// テニスベアの行は「時間 / 🐻 イベント名 / コート名 + 補足」(§15.4。主催の印は付けない)
 function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
   const main = past ? COLOR_PAST : COLOR_TEXT;
   const sub = past ? COLOR_PAST : COLOR_SUB;
-  const time = r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : '時間不明';
-  const spans = [
-    span(time, { size: timeSize, weight: 'bold', color: main, ...(strike ? { decoration: 'line-through' } : {}) }),
-    span(`\n${r.facility || '施設不明'}`, { size: 'sm', color: sub }),
-  ];
+  const time = r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : r.start ? `${formatTime(r.start)} -` : '時間不明';
+  const spans = [span(time, { size: timeSize, weight: 'bold', color: main, ...(strike ? { decoration: 'line-through' } : {}) })];
+  if (isTennisbear(r)) {
+    spans.push(span(`\n🐻 ${r.title || 'イベント'}`, { size: 'sm', weight: 'bold', color: main }));
+    if (r.facility) spans.push(span(`\n${r.facility}`, { size: 'xs', color: sub }));
+  } else {
+    spans.push(span(`\n${r.facility || '施設不明'}`, { size: 'sm', color: sub }));
+  }
   if (rel) spans.push(span(`  ${rel}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON }));
   return { type: 'text', flex: 1, margin: 'md', wrap: true, contents: spans };
 }
@@ -183,7 +187,8 @@ function reservationRow(r, today, nowHHMM) {
   const past = isPast(r, today, nowHHMM);
   const rel = past ? '終了' : r.date ? relativeLabel(r.date, today) : null;
   const contents = [dateTile(r.date, past), detailText(r, { past, rel })];
-  if (!past && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
+  // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)
+  if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
   return { type: 'box', layout: 'horizontal', margin: 'lg', alignItems: 'center', contents };
 }
 
@@ -238,14 +243,15 @@ function body(contents, extra = {}) {
   return { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '4px', backgroundColor: '#FFFFFF', contents, ...extra };
 }
 
-// プッシュ通知バナーに出る要約(必須項目。上限400字)
+// プッシュ通知バナーに出る要約(必須項目。上限400字)。テニスベアの予定も件数に含め、先頭なら 🐻 イベント名で
 function buildAltText(people, total) {
-  const first = people.find((p) => !p.error && p.reservations.length > 0);
+  const first = people.find((p) => mergedRows(p).length > 0);
   let head = '';
   if (first) {
-    const r = sortReservations(first.reservations)[0];
+    const r = mergedRows(first)[0];
     const date = r.date ? `${shortDate(r.date)}(${dowOf(r.date)})` : '';
-    head = `: ${first.label} ${date} ${formatTime(r.start)}-${formatTime(r.end)} ${r.facility}`;
+    const what = isTennisbear(r) ? `🐻 ${r.title}` : r.facility;
+    head = `: ${first.label} ${date} ${formatTime(r.start)}-${formatTime(r.end)} ${what}`;
     if (total > 1) head += ' ほか';
   }
   return `📅 予約一覧 ${total}件${head}`.slice(0, 400);
@@ -253,39 +259,44 @@ function buildAltText(people, total) {
 
 // people: [{ label, reservations: [...] } | { label, error }]
 //   reservations の各要素に cancelData(署名付き postback data)があれば、その行に「キャンセル」ピルを付ける
-// 前提: 少なくとも1人は取得に成功している(全員失敗・全員0件はテキストで返す。index.js 参照)
+//   各人に tennisbear: { events } | { error } が添えられていれば、テニスベアの予定を同じカードに混ぜる(§15。index.js の mergeTennisbear)
+// 前提: 少なくとも1人は何か表示できる(全員失敗・全員0件はテキストで返す。index.js 参照)
 // 戻り値の contents は、人が 2 人以上ならカルーセル(1 人 1 枚)、1 人ならそのバブル
 export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = jstNowHHMM() } = {}) {
-  const total = people.reduce((n, p) => n + (p.error ? 0 : p.reservations.length), 0);
+  const total = people.reduce((n, p) => n + mergedRows(p).length, 0);
   const [, tm, td] = today.split('-').map(Number);
   const asOf = `${tm}/${td} 現在`;
 
   // 1 人分のカード。maxRows を超える分は「…ほかN件」
   const personBubble = (p, maxRows) => {
     const rows = [];
+    const merged = mergedRows(p);
     let right = '';
     let bg = COLOR_HEADER_BG;
     if (p.error) {
+      // 都だけ失敗: 従来どおりの断り書きを出したうえで、テニスベアの予定があれば下に出す(§15.2)
       right = '取得失敗';
       bg = COLOR_NG_BG;
       rows.push(text('予約サイトに繋がりませんでした。少し待って「一覧を更新」を押してください', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'lg' }));
-    } else if (p.reservations.length === 0) {
+    } else if (merged.length === 0) {
       right = `${asOf} ・ 0件`;
       rows.push(text('予約はありません', { size: 'sm', color: COLOR_SUB, margin: 'lg' }));
     } else {
-      right = `${asOf} ・ ${p.reservations.length}件`;
-      let hidden = 0;
-      sortReservations(p.reservations).forEach((r, j) => {
-        if (j >= maxRows) {
-          hidden++;
-          return;
-        }
-        // 行と行の間に薄い罫線(目が滑らないように)
-        if (j > 0) rows.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
-        rows.push(reservationRow(r, today, nowHHMM));
-      });
-      if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+      right = `${asOf} ・ ${merged.length}件`;
     }
+    let hidden = 0;
+    merged.forEach((r, j) => {
+      if (j >= maxRows) {
+        hidden++;
+        return;
+      }
+      // 行と行の間に薄い罫線(目が滑らないように)
+      if (j > 0 || p.error) rows.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
+      rows.push(reservationRow(r, today, nowHHMM));
+    });
+    if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
+    // テニスベアだけ失敗: 黙って 0 件に見せず、末尾に小さく 1 行(§15.2)
+    if (p.tennisbear?.error) rows.push(text(MSG_TB_FAILED, { size: 'xxs', color: COLOR_MUTED, margin: 'lg', wrap: true }));
     return {
       type: 'bubble',
       size: 'mega',
@@ -299,7 +310,7 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
   const fits = (bubbles) => bubbles.every((b) => bubbleBytes(b) <= MAX_BUBBLE_BYTES) && bubbles.reduce((n, b) => n + bubbleBytes(b), 0) <= MAX_CAROUSEL_BYTES;
 
   // 30KB/50KB 制限: 収まるまで 1 人あたりの行数を減らす
-  const most = Math.max(1, ...people.map((p) => (p.error ? 0 : p.reservations.length)));
+  const most = Math.max(1, ...people.map((p) => mergedRows(p).length));
   let rows = Math.min(most, MAX_ROWS);
   let bubbles = render(rows);
   while (rows > 1 && !fits(bubbles)) bubbles = render(--rows);

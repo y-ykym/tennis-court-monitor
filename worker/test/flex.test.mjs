@@ -202,3 +202,74 @@ test('buildPenaltyAlertFlex: 23:35 版は見出しが変わり、取得失敗し
   assert.ok(nt.some((s) => s.includes('B は予約サイトに繋がらず確認できていません')));
   assert.ok(bubbleBytes(night.contents) <= MAX_BUBBLE_BYTES);
 });
+
+// ---- フェーズ5 テニスベアの合流(§15) ----
+const TB = [
+  { source: 'tennisbear', id: '1621297', title: 'ストローク多め練', date: '2026-09-22', start: '19:00', end: '21:00', facility: '亀戸中央公園テニスコート', organizer: false },
+  { source: 'tennisbear', id: '2', title: '朝練', date: '2026-09-08', start: '09:00', end: '11:00', facility: '', organizer: true },
+];
+
+test('flex(§15): テニスベアの行は 🐻 イベント名 + コート名、都の行と日付順に混ざり、キャンセルボタンは付かない', () => {
+  const site = A.map((r) => ({ ...r, cancelData: DATA }));
+  const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations: site, tennisbear: { events: TB } }], opts);
+  assert.equal(msg.contents.type, 'bubble');
+  assert.deepEqual(texts(msg.contents.header), ['ゆうたそ', '9/2 現在 ・ 4件'], '件数はテニスベア込み');
+  assert.deepEqual(
+    tiles(msg).map(([t]) => t),
+    ['9/6 日', '9/8 火', '9/13 日', '9/22 火'],
+    '日付順に混ざる(9/6 都 → 9/8 🐻 → 9/13 都 → 9/22 🐻)'
+  );
+  const t = texts(msg.contents.body);
+  assert.ok(t.includes('\n🐻 ストローク多め練'));
+  assert.ok(t.includes('\n亀戸中央公園テニスコート'), 'コート名はイベント名の下');
+  assert.ok(t.includes('\n🐻 朝練'));
+  assert.equal(t.filter((s) => s.includes('主催')).length, 0, '主催の印は付けない');
+  assert.equal(pills(msg).length, 2, 'キャンセルボタンは都の 2 行だけ');
+  assert.equal(t.some((s) => s.includes('テニスベアの取得に失敗')), false);
+  assert.equal(msg.altText, '📅 予約一覧 4件: ゆうたそ 9/6(日) 9:00-11:00 猿江恩賜公園 ほか');
+});
+
+test('flex(§15): テニスベアの cancelData は無視する(万一混ざってもボタンにしない)', () => {
+  const msg = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], cancelData: DATA }] } }], opts);
+  assert.equal(pills(msg).length, 0);
+  assert.equal(msg.altText, '📅 予約一覧 1件: A 9/22(火) 19:00-21:00 🐻 ストローク多め練');
+});
+
+test('flex(§15): テニスベアだけ失敗 → 都の予約は普通に出し、カード末尾に小さく 1 行', () => {
+  const msg = buildReservationFlex([{ label: 'A', reservations: A, tennisbear: { error: new Error('x') } }, { label: 'B', reservations: B }], opts);
+  const [a, b] = msg.contents.contents;
+  assert.deepEqual(texts(a.header), ['A', '9/2 現在 ・ 2件']);
+  const last = texts(a.body).at(-1);
+  assert.equal(last, '🐻 テニスベアの取得に失敗しました');
+  assert.equal(texts(b.body).some((s) => s.includes('テニスベア')), false, 'B には出ない');
+  // 都が 0 件でも黙って「予約はありません」だけにしない
+  const zero = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { error: new Error('x') } }], opts);
+  assert.deepEqual(texts(zero.contents.body), ['予約はありません', '🐻 テニスベアの取得に失敗しました']);
+});
+
+test('flex(§15): 都だけ失敗 → 「繋がりませんでした」の下にテニスベアの予定を出す(ヘッダーは従来どおり取得失敗)', () => {
+  const msg = buildReservationFlex([{ label: 'A', error: new Error('x'), tennisbear: { events: TB } }], opts);
+  const t = texts(msg.contents.body);
+  assert.deepEqual(texts(msg.contents.header), ['A', '取得失敗']);
+  assert.equal(msg.contents.header.backgroundColor, '#6B7280');
+  assert.ok(t[0].includes('繋がりませんでした'));
+  assert.ok(t.indexOf('\n🐻 朝練') > 0 && t.indexOf('\n🐻 朝練') < t.indexOf('\n🐻 ストローク多め練'));
+  assert.equal(pills(msg).length, 0);
+  assert.equal(msg.altText, '📅 予約一覧 2件: A 9/8(火) 9:00-11:00 🐻 朝練 ほか');
+});
+
+test('flex(§15): テニスベアの行も 30KB 制限の行数調整に入る(「…ほかN件」)', () => {
+  const mk = (n) =>
+    Array.from({ length: n }, (_, i) => ({
+      source: 'tennisbear',
+      id: String(i),
+      title: `イベント${i}`,
+      date: `2026-${String(10 + Math.floor(i / 28)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`,
+      start: '19:00',
+      end: '21:00',
+      facility: '亀戸中央公園テニスコート',
+    }));
+  const msg = buildReservationFlex([{ label: 'A', reservations: A, tennisbear: { events: mk(40) } }], opts);
+  assert.ok(bubbleBytes(msg.contents) <= MAX_BUBBLE_BYTES);
+  assert.ok(texts(msg.contents).some((s) => /^…ほか\d+件$/.test(s)));
+});
