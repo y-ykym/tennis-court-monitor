@@ -121,7 +121,8 @@ test('postback: 予約ボタン(book|トークン)は自宅サーバーの /book
   const { sign, slotExpiry } = await import('../../booking/src/token.js');
   const { MSG_BOOK } = await import('../src/index.js');
   const SECRET = 'test-secret';
-  const token = sign({ park: '1050', date: '2026-09-30', startHour: 13, people: 2, person: 'A', exp: slotExpiry('2026-09-30', 13) }, SECRET);
+  // 利用日は遠い未来の固定日にする(exp = 利用開始時刻なので、日付が過ぎるとトークンが期限切れになりテストが落ちる。booking.test.mjs は 2026-09-17 に実際に落ちた)
+  const token = sign({ park: '1050', date: '2099-09-30', startHour: 13, people: 2, person: 'A', exp: slotExpiry('2099-09-30', 13) }, SECRET);
   const store = new Map([['booking_url', 'https://abc.trycloudflare.com']]);
   const env = {
     BOOKING_SIGNING_SECRET: SECRET,
