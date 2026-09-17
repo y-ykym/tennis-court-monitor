@@ -1,5 +1,5 @@
 // ============================================================
-// フェーズ1.5 予約確認ボット + フェーズ1.6 予約キャンセル(Cloudflare Workers)
+// フェーズ1.5 予約確認ボット + フェーズ1.6 予約キャンセル + フェーズ4 ペナルティ予告アラート(Cloudflare Workers)
 //
 //   LINEグループで「よやく」と送る → LINEがこのWorkerの POST /webhook を呼ぶ
 //   → 署名を検証 → 対象グループの「よやく」だけ拾う
@@ -13,6 +13,8 @@
 //                                         → 「受け付けました」を reply(ブラウザは開かない。結果は PC が LINE にカードで push)
 //   Cron(1 時間ごと)                    → 自宅 PC の生存確認。止まっていたら LINE に 1 回知らせ、復帰も知らせる(src/monitor.js)
 //   Cron(毎月 1 日 9:00 JST)             → 手動メンテ(ブラウザのイメージ再ビルド)のお知らせを LINE に
+//   Cron(毎日 9:00 と 23:35 JST)         → 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を
+//                                         キャンセルボタン付きのカードで知らせる(フェーズ4。src/penalty-alert.js)
 //   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -46,6 +48,7 @@ import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotTe
 export { MSG_BOOK };
 import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
 import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, AUTO_COMMAND_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
+import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -95,6 +98,17 @@ export default {
     }
     if (event.cron === MAINTENANCE_CRON) {
       ctx.waitUntil(sendMaintenanceReminder(env).catch((e) => console.error(`[monitor] お知らせの送信に失敗: ${e.message}`)));
+      return;
+    }
+    // フェーズ4: 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を知らせる(朝 9:00 と 23:35)
+    if (PENALTY_ALERT_CRONS.includes(event.cron)) {
+      ctx.waitUntil(
+        runPenaltyAlert(env, {
+          kind: event.cron === DEADLINE_CRON ? 'deadline' : 'morning',
+          fetchResults: () => fetchAllReservations(env),
+          attach: (results, opts) => attachCancelData(env, results, opts),
+        }).catch((e) => console.error(`[alert] 送信に失敗: ${e.message}`))
+      );
       return;
     }
     ctx.waitUntil(runMonitor(env).catch((e) => console.error(`[monitor] 失敗: ${e.message}`)));
@@ -178,9 +192,10 @@ export function configuredPeople(env) {
 }
 
 // 一覧の各予約に「キャンセル」ボタン用の署名付き data を付ける(終了済みの予約には付けない)
-export async function attachCancelData(env, results, { today = jstTodayIso(), nowHHMM = jstNowHHMM(), now = Date.now() } = {}) {
+export async function attachCancelData(env, results, { today = jstTodayIso(), nowHHMM = jstNowHHMM(), now = Date.now(), exp: expOverride } = {}) {
   if (!cancelEnabled(env)) return results;
-  const exp = Math.floor(now / 1000) + CANCEL_BUTTON_TTL_SEC;
+  // 既定は 60 分。フェーズ4 のアラートは「今日 23:59 まで」を渡す(0 時を過ぎるとペナルティ対象になるため)
+  const exp = expOverride ?? Math.floor(now / 1000) + CANCEL_BUTTON_TTL_SEC;
   for (const p of results) {
     if (p.error) continue;
     for (const r of p.reservations) {
@@ -205,14 +220,14 @@ export async function attachCancelData(env, results, { today = jstTodayIso(), no
   return results;
 }
 
-// A・B を並行取得して返信内容にする。全体で FETCH_BUDGET_MS を超えたら打ち切る。
-// 戻り値: { text }(全員失敗・全員0件はテキストのみ)または { flex, text }(Flex + 400時のテキスト版)
-export async function buildReservationReply(env, { budgetMs = FETCH_BUDGET_MS, deferLogout } = {}) {
+// A・B の予約一覧を並行取得する。全体で FETCH_BUDGET_MS を超えたら打ち切る。
+// 戻り値: [{ slot, label, reservations } | { slot, label, error }](利用者が未設定なら空配列)
+export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, deferLogout } = {}) {
   const started = Date.now();
   const people = configuredPeople(env);
   if (people.length === 0) {
     console.error('SITE_USER_A / SITE_PASS_A が未設定です');
-    return { text: MSG_FETCH_FAILED };
+    return [];
   }
 
   const controller = new AbortController();
@@ -231,20 +246,27 @@ export async function buildReservationReply(env, { budgetMs = FETCH_BUDGET_MS, d
         )
       )
     );
-    const results = settled.map((r, i) => {
+    return settled.map((r, i) => {
       const p = people[i];
       if (r.status === 'fulfilled') return { slot: p.slot, label: p.label, reservations: r.value };
       const kind = r.reason instanceof AuthError ? '認証エラー' : controller.signal.aborted ? 'タイムアウト' : 'エラー';
       console.error(`[${p.slot}] 取得失敗(${kind}): ${r.reason?.message}`);
       return { slot: p.slot, label: p.label, error: r.reason };
     });
-    const text = formatReply(results);
-    if (text === MSG_FETCH_FAILED || text === MSG_NO_RESERVATIONS) return { text };
-    await attachCancelData(env, results);
-    return { flex: buildReservationFlex(results), text };
   } finally {
     clearTimeout(timer);
   }
+}
+
+// 「よやく」への返信内容を組む。
+// 戻り値: { text }(全員失敗・全員0件はテキストのみ)または { flex, text }(Flex + 400時のテキスト版)
+export async function buildReservationReply(env, { budgetMs = FETCH_BUDGET_MS, deferLogout } = {}) {
+  const results = await fetchAllReservations(env, { budgetMs, deferLogout });
+  if (results.length === 0) return { text: MSG_FETCH_FAILED };
+  const text = formatReply(results);
+  if (text === MSG_FETCH_FAILED || text === MSG_NO_RESERVATIONS) return { text };
+  await attachCancelData(env, results);
+  return { flex: buildReservationFlex(results), text };
 }
 
 // ---- フェーズ3 「じどう」(自動予約の除外設定) ----
@@ -326,11 +348,15 @@ export async function buildPostbackReply(env, data, { deferLogout, now = Date.no
   if (token.kind === 'c') {
     const today = jstTodayIso(new Date(now));
     const penalty = penaltyApplies(token.date, token.penaltyDay, today);
+    // 「はい」の期限は 10 分。ただし今はペナルティ対象でなく、日付が変われば対象になる予約(= 今日 23:59 が無料の期限)は
+    // 今日中で切る。0 時をまたいで「はい」を押し、知らないうちにペナルティ 1 点を負う事故を防ぐ(フェーズ4)
+    const tomorrow = jstTodayIso(new Date(now + 86400000));
+    const becomesPenaltyTomorrow = !penalty && penaltyApplies(token.date, token.penaltyDay ?? DEFAULT_PENALTY_DAYS, tomorrow);
     const yesData = await signCancelToken(env.BOOKING_SIGNING_SECRET, {
       ...token,
       kind: 'y',
       penaltyDay: token.penaltyDay ?? '',
-      exp: Math.floor(now / 1000) + CANCEL_CONFIRM_TTL_SEC,
+      exp: Math.min(Math.floor(now / 1000) + CANCEL_CONFIRM_TTL_SEC, becomesPenaltyTomorrow ? endOfJstDaySec(now) : Infinity),
     });
     console.log(`[cancel] 確認カード: ${slotText(token)}${penalty ? ' (ペナルティ対象)' : ''}`);
     return {
