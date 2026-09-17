@@ -294,7 +294,7 @@ export async function handleAutoPostback(env, data, params, { now = Date.now() }
     const picked = params?.date;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(picked || '') || picked < today || picked > addDaysIso(today, MAX_DAYS_AHEAD)) return { text: MSG_AUTO_BAD_DATE };
     await addExcludedDate(env, picked, now);
-    note = `${fmt(picked)} を除外日に追加しました(この日は自動予約せず、空きは従来どおり通知します)`;
+    note = `${fmt(picked)} を除外日に追加しました(この日は自動予約せず、空き通知もしません)`;
     console.log(`[auto] 除外日を追加: ${picked}`);
   } else if (t.kind === 'd') {
     const iso = `${t.value.slice(0, 4)}-${t.value.slice(4, 6)}-${t.value.slice(6, 8)}`;

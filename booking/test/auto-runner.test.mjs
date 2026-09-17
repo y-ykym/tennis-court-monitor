@@ -110,9 +110,9 @@ test('振り分けと実行: 対象は予約者(平日 B / 休日 A)で予約、
   assert.ok(h.logs.some((l) => l.includes('既に自動予約済み')));
 });
 
-test('2 件上限: 予約直前の一覧でその日の件数を数え、手動分も含めて 2 件なら見送る。同じ実行の成立分も数える', async () => {
-  // 9/27(日) A: 大島 9・13・15、猿江 13 が同時に出た。A はその日に手動で 1 件持っている
-  const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00', end: '19:00', facility: '亀戸中央公園' }] };
+test('1 日の上限: 予約直前の一覧でその日の件数を数え、上限(1 件)に達したら見送る。同じ実行の成立分も数える', async () => {
+  // 9/27(日) A: 大島 9・13・15、猿江 13 が同時に出た。A はその日にまだ予約が無い
+  const reservations = { A: [] };
   const h = harness({ reservations });
   // 成立したら一覧にも増える(サイトの振る舞いを模す)
   const origBook = async (c, { beforeApply }) => {
@@ -137,15 +137,16 @@ test('2 件上限: 予約直前の一覧でその日の件数を数え、手動�
   const r = await h.runner.tick();
   assert.equal(r.planned, 4);
   await flush();
-  assert.deepEqual(h.bookings, ['1160 9'], '大島 9 時だけ予約(1 件既存 + 1 件成立 = 2 件)。残りはログインせずに見送り');
+  assert.deepEqual(h.bookings, ['1160 9'], '優先順 1 位の大島 9 時だけ予約(成立で上限 1 件)。残りはログインせずに見送り');
   assert.equal(h.notified.length, 1);
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|15:00'), 'capped');
   assert.equal(h.state.attemptStatus('1160|2026-09-27|13:00'), 'capped');
   assert.equal(h.state.attemptStatus('1040|2026-09-27|13:00'), 'capped');
-  assert.ok(h.logs.filter((l) => l.includes('既に 2 件あるため')).length >= 2);
+  assert.ok(h.logs.filter((l) => l.includes('既に 1 件あるため')).length >= 3);
 });
 
-test('2 件上限: 一覧で既に 2 件なら予約せず(capped)、カードも送らない。失敗(taken)は次の候補へ進むが、カードは送らない(通数節約)', async () => {
-  const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00' }, { id: '2', date: '2026-09-27', start: '19:00' }], B: [] };
+test('1 日の上限: 一覧で既にその日に予約(手動分)があれば予約せず(capped)、カードも送らない。失敗(taken)は次の候補へ進むが、カードは送らない(通数節約)', async () => {
+  const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00' }], B: [] };
   let n = 0;
   const h = harness({
     reservations,
@@ -160,7 +161,7 @@ test('2 件上限: 一覧で既に 2 件なら予約せず(capped)、カード�
   await h.runner.tick();
   h.advance(60_000);
   h.setSlots([
-    slot('大島小松川公園', '2026-09-27', '09:00-11:00'), // A: 2 件あり → capped
+    slot('大島小松川公園', '2026-09-27', '09:00-11:00'), // A: 手動で 1 件あり → capped
     slot('猿江恩賜公園', '2026-09-25', '19:00-21:00'), // B(金): taken
     slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'), // B(火): success
   ]);
@@ -173,7 +174,7 @@ test('2 件上限: 一覧で既に 2 件なら予約せず(capped)、カード�
   assert.ok(h.logs.some((l) => l.includes('結果カードは送りません(taken')));
 });
 
-test('失敗カード: ログインできない・reCAPTCHA 拒否・サイトのエラーは送る(放置すると自動予約が止まる)。先に取られた・断られたは送らない', async () => {
+test('失敗カード: ログインできない・reCAPTCHA 拒否は送る(放置すると自動予約が止まる)。先に取られた・断られた・サイトのエラーは送らない', async () => {
   const statuses = ['auth_error', 'rejected', 'error', 'taken', 'duplicate'];
   let i = 0;
   const h = harness({ book: async () => ({ status: statuses[i++], message: 'x' }) });
@@ -190,10 +191,10 @@ test('失敗カード: ログインできない・reCAPTCHA 拒否・サイト�
   await flush();
   assert.equal(i, 5);
   const reasons = h.notified.map((x) => JSON.stringify(x.m.contents.body));
-  assert.equal(reasons.length, 3);
+  assert.equal(reasons.length, 2);
   assert.match(reasons[0], /ログインできませんでした/);
   assert.match(reasons[1], /認証で拒否/);
-  assert.match(reasons[2], /サイトのエラー/);
+  assert.ok(h.logs.some((l) => l.includes('結果カードは送りません(error')));
 });
 
 test('利用日 = 今日+4 日の成功カードにはキャンセルボタン(Worker が検証できる c| トークン、期限は今日 23:59)。+5 日には付かない', async () => {
@@ -447,4 +448,38 @@ test('実枠テスト用: forgetFile に書いた枠キーは既知から外れ�
   assert.equal(fs.existsSync(forget), false, '読んだら消す');
   assert.ok(logs.some((l) => l.includes('テスト用に既知から外しました')));
   assert.ok(logs.some((l) => l.includes('9999|nope|00:00') && l.includes('ありません')));
+});
+
+test('除外日: 見つけた時点で除外日なら見送り(通知は Actions もしない)。予約直前に除外日になっていても予約せず、カードも送らない', async () => {
+  const gate = deferredGate();
+  let ex = { dates: [], slots: [] };
+  const logs = [];
+  const vac = [];
+  const state = createAutoState({ file: tmpFile(), now: () => T0 });
+  const queue = createBookingQueue();
+  let current = [];
+  const runner = createAutoRunner({
+    mode: 'on', scrape: async () => current, queue, state,
+    worker: { heartbeat: async () => ex, addExcludedSlots: async () => {} },
+    book: async () => { throw new Error('予約してはいけない'); },
+    credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
+    notifyVacancy: async (s) => vac.push(...s),
+    log: (m) => logs.push(m), now: () => T0, maintenance: () => false,
+  });
+  await runner.tick();
+  current = [slot('大島小松川公園', '2026-09-27', '09:00-11:00')];
+  queue.submit({ id: 'manual:w', kind: 'manual', run: () => gate.promise });
+  assert.equal((await runner.tick()).planned, 1);
+  ex = { dates: ['2026-09-27'], slots: [] };
+  current = [];
+  await runner.tick();
+  gate.resolve();
+  await flush();
+  assert.equal(state.attemptStatus('1160|2026-09-27|09:00'), 'skipped_excluded_date');
+  assert.equal(vac.length, 0, '除外日はカードも送らない');
+  // 見つけた時点で除外日
+  current = [slot('大島小松川公園', '2026-09-27', '13:00-15:00')];
+  const r = await runner.tick();
+  assert.equal(r.planned, 0);
+  assert.ok(logs.some((l) => l.includes('13:00') && l.includes('除外日') && l.includes('通知もしない')));
 });

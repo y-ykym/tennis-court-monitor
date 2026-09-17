@@ -48,7 +48,7 @@ test('振り分け: 除外枠 > ペナルティ > 除外日 > 対象', () => {
   assert.equal(classifySlot(slot('木場公園', '2026-09-27', '13:00-15:00'), { today: TODAY, exclusions: ex }).kind, 'unknown_park');
 });
 
-test('並べ替え: 日付 → 公園の優先順(大島 > 猿江 > 亀戸)→ 時間帯(17 > 19 > 9 > 11 > 13 > 15)', () => {
+test('並べ替え: 日付 → 公園の優先順(大島 > 猿江 > 亀戸)→ 時間帯(11 > 9 > 15 > 13 > 17 > 19)', () => {
   const sorted = sortCandidates([
     slot('猿江恩賜公園', '2026-09-27', '13:00-15:00'),
     slot('大島小松川公園', '2026-09-27', '15:00-17:00'),
@@ -60,13 +60,15 @@ test('並べ替え: 日付 → 公園の優先順(大島 > 猿江 > 亀戸)→ �
   ]).map((s) => `${s.date} ${s.facility} ${s.time.slice(0, 5)}`);
   assert.deepEqual(sorted, [
     '2026-09-26 亀戸中央公園 15:00',
-    '2026-09-27 大島小松川公園 17:00',
     '2026-09-27 大島小松川公園 09:00',
-    '2026-09-27 大島小松川公園 13:00',
     '2026-09-27 大島小松川公園 15:00',
+    '2026-09-27 大島小松川公園 13:00',
+    '2026-09-27 大島小松川公園 17:00',
     '2026-09-27 猿江恩賜公園 13:00',
     '2026-09-27 亀戸中央公園 17:00',
   ]);
+  assert.deepEqual(AUTO_BOOKING.HOUR_PRIORITY, [11, 9, 15, 13, 17, 19]);
+  assert.equal(AUTO_BOOKING.MAX_PER_DAY, 1);
 });
 
 test('計画: 利用日ごとに候補を並べ、予約者を付け、対象外は理由付きで見送る', () => {
@@ -91,24 +93,24 @@ test('計画: 利用日ごとに候補を並べ、予約者を付け、対象外
   assert.deepEqual(skipped.map((s) => [s.slot.date, s.kind]), [['2026-09-16', 'penalty'], ['2026-09-30', 'excluded_date']]);
 });
 
-test('通知の振り分け: Pi が生きていれば対象期間の枠は通知せず、ペナルティ期間・除外日は通知。除外枠は常に通知しない', () => {
+test('通知の振り分け: Pi が生きていれば対象期間の枠は通知せず、ペナルティ期間は通知。除外日・除外枠は常に通知しない', () => {
   const slots = [
     slot('猿江恩賜公園', '2026-09-16', '19:00-21:00'), // ペナルティ期間 → 通知
     slot('猿江恩賜公園', '2026-09-25', '19:00-21:00'), // 対象 → Pi が生きていれば通知しない
-    slot('大島小松川公園', '2026-09-27', '09:00-11:00'), // 除外日 → 通知
+    slot('大島小松川公園', '2026-09-27', '09:00-11:00'), // 除外日 → 通知しない
     slot('大島小松川公園', '2026-09-28', '13:00-15:00'), // 除外枠 → 通知しない
   ];
   const state = { alive: true, active: true, dates: ['2026-09-27'], slots: [{ park: '1160', date: '2026-09-28', start: '13:00' }] };
   const r = splitForNotification(slots, { today: TODAY, autoState: state });
   assert.equal(r.piAlive, true);
-  assert.deepEqual(r.notify.map((s) => s.date), ['2026-09-16', '2026-09-27']);
-  assert.deepEqual(r.suppressed.map((s) => [s.slot.date, s.kind]), [['2026-09-25', 'auto'], ['2026-09-28', 'excluded_slot']]);
+  assert.deepEqual(r.notify.map((s) => s.date), ['2026-09-16']);
+  assert.deepEqual(r.suppressed.map((s) => [s.slot.date, s.kind]), [['2026-09-25', 'auto'], ['2026-09-27', 'excluded_date'], ['2026-09-28', 'excluded_slot']]);
 
-  // Pi が死んでいる(または dry-run で active=false)→ 対象期間も通知。除外枠だけは通知しない
+  // Pi が死んでいる(または dry-run で active=false)→ 対象期間も通知。除外日・除外枠は通知しない
   for (const dead of [{ ...state, alive: false }, { ...state, active: false }]) {
     const d = splitForNotification(slots, { today: TODAY, autoState: dead });
     assert.equal(d.piAlive, false);
-    assert.deepEqual(d.notify.map((s) => s.date), ['2026-09-16', '2026-09-25', '2026-09-27']);
+    assert.deepEqual(d.notify.map((s) => s.date), ['2026-09-16', '2026-09-25']);
   }
   // Worker に繋がらない(null)→ 全部通知(安全側)
   const u = splitForNotification(slots, { today: TODAY, autoState: null });
@@ -162,4 +164,18 @@ test('通知の振り分け: 締切後の +4 日の枠は Pi が生きていて�
   const plan = planAutoBooking([s4], { now: jst('2026-09-14', '23:40'), exclusions: { dates: [], slots: [] } });
   assert.equal(plan.byDate.size, 0);
   assert.equal(plan.skipped[0].kind, 'deadline');
+});
+
+test('空き通知カード: ペナルティ期間(今日+3 日以内)の日には「⚠ 取消にペナルティ」が付き、それ以降には付かない', () => {
+  const { buildFlexMessage, formatMessage } = require('../lib/notify.js');
+  const today = require('../lib/date.js').jstTodayIso();
+  const near = addDaysIso(today, 2);
+  const far = addDaysIso(today, 10);
+  const m = buildFlexMessage([slot('猿江恩賜公園', near, '19:00-21:00'), slot('猿江恩賜公園', far, '19:00-21:00')]);
+  const json = JSON.stringify(m.contents);
+  assert.equal((json.match(/⚠ 取消にペナルティ/g) || []).length, 1, '近い日だけ');
+  const text = formatMessage([slot('猿江恩賜公園', near, '19:00-21:00'), slot('猿江恩賜公園', far, '19:00-21:00')]);
+  const lines = text.split('\n').filter((l) => l.startsWith('📅'));
+  assert.match(lines[0], /取消にペナルティ/);
+  assert.doesNotMatch(lines[1], /取消にペナルティ/);
 });
