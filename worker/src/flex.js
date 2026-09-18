@@ -147,18 +147,25 @@ function dateTile(iso, past) {
 
 // 「時間(太字) / 公園名 + 補足(今日/明日/終了)」の span 1テキスト。
 // テニスベアの行は「時間 / 🐻 イベント名 / コート名 + 補足」(§15.4。主催の印は付けない)
+// 同じ枠をテニスベアでも募集している行(format.js の mergeSameSlot が tbTitle を添える)は
+// 「時間 / 公園名 + 補足 / 🐻 イベント名」。キャンセルボタンは都の予約なので付いたまま
 function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
   const main = past ? COLOR_PAST : COLOR_TEXT;
   const sub = past ? COLOR_PAST : COLOR_SUB;
   const time = r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : r.start ? `${formatTime(r.start)} -` : '時間不明';
   const spans = [span(time, { size: timeSize, weight: 'bold', color: main, ...(strike ? { decoration: 'line-through' } : {}) })];
+  const relSpan = () => {
+    if (rel) spans.push(span(`  ${rel}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON }));
+  };
   if (isTennisbear(r)) {
     spans.push(span(`\n🐻 ${r.title || 'イベント'}`, { size: 'sm', weight: 'bold', color: main }));
     if (r.facility) spans.push(span(`\n${r.facility}`, { size: 'xs', color: sub }));
+    relSpan();
   } else {
     spans.push(span(`\n${r.facility || '施設不明'}`, { size: 'sm', color: sub }));
+    relSpan();
+    if (r.tbTitle) spans.push(span(`\n🐻 ${r.tbTitle}`, { size: 'xs', color: sub }));
   }
-  if (rel) spans.push(span(`  ${rel}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON }));
   return { type: 'text', flex: 1, margin: 'md', wrap: true, contents: spans };
 }
 

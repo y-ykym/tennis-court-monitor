@@ -14,7 +14,11 @@
 // フェーズ5(§15): 人に tennisbear が添えられていれば、その人の行にテニスベアの予定を日付順で混ぜる
 //   ・A  9/22(火) 19:00-21:00 🐻 ストローク多め練(亀戸中央公園テニスコート)
 //   テニスベアだけ失敗 → その人の末尾に「・A  (🐻 テニスベアの取得に失敗)」。都だけ失敗 → 「(取得失敗)」の下にテニスベアの予定
+//   同じ 1 つの枠が都とテニスベアの両方に出るときは 1 行にまとめる(mergeSameSlot)
+//   ・A  9/22(火) 19:00-21:00 大島小松川公園 🐻 ストローク多め練
 // ============================================================
+
+import { courtByFacility, courtByTbCode } from './courts.js';
 
 export const MSG_NO_RESERVATIONS = '予約はありません';
 export const MSG_FETCH_FAILED = '予約サイトに繋がりませんでした。少し待ってもう一度お試しください';
@@ -49,19 +53,55 @@ export function sortReservations(list) {
 // テニスベアの行か(tennisbear.js が source を付ける)。都の行と見分け、キャンセルボタンを付けない判定に使う
 export const isTennisbear = (r) => r?.source === 'tennisbear';
 
+// 都の予約とテニスベアの予定が同じ 1 つの枠を指しているか。
+// テニスベアからは都営コートを予約できない(施設マスタの tennisbearReserveFlg が都営 42 件すべて false)ので、
+// 両方に出てくるのは「都で押さえた枠を、テニスベアで練習会として募集した」場合。コートの二重予約ではなく実体は 1 枠。
+// 見るのは 日付・開始時刻・公園 の 3 つ(人は index.js の mergeTennisbear が既に揃えている)。
+// 終了時刻はテニスベア側で取れないことがある(datetimeForDisplay 由来)ので条件に入れない。
+function isSameSlot(res, ev) {
+  if (!res.date || res.date !== ev.date) return false;
+  if (!res.start || res.start !== ev.start) return false;
+  const site = courtByFacility(res.facility);
+  // place.code が本命。取れないときだけコート名(place.name)で引く
+  const tb = courtByTbCode(ev.placeCode) || courtByFacility(ev.facility);
+  return !!site && !!tb && site.parkCode === tb.parkCode;
+}
+
+// 同じ枠の 2 行を 1 行にする。土台は都の予約(キャンセルボタンと予約番号を残すため)で、
+// テニスベアのイベント名を tbTitle として添える。どちらの情報も落とさない。
+// 相手が見つからなかったテニスベアの予定(他の人が主催する練習会など)はそのまま 1 行として残す。
+export function mergeSameSlot(site, tb) {
+  const rows = site.map((r) => ({ ...r }));
+  const rest = [];
+  for (const ev of tb) {
+    // 1 つの都の予約に 2 件ぶら下げない(tbTitle が未設定のものだけを相手にする)
+    const hit = rows.find((r) => r.tbTitle === undefined && isSameSlot(r, ev));
+    if (hit) {
+      hit.tbTitle = ev.title;
+      hit.tbId = ev.id;
+    } else {
+      rest.push(ev);
+    }
+  }
+  return [...rows, ...rest];
+}
+
 // 人 1 人ぶんの表示行: 都の予約(取得できていれば)+ テニスベアの予定(あれば)を日付・開始時刻の昇順に混ぜる(§15.2)
 //   p: { reservations, error?, tennisbear?: { events } | { error } }
 export function mergedRows(p) {
   const site = p.error ? [] : p.reservations || [];
   const tb = p.tennisbear?.events || [];
-  return sortReservations([...site, ...tb]);
+  return sortReservations(mergeSameSlot(site, tb));
 }
 
 function reservationLine(label, r) {
   const date = r.date ? formatDate(r.date) : '日付不明';
   // 時刻は "9:00" のように1桁時は先頭に空白を足して桁を揃える(§11.2 の例と同じ見え方)
   const time = r.start && r.end ? `${formatTime(r.start).padStart(5)}-${formatTime(r.end)}` : r.start ? `${formatTime(r.start).padStart(5)}-` : '';
-  const what = isTennisbear(r) ? `🐻 ${r.title}${r.facility ? `(${r.facility})` : ''}` : r.facility;
+  const what =
+    isTennisbear(r) ? `🐻 ${r.title}${r.facility ? `(${r.facility})` : ''}`
+    : r.tbTitle ? `${r.facility} 🐻 ${r.tbTitle}`
+    : r.facility;
   return `・${label}  ${date} ${time} ${what}`.replace(/\s+$/, '');
 }
 

@@ -8,7 +8,7 @@ const RAW = {
   eventTitle: 'ストローク多め練',
   datetimeForDisplay: '9/22(火祝) 19:00-21:00',
   startDatetimeString: '2026-09-22T19:00:00.000+09:00',
-  place: { name: '亀戸中央公園テニスコート' },
+  place: { code: '0100010009', name: '亀戸中央公園テニスコート' },
   myInfo: { isOrganizer: false },
 };
 
@@ -21,6 +21,7 @@ test('tennisbear: 1 件を都の予約と同じ形に(0 埋めの HH:MM・終了
     start: '19:00',
     end: '21:00',
     facility: '亀戸中央公園テニスコート',
+    placeCode: '0100010009',
     organizer: false,
   });
   // 朝 9 時: 表示は "9:00" でも start/end は "09:00"(都の予約と桁を揃えないと日付順がずれる)
@@ -28,6 +29,8 @@ test('tennisbear: 1 件を都の予約と同じ形に(0 埋めの HH:MM・終了
   assert.equal(morning.start, '09:00');
   assert.equal(morning.end, '11:00');
   assert.equal(morning.organizer, true);
+  // place が無い件でも落ちず、placeCode は空文字(courts.js の突き合わせはコート名に落ちる)
+  assert.equal(normalizeEvent({ ...RAW, place: null }).placeCode, '');
 });
 
 test('tennisbear: 時刻・表示文字列の解析(全角コロン・波ダッシュ・不正値)', () => {

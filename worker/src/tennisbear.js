@@ -11,6 +11,7 @@
 //     start:    string,         // "HH:MM"(0 埋め。都の予約と桁を揃えないと日付順がずれる)
 //     end:      string,         // "HH:MM"(終了時刻は datetimeForDisplay からしか取れない。取れなければ '')
 //     facility: string,         // コート名(place.name)。行の 2 段目
+//     placeCode: string,        // テニスベアの施設 ID(place.code)。都の予約と同じ枠かの突き合わせに使う(courts.js)
 //     organizer: boolean,       // 主催かどうか(myInfo.isOrganizer)。表示には使わないが保持
 //   }
 //
@@ -108,6 +109,7 @@ export function normalizeEvent(ev) {
     start: start || range.start,
     end: range.end,
     facility: typeof ev.place?.name === 'string' ? ev.place.name.trim() : '',
+    placeCode: ev.place?.code != null ? String(ev.place.code) : '',
     organizer: ev.myInfo?.isOrganizer === true,
   };
 }
