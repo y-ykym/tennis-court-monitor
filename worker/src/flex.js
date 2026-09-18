@@ -39,7 +39,6 @@
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
 import { POP_ALERT } from './weather.js';
-import { BARCODE_PNG_SIZE } from './barcode.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
@@ -563,98 +562,4 @@ export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', fa
       footer: linkFooter([siteLinkButton(), refreshButton()]),
     },
   };
-}
-
-// ---- フェーズ7 利用者カード ----
-//
-// 受付でスキャナに読ませる / 代理受付で番号を読み上げる、という現地用途のカード。人ごとに 1 枚のカルーセル。
-// **見た目は予約サイトの「利用者カード」モーダルに寄せている**(受付で出すものが同じに見えるように。2026-09-18 本人希望)。
-//
-//   ┌──────────────────────────────┐ ┌──────────────────────────────┐
-//   │ 利用者カード                  │ │ 利用者カード                  │  ← 18px 太字・ほぼ黒
-//   │                              │ │                              │
-//   │   利用者番号：00000000        │ │   利用者番号：00000001        │  ← ラベルは太字・値は細字(同じ色)
-//   │   利用者氏名：山田太郎 様      │ │   利用者氏名：山田花子 様      │  ← どちらのカードかは氏名で分かる
-//   │                              │ │                              │
-//   │      ███▌▐█ ▌▌███▐▌ ██▌      │ │      ███▌▐█ ▌█ ██▐▌▌ █▌▌     │  ← 中央寄せ(タップで全画面)
-//   │          00000000            │ │          00000001            │  ← 縞の下に小さく黒で番号
-//   └──────────────────────────────┘ └──────────────────────────────┘
-//
-// 寸法・色は実物のモーダルを Chrome で開いて計算済みスタイルを測った値に合わせている(2026-09-18。§17.3)。
-// 実測: カード幅 340px / 見出し 18px・700・#232A2F / ラベル 18px・700・#666B6E / 値 18px・400・#666B6E /
-//       ラベル行は左に 20+10px / 縞は 198px 幅で中央 / 縞の下の番号は 10px・黒・5px 下。
-// LINE の Flex は px を自由に指定できないので、最も近い値(18px→lg=19px、10px→xxs=11px、余白は md/xl/xxl)を当てている。
-//
-// モーダルと違うのは「閉じる」ボタンを置かないことだけ(LINE のメッセージは閉じられないため)。フッター自体を持たない。
-// 呼び名(ゆうたそ / まきたそ)もカードには出さない(モーダルに無いため)。プッシュ通知の altText には残している。
-//
-// バーコードは URL で渡す(Flex の image は URL しか取れない)。中身は利用者番号そのままで変わらないため、
-// 画像は署名付きの固定 URL(期限なし)。生成は src/barcode.js、URL の組み立てと署名は src/card.js。
-
-// 実物のモーダルの実測値(getComputedStyle)
-const CARD_TITLE_COLOR = '#232A2F'; // 見出し
-const CARD_TEXT_COLOR = '#666B6E'; // ラベルと値(同じ色。太さだけ違う)
-// 縞の幅はカード幅の 58%(198 / 340)。filler で挟んで 3:.. の比で近づける
-const CARD_BARCODE_FLEX = 3;
-const CARD_SIDE_FLEX = 1;
-
-// 「利用者番号：00000000」のような 1 行(ラベルは太字、値は細字。色は同じ)
-function labeledLine(label, value, margin = 'none') {
-  return {
-    type: 'text',
-    size: 'lg',
-    wrap: true,
-    margin,
-    contents: [
-      { type: 'span', text: `${label}：`, color: CARD_TEXT_COLOR, weight: 'bold' },
-      { type: 'span', text: value, color: CARD_TEXT_COLOR },
-    ],
-  };
-}
-
-// cards: [{ label, name, userId, imageUrl }]
-export function buildUserCardFlex(cards) {
-  const bubble = (c) => ({
-    type: 'bubble',
-    size: 'giga',
-    // モーダルと同じ「白い 1 枚」に見せるため、ヘッダー領域は使わず body にまとめる
-    body: body(
-      [
-        text('利用者カード', { size: 'lg', weight: 'bold', color: CARD_TITLE_COLOR }),
-        {
-          // 実測: 見出しの下に 36px 空き、この 2 行は左に 10px 字下げされている
-          type: 'box',
-          layout: 'vertical',
-          margin: 'xxl',
-          paddingTop: '16px',
-          paddingStart: '10px',
-          contents: [labeledLine('利用者番号', c.userId), ...(c.name ? [labeledLine('利用者氏名', `${c.name} 様`, 'md')] : [])],
-        },
-        {
-          // 縞は中央寄せ。モーダルと同じくカード幅いっぱいには広げない
-          type: 'box',
-          layout: 'horizontal',
-          margin: 'xxl',
-          contents: [
-            { type: 'filler', flex: CARD_SIDE_FLEX },
-            {
-              type: 'image',
-              url: c.imageUrl,
-              size: 'full',
-              aspectRatio: `${BARCODE_PNG_SIZE.width}:${BARCODE_PNG_SIZE.height}`,
-              aspectMode: 'fit',
-              backgroundColor: '#FFFFFF',
-              flex: CARD_BARCODE_FLEX,
-              action: { type: 'uri', label: '大きく表示', uri: c.imageUrl },
-            },
-            { type: 'filler', flex: CARD_SIDE_FLEX },
-          ],
-        },
-        text(c.userId, { size: 'xxs', color: '#000000', align: 'center', margin: 'sm' }),
-      ],
-      { paddingTop: '16px' }
-    ),
-  });
-  const contents = cards.length === 1 ? bubble(cards[0]) : { type: 'carousel', contents: cards.map(bubble) };
-  return { type: 'flex', altText: `🎫 利用者カード(${cards.map((c) => c.label).join(' / ')})`, contents };
 }

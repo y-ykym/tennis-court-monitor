@@ -16,8 +16,9 @@
 //   Cron(毎月 1 日 9:00 JST)             → 手動メンテ(ブラウザのイメージ再ビルド)のお知らせを LINE に
 //   Cron(毎日 9:00 と 23:35 JST)         → 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を
 //                                         キャンセルボタン付きのカードで知らせる(フェーズ4。src/penalty-alert.js)
-//   フェーズ7(src/card.js): 「うけつけ」→ 受付で見せる利用者カード(利用者番号 + バーコード)を人ごとのカルーセルで。
-//                          バーコードの PNG は GET /card/<A|B>.png?s=<署名>(src/barcode.js)。予約サイトには行かない
+//   フェーズ7(src/card.js): 「うけつけ」→ 受付で見せる利用者カードの画像を人数分だけ返す(文章は添えない)。
+//                          画像は GET /card/<A|B>.png?s=<署名>。KV に入れたカード画像(予約サイトのモーダルそのまま)を返し、
+//                          無ければその場でバーコードだけ作る(src/barcode.js)。予約サイトには行かない
 //   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -172,13 +173,14 @@ async function handleWebhook(request, env, ctx) {
   return new Response('ok', { status: 200 });
 }
 
-// Flex を reply し、形式不備(400)ならテキスト版で再送する。それ以外(401等)は再送しても無駄なので投げる
-async function replyFlexOrText(env, replyToken, flex, fallbackText) {
+// Flex(1 件)またはメッセージの配列を reply し、形式不備(400)ならテキスト版で再送する。
+// それ以外(401等)は再送しても無駄なので投げる
+async function replyFlexOrText(env, replyToken, message, fallbackText) {
   try {
-    await replyMessages(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, [flex]);
+    await replyMessages(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, Array.isArray(message) ? message : [message]);
   } catch (e) {
     if (e.status !== 400) throw e;
-    console.error(`Flex返信が400のためテキストで再送: ${e.message}`);
+    console.error(`返信が400のためテキストで再送: ${e.message}`);
     await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, fallbackText);
   }
 }
@@ -216,7 +218,7 @@ async function replyUserCard(env, replyToken, origin) {
     reply = { text: MSG_CARD_FAILED };
   }
   try {
-    if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
+    if (reply.messages) await replyFlexOrText(env, replyToken, reply.messages, reply.text);
     else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
     console.log(`利用者カードを返信しました (${Date.now() - started}ms)`);
   } catch (e) {
