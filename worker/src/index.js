@@ -16,6 +16,8 @@
 //   Cron(毎月 1 日 9:00 JST)             → 手動メンテ(ブラウザのイメージ再ビルド)のお知らせを LINE に
 //   Cron(毎日 9:00 と 23:35 JST)         → 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を
 //                                         キャンセルボタン付きのカードで知らせる(フェーズ4。src/penalty-alert.js)
+//   フェーズ7(src/card.js): 「うけつけ」→ 受付で見せる利用者カード(利用者番号 + バーコード)を人ごとのカルーセルで。
+//                          バーコードの PNG は GET /card/<A|B>.png?s=<署名>(src/barcode.js)。予約サイトには行かない
 //   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -28,7 +30,8 @@
 //   SITE_USER_B / SITE_PASS_B / LABEL_B   Bの同上(未登録なら A だけで動く)
 //   TB_EMAIL_A / TB_PASS_A                 A のテニスベアのメールアドレス・パスワード(フェーズ5。未登録なら黙って飛ばす)
 //   TB_EMAIL_B / TB_PASS_B                 B の同上
-//   BOOKING_SIGNING_SECRET     「予約」ボタン(フェーズ2)と「キャンセル」ボタン(フェーズ1.6)の署名鍵。KV BOOKING_KV も必要(wrangler.toml)
+//   BOOKING_SIGNING_SECRET     「予約」ボタン(フェーズ2)・「キャンセル」ボタン(フェーズ1.6)・利用者カードの画像URL(フェーズ7)の署名鍵。KV BOOKING_KV も必要(wrangler.toml)
+//   CARD_NAME_A / CARD_NAME_B  利用者カードに出す本名(フェーズ7。受付で照合されるため。未登録なら表示名で代える)
 // 設定(wrangler.toml [vars]):
 //   CANCEL_ENABLED             "1" のときキャンセルボタンを出し、postback を受け付ける
 //
@@ -56,6 +59,7 @@ export { MSG_BOOK };
 import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
 import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, handleAutoSwitchCommand, handleNotifySwitchCommand, AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
+import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -87,6 +91,10 @@ export default {
     if (request.method === 'POST' && url.pathname === '/webhook') {
       return handleWebhook(request, env, ctx);
     }
+
+    // フェーズ7 利用者カードのバーコード画像(LINE の Flex から参照される。署名付き)。src/card.js
+    const card = await handleCardImage(request, env);
+    if (card) return card;
 
     // フェーズ3 自動予約の API(/auto/*。Pi と Actions から署名付きで)。src/auto.js
     const auto = await handleAuto(request, env, ctx);
@@ -142,8 +150,9 @@ async function handleWebhook(request, env, ctx) {
 
   const targets = pickCommandEvents(rawBody, env.LINE_GROUP_ID);
   const autoCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT]);
+  const cardCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CARD_COMMAND_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
-  console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, postback ${postbacks.length}件`);
+  console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, うけつけ ${cardCommands.length}件, postback ${postbacks.length}件`);
 
   // 取得と返信は応答後に続ける(即座に200を返さないとLINE側に切られる)
   for (const ev of targets) {
@@ -151,6 +160,10 @@ async function handleWebhook(request, env, ctx) {
   }
   for (const ev of autoCommands) {
     ctx.waitUntil(replyAutoSettings(env, ev.replyToken, ev.message.text.trim()));
+  }
+  // フェーズ7: バーコード画像の URL に自分自身の origin が必要なので、Webhook を受けた URL から取る
+  for (const ev of cardCommands) {
+    ctx.waitUntil(replyUserCard(env, ev.replyToken, new URL(request.url).origin));
   }
   for (const ev of postbacks) {
     ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data, ev.postback.params));
@@ -190,6 +203,25 @@ async function replyReservations(env, replyToken) {
   }
   // 返信を優先し、予約サイトからのログアウトは最後に行う(30秒枠を超えたら打ち切られても構わない)
   await Promise.allSettled(logouts.map((fn) => fn()));
+}
+
+// フェーズ7: 利用者カードを reply する。予約サイトには行かないので速い(waitUntil 内。例外は全て握ってログに出す)
+async function replyUserCard(env, replyToken, origin) {
+  const started = Date.now();
+  let reply;
+  try {
+    reply = await buildCardReply(env, origin);
+  } catch (e) {
+    console.error(`利用者カードの作成に失敗: ${e.message}`);
+    reply = { text: MSG_CARD_FAILED };
+  }
+  try {
+    if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
+    else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
+    console.log(`利用者カードを返信しました (${Date.now() - started}ms)`);
+  } catch (e) {
+    console.error(`利用者カードの返信に失敗 (${Date.now() - started}ms): ${e.message}`);
+  }
 }
 
 // Secrets から取得対象の一覧を組む(未登録の人は飛ばす)
