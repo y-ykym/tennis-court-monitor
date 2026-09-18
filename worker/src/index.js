@@ -17,8 +17,7 @@
 //   Cron(毎日 9:00 と 23:35 JST)         → 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を
 //                                         キャンセルボタン付きのカードで知らせる(フェーズ4。src/penalty-alert.js)
 //   フェーズ7(src/card.js): 「うけつけ」→ 受付で見せる利用者カードの画像を人数分だけ返す(文章は添えない)。
-//                          画像は GET /card/<A|B>.png?s=<署名>。KV に入れたカード画像(予約サイトのモーダルそのまま)を返し、
-//                          無ければその場でバーコードだけ作る(src/barcode.js)。予約サイトには行かない
+//                          画像は KV に入れたスクショを GET /card/<A|B>.png?s=<署名> で返す。予約サイトには行かない
 //   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -32,7 +31,6 @@
 //   TB_EMAIL_A / TB_PASS_A                 A のテニスベアのメールアドレス・パスワード(フェーズ5。未登録なら黙って飛ばす)
 //   TB_EMAIL_B / TB_PASS_B                 B の同上
 //   BOOKING_SIGNING_SECRET     「予約」ボタン(フェーズ2)・「キャンセル」ボタン(フェーズ1.6)・利用者カードの画像URL(フェーズ7)の署名鍵。KV BOOKING_KV も必要(wrangler.toml)
-//   CARD_NAME_A / CARD_NAME_B  利用者カードに出す本名(フェーズ7。受付で照合されるため。未登録なら表示名で代える)
 // 設定(wrangler.toml [vars]):
 //   CANCEL_ENABLED             "1" のときキャンセルボタンを出し、postback を受け付ける
 //
