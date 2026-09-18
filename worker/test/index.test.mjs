@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPostbackReply, attachCancelData, MSG_CANCEL_DECLINED, MSG_CANCEL_EXPIRED, MSG_CANCEL_DISABLED } from '../src/index.js';
+import { buildPostbackReply, attachCancelData } from '../src/index.js';
+import { MSG_CANCEL_DECLINED, MSG_CANCEL_EXPIRED, MSG_CANCEL_DISABLED } from '../src/messages.js';
 import { signCancelToken, verifyCancelToken } from '../src/cancel-token.js';
 
 const SECRET = 'test-signing-secret';
@@ -119,7 +120,7 @@ test('attachCancelData: 終了済み以外の予約に署名付き data を付�
 
 test('postback: 予約ボタン(book|トークン)は自宅サーバーの /book を叩いて「受け付けました」を返す', async () => {
   const { sign, slotExpiry } = await import('../../booking/src/token.js');
-  const { MSG_BOOK } = await import('../src/index.js');
+  const { MSG_BOOK } = await import('../src/booking.js');
   const SECRET = 'test-secret';
   // 利用日は遠い未来の固定日にする(exp = 利用開始時刻なので、日付が過ぎるとトークンが期限切れになりテストが落ちる。booking.test.mjs は 2026-09-17 に実際に落ちた)
   const token = sign({ park: '1050', date: '2099-09-30', startHour: 13, people: 2, person: 'A', exp: slotExpiry('2099-09-30', 13) }, SECRET);

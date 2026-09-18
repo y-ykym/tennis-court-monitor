@@ -44,6 +44,10 @@
 //   - テニスベアは都と並行で取り、12 秒で打ち切る。失敗しても都の予約は普通に返し、カード末尾に 1 行だけ知らせる(§15.2)
 //   - テニスベアの行にキャンセル用の署名を付けてはならない。署名(attachCancelData)は都の一覧だけに済ませてから合流する
 //   - ログに利用者番号・パスワード・トークン・Cookie・グループID・表示名・予約番号は出さない
+//   - このファイル(エントリポイント)から export してよいのは default と「関数」だけ。
+//     文字列やオブジェクトの定数を export すると workerd がそれを別 Worker の入口とみなし、
+//     `npm run dev` が "not of type 'function or ExportedHandler'" で起動しなくなる
+//     (deploy は通ってしまうので気づきにくい)。定数は src/messages.js などに置く
 // ============================================================
 import { verifySignature, pickCommandEvents, pickTextCommandEvents, pickPostbackEvents, replyText, replyMessages } from './line.js';
 import { fetchReservations, cancelReservation, AuthError } from './site.js';
@@ -53,12 +57,11 @@ import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, is
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
 import { attachWeather } from './weather.js';
 import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotText } from './booking.js';
-
-export { MSG_BOOK };
 import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
 import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, handleAutoSwitchCommand, handleNotifySwitchCommand, AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
+import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANCEL_DECLINED, MSG_CANCEL_DISABLED, MSG_AUTO_UNAVAILABLE } from './messages.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
 const FETCH_BUDGET_MS = 25000;
@@ -71,12 +74,6 @@ const CANCEL_BUTTON_TTL_SEC = 60 * 60;
 const CANCEL_CONFIRM_TTL_SEC = 10 * 60;
 // 「いいえ」の postback data(署名不要)
 const POSTBACK_NO = 'n';
-
-export const MSG_CANCEL_EXPIRED = '時間切れです。「よやく」からやり直してください';
-export const MSG_CANCEL_NOT_FOUND = 'この予約は見つかりませんでした(既にキャンセル済みの可能性があります)。「よやく」で確認してください';
-export const MSG_CANCEL_MISMATCH = '予約の内容が一覧と一致しないため中止しました。「よやく」で確認してください';
-export const MSG_CANCEL_DECLINED = 'キャンセルしませんでした';
-export const MSG_CANCEL_DISABLED = 'キャンセル機能は現在停止しています。予約サイトから操作してください';
 
 export default {
   async fetch(request, env, ctx) {
@@ -373,8 +370,6 @@ export async function buildReservationReply(
 }
 
 // ---- フェーズ3 「じどう」(自動予約の除外設定) ----
-export const MSG_AUTO_UNAVAILABLE = '自動予約の設定は現在使えません(署名鍵または KV が未設定)';
-
 // command: 「じどう」(表示のみ)/「じどうおん」「じどうおふ」(自動予約の ON/OFF)/「つうちおん」「つうちおふ」(空き通知カードの ON/OFF)
 async function replyAutoSettings(env, replyToken, command = AUTO_COMMAND_TEXT) {
   const started = Date.now();
