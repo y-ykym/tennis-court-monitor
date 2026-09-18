@@ -93,6 +93,7 @@ booking/                     フェーズ2 予約支援 + フェーズ3 自動�
 
 worker/                      フェーズ1.5 予約確認ボット + 1.6 予約キャンセル + フェーズ3 の状態置き場 + フェーズ4 予告アラート + フェーズ5 テニスベア合流(Cloudflare Workers。lib/ とは独立)
   src/index.js               Webhook受け口(署名検証→「よやく」判定→A・B並行取得(都+テニスベア)→reply。postback→確認カード/取消実行)。Cron の振り分けもここ
+  src/messages.js            LINE に返す固定メッセージ(キャンセル・自動予約)。index.js から export できないのでここに分けてある(下記)
   src/line.js                LINE署名検証・イベント抽出(テキスト・postback)・reply送信・push送信
   src/site.js                予約サイトへログインして「予約の確認」一覧を取得。cancelReservation で取消 POST(1回だけ)
   src/tennisbear.js          フェーズ5: テニスベアにログインして今後の予定(JSON API)を取り、都の予約と同じ形に正規化(表示のみ)
@@ -210,6 +211,13 @@ LINEグループ「よやく」
 
 値はコード・設定ファイル・リポジトリに一切書かず、`npx wrangler secret put <名前>` で登録します。
 ローカル開発(`npm run dev`)では `worker/.dev.vars`(gitignore済み)に同じキー名で書くと読み込まれます。
+
+> **`worker/src/index.js` から export してよいのは `default` と関数だけです。**
+> workerd は**エントリポイントの名前付き export を「別の Worker の入口」とみなす**ため、
+> 文字列やオブジェクトの定数を export すると `npm run dev` が
+> `Incorrect type for map entry '...': the provided value is not of type 'function or ExportedHandler'`
+> で起動しなくなります(`wrangler deploy` は通ってしまうので気づきにくい)。
+> メッセージなどの定数は `worker/src/messages.js` に置き、index.js から re-export しないでください。
 
 ### 配置手順(初回)
 

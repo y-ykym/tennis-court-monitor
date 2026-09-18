@@ -5,7 +5,8 @@ import {
   handleAuto, verifyAutoRequest, pruneExclusions, addExcludedSlots, loadExclusions, autoStatus, signAutoData, verifyAutoData,
   buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE,
 } from '../src/auto.js';
-import { buildPostbackReply, MSG_AUTO_UNAVAILABLE } from '../src/index.js';
+import { buildPostbackReply } from '../src/index.js';
+import { MSG_AUTO_UNAVAILABLE } from '../src/messages.js';
 import { handleAutoSwitchCommand, loadAutoSwitch, AUTO_ON_TEXT, AUTO_OFF_TEXT, handleNotifySwitchCommand, loadNotifySwitch } from '../src/auto.js';
 import { signCancelToken } from '../src/cancel-token.js';
 import { runMonitor, AUTO_STALL_MS, PROBE_ATTEMPTS as MONITOR_PROBE_ATTEMPTS } from '../src/monitor.js';
