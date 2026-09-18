@@ -23,6 +23,8 @@
 // トークンの形式は booking/src/token.js と同じ(base64url(JSON) . base64url(HMAC-SHA256))。ここでは Web Crypto で検証する。
 // ============================================================
 
+import { PARK_NAMES } from './courts.js';
+
 const KV_KEY = 'booking_url';
 // PC(トンネル)へ中継するパス。これ以外(/webhook など)は触らない
 const PROXY_PATHS = new Set(['/book', '/status', '/result', '/vnc', '/abort', '/websockify', '/novnc/rfb.js']);
@@ -237,8 +239,7 @@ export async function startBooking(env, token) {
   return { status: 'error', payload };
 }
 
-// 予約ボタンへの返信文(postback の reply と、ブラウザ向け画面で共用)。PARK_NAMES は auto.js(除外枠の公園名)でも使う
-export const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
+// 予約ボタンへの返信文(postback の reply と、ブラウザ向け画面で共用)
 export const MSG_BOOK = {
   started: (who, slot) => `🎾 受け付けました\n${who}: ${slot}\n自動で予約を進めています(1分ほど)。結果はこのグループにカードで届きます。ロボット確認が必要になったときもカードでお知らせします。`,
   already: (who, slot) => `この枠(${slot})は ${who} で既に予約が成立しています。「よやく」で確認してください`,

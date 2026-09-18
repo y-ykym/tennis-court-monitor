@@ -23,7 +23,7 @@
 //
 //   枠キーは lib/auto-rules.js と同じ "<公園コード>|<YYYY-MM-DD>|<HH:MM>"。過ぎた除外日・開始時刻を過ぎた除外枠は読むときに落とす
 // ============================================================
-import { PARK_NAMES } from './booking.js';
+import { PARK_NAMES } from './courts.js';
 import { buildAutoSettingsFlex, autoSettingsText } from './auto-flex.js';
 
 export const AUTO_COMMAND_TEXT = 'じどう';
