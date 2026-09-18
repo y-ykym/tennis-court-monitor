@@ -49,6 +49,7 @@ import { fetchTennisbearEvents, TennisbearAuthError } from './tennisbear.js';
 import { formatReply, MSG_FETCH_FAILED, MSG_NO_RESERVATIONS, jstTodayIso } from './format.js';
 import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, isPast, jstNowHHMM } from './flex.js';
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
+import { attachWeather } from './weather.js';
 import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotText } from './booking.js';
 
 export { MSG_BOOK };
@@ -311,10 +312,11 @@ export function mergeTennisbear(results, tb) {
 
 // 「よやく」への返信内容を組む。都の予約とテニスベアの予定を並行で取り、人ごとに合流する。
 // 戻り値: { text }(全員失敗・全員0件はテキストのみ)または { flex, text }(Flex + 400時のテキスト版)
-//   fetchSite / fetchTb はテストで差し替える
+//   フェーズ6: 最後に天気を添える(weather.js)。取れなくても天気なしで一覧は必ず返す
+//   fetchSite / fetchTb / fetchWeather はテストで差し替える
 export async function buildReservationReply(
   env,
-  { budgetMs = FETCH_BUDGET_MS, deferLogout, fetchSite = fetchAllReservations, fetchTb = fetchAllTennisbear } = {}
+  { budgetMs = FETCH_BUDGET_MS, deferLogout, fetchSite = fetchAllReservations, fetchTb = fetchAllTennisbear, addWeather = attachWeather } = {}
 ) {
   const [results, tb] = await Promise.all([
     fetchSite(env, { budgetMs, deferLogout }),
@@ -327,6 +329,12 @@ export async function buildReservationReply(
   // 署名は都の一覧にだけ付け、その後でテニスベアを添える(テニスベアの行にキャンセルボタンが付かないように)
   await attachCancelData(env, results);
   mergeTennisbear(results, tb);
+  // 天気は「あれば嬉しい」情報。attachWeather は中で失敗を握りつぶすが、念のためここでも守る
+  try {
+    await addWeather(results, { today: jstTodayIso(), log: (m) => console.log(`[weather] ${m}`) });
+  } catch (e) {
+    console.error(`[weather] ${e.message}`);
+  }
   const text = formatReply(results);
   if (text === MSG_FETCH_FAILED || text === MSG_NO_RESERVATIONS) return { text };
   return { flex: buildReservationFlex(results), text };

@@ -38,6 +38,7 @@
 // ============================================================
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
+import { POP_ALERT } from './weather.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
@@ -75,6 +76,7 @@ const COLOR_NG_BG = '#6B7280'; // 失敗
 const COLOR_WARN_BG = '#FFF7E6'; // ペナルティ警告
 const COLOR_WARN_FG = '#8A4B00';
 const COLOR_PANEL_BG = '#F8FAFC';
+const COLOR_RAIN = '#DC2626'; // 降水確率が高いときの数字(フェーズ6)
 
 function toUtcDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -149,6 +151,7 @@ function dateTile(iso, past) {
 // テニスベアの行は「時間 / 🐻 イベント名 / コート名 + 補足」(§15.4。主催の印は付けない)
 // 同じ枠をテニスベアでも募集している行(format.js の mergeSameSlot が tbTitle を添える)は
 // 「時間 / 公園名 + 補足 / 🐻 イベント名」。キャンセルボタンは都の予約なので付いたまま
+// フェーズ6: weather.js が r.weather を付けていれば、いちばん下に「☀️ 27℃ ☂ 30%」の行
 function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
   const main = past ? COLOR_PAST : COLOR_TEXT;
   const sub = past ? COLOR_PAST : COLOR_SUB;
@@ -166,7 +169,24 @@ function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
     relSpan();
     if (r.tbTitle) spans.push(span(`\n🐻 ${r.tbTitle}`, { size: 'xs', color: sub }));
   }
+  spans.push(...weatherSpans(r, past));
   return { type: 'text', flex: 1, margin: 'md', wrap: true, contents: spans };
+}
+
+// 天気の span(フェーズ6)。weather.js が付けていなければ何も返さない。
+// 降水確率が高いときだけ数字を赤くする(テニスは雨だと中止になるため、早く気づけるほど取消の猶予が残る)
+function weatherSpans(r, past) {
+  const w = r?.weather;
+  if (!w) return [];
+  const sub = past ? COLOR_PAST : COLOR_SUB;
+  if (w.unknown) return [span('\n— 予報なし', { size: 'xs', color: past ? COLOR_PAST : COLOR_MUTED })];
+  const out = [span(`\n${w.emoji}`, { size: 'xs', color: sub })];
+  if (w.tempC != null) out.push(span(` ${w.tempC}℃`, { size: 'xs', color: sub }));
+  if (w.pop != null) {
+    const wet = !past && w.pop >= POP_ALERT;
+    out.push(span(`  ☂ ${w.pop}%`, { size: 'xs', color: wet ? COLOR_RAIN : sub, ...(wet ? { weight: 'bold' } : {}) }));
+  }
+  return out;
 }
 
 // 右端の「キャンセル」ピル(postback)。data は cancel-token.js の署名付きトークン

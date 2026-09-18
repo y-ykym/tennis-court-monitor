@@ -16,6 +16,9 @@
 //   テニスベアだけ失敗 → その人の末尾に「・A  (🐻 テニスベアの取得に失敗)」。都だけ失敗 → 「(取得失敗)」の下にテニスベアの予定
 //   同じ 1 つの枠が都とテニスベアの両方に出るときは 1 行にまとめる(mergeSameSlot)
 //   ・A  9/22(火) 19:00-21:00 大島小松川公園 🐻 ストローク多め練
+//
+// フェーズ6(§16): weather.js が付けた r.weather があれば末尾に天気を足す
+//   ・A  9/22(火) 19:00-21:00 大島小松川公園  ☀️ 27℃ ☂30%
 // ============================================================
 
 import { courtByFacility, courtByTbCode } from './courts.js';
@@ -102,7 +105,18 @@ function reservationLine(label, r) {
     isTennisbear(r) ? `🐻 ${r.title}${r.facility ? `(${r.facility})` : ''}`
     : r.tbTitle ? `${r.facility} 🐻 ${r.tbTitle}`
     : r.facility;
-  return `・${label}  ${date} ${time} ${what}`.replace(/\s+$/, '');
+  return `・${label}  ${date} ${time} ${what}${weatherText(r)}`.replace(/\s+$/, '');
+}
+
+// 天気の 1 行(テキスト版)。weather.js が付けていなければ空文字
+export function weatherText(r) {
+  const w = r?.weather;
+  if (!w) return '';
+  if (w.unknown) return '  — 予報なし';
+  const parts = [w.emoji];
+  if (w.tempC != null) parts.push(`${w.tempC}℃`);
+  if (w.pop != null) parts.push(`☂${w.pop}%`);
+  return `  ${parts.join(' ')}`;
 }
 
 // people: [{ label: 'A', reservations: [...] } | { label: 'B', error: Error }](各人に tennisbear が添えられていることがある。§15)
