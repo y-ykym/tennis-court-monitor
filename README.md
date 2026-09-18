@@ -27,10 +27,10 @@
 | 2 | 通知カードの予約ボタン → 自宅 Pi が Playwright でログイン〜「予約」まで自動 | Raspberry Pi 5(Docker)+ Worker(玄関) | 2026-09-13 |
 | 3 | Pi が自分で空きを照会(21〜翌 1 時は 1 分おき、日中 2 分、深夜 3 分)し、対象の枠を自動予約。LINE「じどう」で除外日・除外枠 | Pi + Worker + Actions(通知の絞り込み) | 2026-09-17 |
 | 4 | 「今日 23:59 までにキャンセルしないとペナルティ対象になる予約」を朝 9:00 と 23:35 にカードで予告 | Worker(Cron) | 2026-09-17 |
-| 5 | 「よやく」のカードにテニスベアの今後の予定(🐻)を日付順で混ぜる。表示のみ(A のみ。B は Secrets 登録で有効化) | 同 Worker | 2026-09-17 |
+| 5 | 「よやく」のカードにテニスベアの今後の予定(🐻)を日付順で混ぜる。表示のみ(A・B とも有効) | 同 Worker | 2026-09-17 |
 
 運用中の現状・設定値の所在・残 TODO は `docs/引き継ぎ_フェーズ2運用.md` が正。要件の履歴は `docs/予約空き監視_要件定義書.md`(§11 1.5 / §12 1.6 / §13 3 / §14 4 / §15 5)。
-フェーズ5(「よやく」にテニスベアの予定を合流)は **2026-09-17 に A のぶんで稼働開始**(§15 が正)。B は `TB_EMAIL_B`/`TB_PASS_B` を登録すれば出る。
+フェーズ5(「よやく」にテニスベアの予定を合流)は **2026-09-17 に A、2026-09-18 に B も稼働**(§15 が正)。
 
 ## 監視条件
 
@@ -200,7 +200,7 @@ LINEグループ「よやく」
 | `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A` | Aの利用者番号(8桁)・パスワード・返信に表示する名前 |
 | `SITE_USER_B` / `SITE_PASS_B` / `LABEL_B` | Bの同上(未登録なら A だけで動く) |
 | `TB_EMAIL_A` / `TB_PASS_A` | A のテニスベアのメールアドレス・パスワード(フェーズ5。未登録なら都の予約だけ) |
-| `TB_EMAIL_B` / `TB_PASS_B` | B の同上(当面は未登録のまま。登録すれば自動で B のカードにも出る) |
+| `TB_EMAIL_B` / `TB_PASS_B` | B の同上(2026-09-18 登録済み。消せば B のカードは都の予約だけに戻る) |
 
 値はコード・設定ファイル・リポジトリに一切書かず、`npx wrangler secret put <名前>` で登録します。
 ローカル開発(`npm run dev`)では `worker/.dev.vars`(gitignore済み)に同じキー名で書くと読み込まれます。
@@ -322,7 +322,7 @@ cd worker && npx wrangler secret put TB_EMAIL_A
 cd worker && npx wrangler secret put TB_PASS_A
 ```
 
-B も出したくなったら `TB_EMAIL_B` / `TB_PASS_B` を同様に登録するだけです。止めたいときは `npx wrangler secret delete TB_EMAIL_A`。
+B のぶんは `TB_EMAIL_B` / `TB_PASS_B` を同じ手順で登録済み(2026-09-18)。止めたいときは `npx wrangler secret delete TB_EMAIL_A`(B なら `TB_EMAIL_B`)。
 
 ### トラブル時
 
