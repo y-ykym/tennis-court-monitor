@@ -13,7 +13,7 @@
 //     scripts/make-card-image.mjs で PNG を作る → wrangler kv key put で KV に入れる
 //       → GET /card/<A|B>.png?s=<署名> がそれを返す → LINE には image メッセージとして送る
 //
-//   KV に画像が無い人は、Worker がその場で作るバーコードだけの PNG(src/barcode.js)を返す。
+//   KV に画像が無い人は、画像を送らずに利用者番号だけテキストで知らせる(受付で読み上げはできる)。
 //   本名を含む画像はリポジトリに置かない(KV に置く)。
 //
 //   署名は既存の BOOKING_SIGNING_SECRET を使った HMAC の先頭 16 バイト。**期限は付けない**。
@@ -21,8 +21,6 @@
 //   URL が漏れてもカードが見えるだけで、ログインにはパスワードが必要。利用者番号そのものは
 //   受付で相手に見せる値なので、サイトのカード画面を見せるのと同じ range のリスクに留まる。
 // ============================================================
-import { barcodePng } from './barcode.js';
-
 // グループで受け付ける合言葉(flex.js にも同じ文字列を直書きしている。循環 import を避けるため)
 export const CARD_COMMAND_TEXT = 'うけつけ';
 
@@ -36,6 +34,7 @@ export const KV_CARD_IMAGE = (slot) => `card_image_${slot}`;
 
 export const MSG_CARD_FAILED = '利用者カードを表示できませんでした';
 export const MSG_CARD_UNSET = '利用者番号が登録されていません';
+export const MSG_CARD_NO_IMAGE = 'カードの画像が登録されていません(README のフェーズ7 を参照)';
 
 const enc = new TextEncoder();
 
@@ -70,12 +69,12 @@ export async function verifyCardSlot(secret, slot, sig) {
   return safeEqual(await signCardSlot(secret, slot), sig);
 }
 
-// Secrets から利用者カードを出せる人を組む。パスワードは要らない(サイトに行かないため)。
-// 氏名は CARD_NAME_*(受付で照合される本名)。無ければ表示名で代える
+// Secrets から利用者カードを出せる人を組む。パスワードも氏名も要らない
+// (サイトに行かないし、氏名は配る画像に写っているため)
 export function configuredCards(env) {
   return [
-    { slot: 'A', label: env.LABEL_A || 'A', name: env.CARD_NAME_A || '', userId: String(env.SITE_USER_A ?? '') },
-    { slot: 'B', label: env.LABEL_B || 'B', name: env.CARD_NAME_B || '', userId: String(env.SITE_USER_B ?? '') },
+    { slot: 'A', label: env.LABEL_A || 'A', userId: String(env.SITE_USER_A ?? '') },
+    { slot: 'B', label: env.LABEL_B || 'B', userId: String(env.SITE_USER_B ?? '') },
   ].filter((c) => {
     if (!c.userId) return false;
     // CODE128-C は偶数桁の数字しか入れられない(利用者番号は半角数字 8 桁)
@@ -87,23 +86,48 @@ export function configuredCards(env) {
   });
 }
 
+// KV に画像が入っている人(値は取らず名前だけ見る。400KB の画像を毎回読まないため)。
+// 読めなければ null = 分からない扱いにして、画像を送る側に倒す(一時的な失敗なら次の取得で直る)
+async function slotsWithImage(env) {
+  if (!env.BOOKING_KV) return new Set();
+  try {
+    const { keys } = await env.BOOKING_KV.list({ prefix: KV_CARD_IMAGE('') });
+    return new Set(keys.map((k) => k.name.slice(KV_CARD_IMAGE('').length)));
+  } catch (e) {
+    console.error(`[card] KV の一覧を取れませんでした: ${e.message}`);
+    return null;
+  }
+}
+
 // 「うけつけ」への返信。origin は Worker 自身の URL(https://....workers.dev)。
 // 返すのは **カード画像だけ**(人数分の image メッセージ)。文章は添えない(2026-09-18 本人希望)
 export async function buildCardReply(env, origin) {
   const cards = configuredCards(env);
   if (cards.length === 0) return { text: MSG_CARD_UNSET };
   // 画像を出せないときの逃げ道。番号が読めれば受付で読み上げられる
-  const fallback = ['🎫 利用者カード', ...cards.map((c) => `${c.label}${c.name ? `(${c.name} 様)` : ''} ${c.userId}`)].join('\n');
+  const fallback = ['🎫 利用者カード', ...cards.map((c) => `${c.label} ${c.userId}`)].join('\n');
   if (!env.BOOKING_SIGNING_SECRET || !origin) {
     console.error('[card] BOOKING_SIGNING_SECRET か origin が無いため、画像なしで返します');
     return { text: fallback };
   }
+  const ready = await slotsWithImage(env);
+  const withImage = ready === null ? cards : cards.filter((c) => ready.has(c.slot));
+  const without = ready === null ? [] : cards.filter((c) => !ready.has(c.slot));
+  if (withImage.length === 0) {
+    console.error('[card] KV にカード画像がありません');
+    return { text: `${MSG_CARD_NO_IMAGE}\n${fallback}` };
+  }
   const messages = await Promise.all(
-    cards.map(async (c) => {
+    withImage.map(async (c) => {
       const url = `${origin}/card/${c.slot}.png?s=${await signCardSlot(env.BOOKING_SIGNING_SECRET, c.slot)}`;
       return { type: 'image', originalContentUrl: url, previewImageUrl: url };
     })
   );
+  // 画像がまだ無い人は番号だけ知らせる(黙って居ないことにしない)
+  if (without.length > 0) {
+    console.error(`[card] カード画像が無い人がいます: ${without.map((c) => c.slot).join(', ')}`);
+    messages.push({ type: 'text', text: `${MSG_CARD_NO_IMAGE}\n${without.map((c) => `${c.label} ${c.userId}`).join('\n')}` });
+  }
   return { messages, text: fallback };
 }
 
@@ -120,12 +144,15 @@ export async function handleCardImage(request, env) {
   }
   const card = configuredCards(env).find((c) => c.slot === slot);
   if (!card) return new Response('not found', { status: 404 });
-  // 用意してあるカード画像(予約サイトのモーダルそのまま)を優先する。無ければバーコードだけを作って返す
   const stored = await env.BOOKING_KV?.get(KV_CARD_IMAGE(slot), 'arrayBuffer').catch((e) => {
     console.error(`[card] KV からカード画像を読めませんでした (${slot}): ${e.message}`);
     return null;
   });
-  const png = stored ? new Uint8Array(stored) : await barcodePng(card.userId);
+  if (!stored) {
+    console.error(`[card] カード画像が KV にありません (${slot})`);
+    return new Response('not found', { status: 404 });
+  }
+  const png = new Uint8Array(stored);
   return new Response(request.method === 'HEAD' ? null : png, {
     status: 200,
     headers: { 'content-type': 'image/png', 'cache-control': CACHE_CONTROL, 'content-length': String(png.length) },
