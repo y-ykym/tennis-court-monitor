@@ -1,7 +1,7 @@
 // フェーズ7 利用者カード(「うけつけ」)のテスト
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { configuredCards, signCardSlot, verifyCardSlot, buildCardReply, handleCardImage, MSG_CARD_UNSET } from '../src/card.js';
+import { configuredCards, signCardSlot, verifyCardSlot, buildCardReply, handleCardImage, KV_CARD_IMAGE, MSG_CARD_UNSET } from '../src/card.js';
 
 const ORIGIN = 'https://bot.example.workers.dev';
 const env = () => ({
@@ -14,18 +14,14 @@ const env = () => ({
   BOOKING_SIGNING_SECRET: 'test-secret',
 });
 
-// Flex の木から条件に合うノードを集める
-function find(node, pred, out = []) {
-  if (!node || typeof node !== 'object') return out;
-  if (pred(node)) out.push(node);
-  for (const v of Object.values(node)) {
-    if (Array.isArray(v)) v.forEach((x) => find(x, pred, out));
-    else if (v && typeof v === 'object') find(v, pred, out);
-  }
-  return out;
-}
-const texts = (node) => find(node, (n) => (n.type === 'text' || n.type === 'span') && typeof n.text === 'string').map((n) => n.text);
-const images = (node) => find(node, (n) => n.type === 'image');
+// KV の代わり(人ごとのカード画像を持っているふりをする)
+const kvWith = (entries) => ({
+  get: async (key, type) => {
+    const v = entries[key];
+    if (!v) return null;
+    return type === 'arrayBuffer' ? v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) : v;
+  },
+});
 
 test('card: 利用者番号がある人だけを対象にする(奇数桁・数字以外は出さない)', () => {
   assert.deepEqual(configuredCards(env()).map((c) => c.slot), ['A', 'B']);
@@ -47,57 +43,28 @@ test('card: 署名は人ごとに違い、鍵が違えば通らない', async ()
   assert.equal(await verifyCardSlot('', 'A', a), false);
 });
 
-test('card: 2 人ならカルーセル。予約サイトのモーダルと同じ並び(番号 → 氏名 → バーコード → 番号)', async () => {
+test('card: 返すのはカード画像だけ(人数分の image メッセージ。文章は添えない)', async () => {
   const reply = await buildCardReply(env(), ORIGIN);
-  assert.equal(reply.flex.contents.type, 'carousel');
-  const bubbles = reply.flex.contents.contents;
-  assert.equal(bubbles.length, 2);
-  assert.ok(reply.flex.altText.includes('ゆう') && reply.flex.altText.includes('まきたそ'));
-
-  const [a] = bubbles;
-  assert.equal(a.size, 'giga', '受付でスキャナに読ませるので最大幅');
-  // モーダルと同じ「白い 1 枚」に見せるため、ヘッダー領域は使わない
-  assert.equal(a.header, undefined, 'ヘッダー領域は持たない');
-  const t = texts(a.body);
-  assert.deepEqual(
-    t,
-    ['利用者カード', '利用者番号：', '00000000', '利用者氏名：', '山田太郎 様', '00000000'],
-    'モーダルと同じ並び。呼び名は出さず、縞の下にも番号を出す'
-  );
-  assert.ok(!t.includes('ゆう'), '呼び名はカードに出さない(モーダルに無いため)');
-  assert.ok(reply.flex.altText.includes('ゆう'), '通知の要約には呼び名を残す');
-  // 縞の下の番号は中央寄せ(モーダルの HRI と同じ位置)
-  const hri = find(a.body, (n) => n.type === 'text' && n.text === '00000000')[0];
-  assert.equal(hri.align, 'center');
-
-  const img = images(a.body);
-  assert.equal(img.length, 1);
-  assert.ok(img[0].url.startsWith(`${ORIGIN}/card/A.png?s=`));
-  assert.equal(img[0].action.type, 'uri', 'タップで全画面に開ける');
-  assert.equal(img[0].action.uri, img[0].url);
-
-  // フッター(ボタン)は付けない。拡大はバーコードのタップで足りる
-  assert.equal(a.footer, undefined, 'フッターは持たない');
-  assert.equal(find(a, (n) => n.type === 'button').length, 0, 'ボタンは 1 つも置かない');
-
-  // B のカードは B の番号と署名
-  assert.ok(images(bubbles[1].body)[0].url.startsWith(`${ORIGIN}/card/B.png?s=`));
-  assert.ok(texts(bubbles[1].body).includes('00000001'));
+  assert.equal(reply.messages.length, 2, '2 人なら 2 枚');
+  assert.deepEqual(reply.messages.map((m) => m.type), ['image', 'image'], '画像以外は送らない');
+  // 人ごとに違う署名付き URL。preview も同じ画像でよい(小さいため)
+  assert.ok(reply.messages[0].originalContentUrl.startsWith(`${ORIGIN}/card/A.png?s=`));
+  assert.ok(reply.messages[1].originalContentUrl.startsWith(`${ORIGIN}/card/B.png?s=`));
+  assert.equal(reply.messages[0].previewImageUrl, reply.messages[0].originalContentUrl);
+  assert.notEqual(reply.messages[0].originalContentUrl, reply.messages[1].originalContentUrl);
 });
 
-test('card: 1 人ならカルーセルにせずカード 1 枚。氏名が未登録なら出さない', async () => {
+test('card: 1 人なら 1 枚だけ', async () => {
   const reply = await buildCardReply({ SITE_USER_A: '00000000', LABEL_A: 'ゆう', BOOKING_SIGNING_SECRET: 'k' }, ORIGIN);
-  assert.equal(reply.flex.contents.type, 'bubble');
-  const t = texts(reply.flex.contents.body);
-  assert.ok(t.includes('00000000'));
-  assert.ok(!t.some((s) => s.includes('様')));
+  assert.equal(reply.messages.length, 1);
+  assert.ok(reply.messages[0].originalContentUrl.includes('/card/A.png'));
 });
 
-test('card: 署名鍵が無ければバーコード無しで番号だけ返す(受付で読み上げはできる)', async () => {
+test('card: 署名鍵が無ければ画像を出せないので番号だけ返す(受付で読み上げはできる)', async () => {
   const e = env();
   delete e.BOOKING_SIGNING_SECRET;
   const reply = await buildCardReply(e, ORIGIN);
-  assert.equal(reply.flex, undefined);
+  assert.equal(reply.messages, undefined);
   assert.ok(reply.text.includes('00000000') && reply.text.includes('山田太郎'));
 });
 
@@ -105,16 +72,37 @@ test('card: 利用者番号が未登録なら、そう伝える', async () => {
   assert.deepEqual(await buildCardReply({}, ORIGIN), { text: MSG_CARD_UNSET });
 });
 
-test('card: カードに載せた画像 URL でそのまま PNG が取れる(往復)', async () => {
+test('card: 送った URL でそのまま PNG が取れる(往復)', async () => {
   const e = env();
   const reply = await buildCardReply(e, ORIGIN);
-  const url = images(reply.flex.contents.contents[0].body)[0].url;
-  const res = await handleCardImage(new Request(url), e);
+  const res = await handleCardImage(new Request(reply.messages[0].originalContentUrl), e);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-type'), 'image/png');
   assert.match(res.headers.get('cache-control'), /immutable/);
   const png = new Uint8Array(await res.arrayBuffer());
   assert.deepEqual([...png.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+});
+
+test('card: KV に用意したカード画像があればそれを返す。無ければバーコードだけ作る', async () => {
+  const stored = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 5]); // 用意してある画像のつもり
+  const e = { ...env(), BOOKING_KV: kvWith({ [KV_CARD_IMAGE('A')]: stored }) };
+  const sigA = await signCardSlot(e.BOOKING_SIGNING_SECRET, 'A');
+  const withImage = await handleCardImage(new Request(`${ORIGIN}/card/A.png?s=${sigA}`), e);
+  assert.deepEqual([...new Uint8Array(await withImage.arrayBuffer())], [...stored], 'KV の画像をそのまま返す');
+
+  // B は KV に無いので、その場でバーコードを作って返す(用意するまでの間も使える)
+  const sigB = await signCardSlot(e.BOOKING_SIGNING_SECRET, 'B');
+  const generated = await handleCardImage(new Request(`${ORIGIN}/card/B.png?s=${sigB}`), e);
+  const png = new Uint8Array(await generated.arrayBuffer());
+  assert.deepEqual([...png.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+  assert.ok(png.length > 100, 'バーコードの PNG');
+});
+
+test('card: KV が読めなくても落ちない(その場でバーコードを作る)', async () => {
+  const e = { ...env(), BOOKING_KV: { get: async () => { throw new Error('KV down'); } } };
+  const sigA = await signCardSlot(e.BOOKING_SIGNING_SECRET, 'A');
+  const res = await handleCardImage(new Request(`${ORIGIN}/card/A.png?s=${sigA}`), e);
+  assert.equal(res.status, 200);
 });
 
 test('card: 署名が無い・違う画像 URL は 403。担当外のパスは null', async () => {
