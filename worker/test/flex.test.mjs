@@ -28,7 +28,8 @@ function find(node, pred, out = []) {
   }
   return out;
 }
-const tiles = (msg) => find(msg.contents, (n) => n.width === '58px').map((n) => [texts(n).join(' '), n.backgroundColor]);
+// 日付タイル。同じ幅の見えない箱(2 件目以降の左の空き)は背景色が無いので除く
+const tiles = (msg) => find(msg.contents, (n) => n.width === '58px' && n.backgroundColor).map((n) => [texts(n).join(' '), n.backgroundColor]);
 const pills = (msg) => find(msg.contents, (n) => n.action?.type === 'postback');
 
 test('flex: 人ごとに 1 枚のカルーセル。ヘッダーは名前 + 現在日・件数、行は日付昇順', () => {
@@ -291,14 +292,19 @@ test('flex: 同じ日の予定は 1 つの日付タイルの右に時間順で�
   assert.deepEqual(tiles(msg).map(([t]) => t), ['9/22 火', '9/23 水', '9/25 金'], 'タイルは日ごとに 1 つ');
   assert.equal(pills(msg).length, 4, 'キャンセルボタンは都の 4 件ぶん');
   assert.equal(find(msg.contents.body, (n) => n.type === 'separator').length, 2, '罫線は日と日の間(2 本)だけ');
-  // 9/22 の行: タイルの右の縦積みに 13:00(都・ボタン付き)→ 19:00(🐻・ボタン無し)の順
-  const day22 = find(msg.contents.body, (n) => n.margin === 'lg' && n.layout === 'horizontal')[0];
-  const column = day22.contents[1];
-  assert.equal(column.layout, 'vertical');
-  assert.equal(column.contents.length, 2);
-  assert.ok(texts(column.contents[0]).includes('13:00 - 15:00') && pills(column.contents[0]).length === 1);
-  assert.ok(texts(column.contents[1]).includes('19:00 - 21:00') && texts(column.contents[1]).includes('\n🐻 ストローク多め練') && pills(column.contents[1]).length === 0);
-  assert.equal(column.contents[1].margin, 'lg', '同じ日の 2 件目は 12px 空ける(罫線は引かない)');
+  // 9/22 のまとまり: 13:00(都・ボタン付き)→ 19:00(🐻・ボタン無し)の順に 1 行ずつ
+  const day22 = find(msg.contents.body, (n) => n.margin === 'xl' && n.layout === 'vertical')[0];
+  assert.equal(day22.contents.length, 2, '2 件ぶんの行');
+  const [line1, line2] = day22.contents;
+  // 1 件目の左が日付タイル(背景色あり)、2 件目の左は同じ幅の見えない箱
+  assert.equal(line1.contents[0].backgroundColor, '#FBE4E4', '1 件目の左に日付タイル(9/22 は国民の休日なので赤)');
+  assert.equal(line1.contents[0].width, '58px');
+  assert.equal(line2.contents[0].backgroundColor, undefined, '2 件目の左は空き箱');
+  assert.equal(line2.contents[0].width, '58px', '時間の開始位置は 1 件目と揃う');
+  assert.equal(line1.alignItems, 'flex-start', 'タイルの上端を 1 件目の時間の行に揃える');
+  assert.ok(texts(line1).includes('13:00 - 15:00') && pills(line1).length === 1);
+  assert.ok(texts(line2).includes('19:00 - 21:00') && texts(line2).includes('\n🐻 ストローク多め練') && pills(line2).length === 0);
+  assert.equal(line2.margin, 'xl', '同じ日の 2 件目は 16px 空ける(罫線は引かない)');
 });
 
 test('flex: 同じ日に終了済みとこれからの予定が混ざれば、タイルは通常色・終了した枝だけグレー。全部終了ならタイルもグレー', () => {
