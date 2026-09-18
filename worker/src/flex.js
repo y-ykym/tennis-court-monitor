@@ -127,6 +127,8 @@ export function bubbleBytes(bubble) {
   return new TextEncoder().encode(JSON.stringify(bubble)).length;
 }
 
+const TILE_WIDTH = '58px';
+
 // 左の日付タイル: 「9/6」を大きく、その下に曜日。
 // span 1テキスト + 改行で軽くする案は、実機(文字サイズ大)で「9/1」「8」に折れたため 2 テキストに戻した。
 // 日付は shrink-to-fit で幅に収める(折り返しも省略記号も出さない)
@@ -136,7 +138,7 @@ function dateTile(iso, past) {
     type: 'box',
     layout: 'vertical',
     flex: 0,
-    width: '58px',
+    width: TILE_WIDTH,
     backgroundColor: colors.bg,
     cornerRadius: 'md',
     paddingAll: '6px',
@@ -170,7 +172,9 @@ function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
     if (r.tbTitle) spans.push(span(`\n🐻 ${r.tbTitle}`, { size: 'xs', color: sub }));
   }
   spans.push(...weatherSpans(r, past));
-  return { type: 'text', flex: 1, margin: 'md', wrap: true, contents: spans };
+  // lineSpacing: 段(時間 / 公園名 / 🐻 / 天気)が詰まって 1 つの塊に見えないよう行間を空ける
+  // (フェーズ6 で天気の段が増え、実機で窮屈になったため。2026-09-18 本人指摘)
+  return { type: 'text', flex: 1, margin: 'md', wrap: true, lineSpacing: '5px', contents: spans };
 }
 
 // 天気の span(フェーズ6)。weather.js が付けていなければ何も返さない。
@@ -209,30 +213,37 @@ function cancelPill(r, data) {
   };
 }
 
-// 1 予定ぶん: 時間 / 公園名 + 補足 [キャンセル](日付タイルは持たない。同じ日の予定と 1 つのタイルを共有する)
+// 1 予定ぶん: 時間 / 公園名 + 補足 [キャンセル](日付タイルは持たない。同じ日の予定と 1 つのタイルを共有する。
+// 縦の間隔は dayRow 側の行が持つ)
 // 終了済み(当日で時間を過ぎたもの)は文字をグレーにして「終了」を添え、ボタンは付けない
-function entry(r, today, nowHHMM, { first }) {
+function entry(r, today, nowHHMM) {
   const past = isPast(r, today, nowHHMM);
   const rel = past ? '終了' : r.date ? relativeLabel(r.date, today) : null;
   const contents = [detailText(r, { past, rel })];
   // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)
   if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
-  // 同じ日の 2 件目以降は 12px 空ける(8px では 1 件目の公園名と 2 件目の時間が近すぎて 1 つの塊に見えた。2026-09-17 実機)
-  return { type: 'box', layout: 'horizontal', alignItems: 'center', ...(first ? {} : { margin: 'lg' }), contents };
+  return { type: 'box', layout: 'horizontal', alignItems: 'center', contents };
 }
 
-// 1 日 = 1 行: [日付タイル] その日の予定を時間順に縦積み(1 件ならこれまでと同じ見え方)。
-// タイルはその日の予定が全部終了していればグレー。日付の無い予定は 1 件ずつ別の行にする
+// タイルと同じ幅の見えない箱。同じ日の 2 件目以降の左に置いて、時間の開始位置を 1 件目と揃える
+const tileSpacer = () => ({ type: 'box', layout: 'vertical', flex: 0, width: TILE_WIDTH, contents: [{ type: 'filler' }] });
+
+// 1 日 = 1 行のまとまり: [日付タイル] その日の予定を時間順に縦に並べる(1 件ならこれまでと同じ見え方)。
+// タイルはその日の予定が全部終了していればグレー。日付の無い予定は 1 件ずつ別の行にする。
+//
+// タイルは「その日の 1 件目」とだけ横並びにして、上端を時間の行に揃える(2026-09-18 実機で本人指摘)。
+// 縦中央に置くとタイルが下にずれて 1 件目と線が合わない(予定が 1 件でも、天気の段が増えてズレる)。
+// 2 件目以降はタイルと同じ幅の空き箱を左に置いて、時間の位置を 1 件目に揃える
 function dayRow(group, today, nowHHMM) {
   const allPast = group.every((r) => isPast(r, today, nowHHMM));
-  const entries = group.map((r, i) => entry(r, today, nowHHMM, { first: i === 0 }));
-  return {
+  const rows = group.map((r, i) => ({
     type: 'box',
     layout: 'horizontal',
-    margin: 'lg',
-    alignItems: 'center',
-    contents: [dateTile(group[0].date, allPast), { type: 'box', layout: 'vertical', flex: 1, contents: entries }],
-  };
+    alignItems: 'flex-start',
+    ...(i > 0 ? { margin: 'xl' } : {}),
+    contents: [i === 0 ? dateTile(group[0].date, allPast) : tileSpacer(), entry(r, today, nowHHMM)],
+  }));
+  return { type: 'box', layout: 'vertical', margin: 'xl', contents: rows };
 }
 
 // 日付・開始時刻の昇順に並んだ予定を、同じ日付ごとにまとめる(日付が無いものは 1 件ずつ)
@@ -343,7 +354,7 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
     const hidden = merged.length - shown.length;
     groupByDate(shown).forEach((group, j) => {
       // 日と日の間に薄い罫線(目が滑らないように)。同じ日の中は罫線を引かない
-      if (j > 0 || p.error) rows.push({ type: 'separator', margin: 'lg', color: COLOR_LINE });
+      if (j > 0 || p.error) rows.push({ type: 'separator', margin: 'xl', color: COLOR_LINE });
       rows.push(dayRow(group, today, nowHHMM));
     });
     if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
