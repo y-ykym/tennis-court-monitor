@@ -323,3 +323,15 @@ test('flex: 「…ほかN件」は予定の数で数える(同じ日にまとめ
   assert.equal(tiles(msg).length, 2, '1 人 1 日なのでタイルは 1 人 1 個');
   assert.ok(texts(msg.contents).some((s) => /^…ほか\d+件$/.test(s)));
 });
+
+test('flex: 同じ枠を都で予約しテニスベアでも募集している行は 1 行にまとめ、キャンセルボタンは残す', () => {
+  const site = [{ id: '2026000123', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園', status: '支払前', cancelData: DATA }];
+  const ev = { source: 'tennisbear', id: '1621297', title: 'ストローク多め練', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園Ａ', placeCode: '0100010020', organizer: true };
+  const msg = buildReservationFlex([{ label: 'A', reservations: site, tennisbear: { events: [ev] } }], opts);
+  assert.deepEqual(texts(msg.contents.header), ['A', '9/2 現在 ・ 1件'], '2 行に見せず 1 件と数える');
+  assert.deepEqual(tiles(msg).map(([t]) => t), ['9/22 火'], '日付タイルも 1 つ');
+  const t = texts(msg.contents.body);
+  assert.ok(t.includes('\n大島小松川公園'), '土台は都の行(公園名は都の表記)');
+  assert.ok(t.includes('\n🐻 ストローク多め練'), 'テニスベアのイベント名も残す');
+  assert.equal(pills(msg).length, 1, '都の予約なのでキャンセルボタンは付く');
+});
