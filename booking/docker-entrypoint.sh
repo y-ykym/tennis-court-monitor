@@ -12,6 +12,11 @@ fi
 
 : "${DISPLAY:=:99}"; : "${SCREEN_W:=600}"; : "${SCREEN_H:=1000}"; : "${PORT:=8080}"
 
+# 前回の異常終了(Pi の電源断・docker kill など)で Xvfb がロックを残すことがある。残っていると
+# 「Server is already active for display 99」で起動できず、コンテナが再起動を繰り返して自力で戻れない
+# (2026-09-19 のケース組み込みで発生)。このコンテナの Xvfb は常に1つなので、始める前に必ず消す
+rm -f "/tmp/.X${DISPLAY#:}-lock" "/tmp/.X11-unix/X${DISPLAY#:}"
+
 Xvfb "$DISPLAY" -screen 0 "${SCREEN_W}x${SCREEN_H}x24" -nolisten tcp -ac +extension RANDR >/tmp/xvfb.log 2>&1 &
 # ディスプレイが上がるのを待つ
 for i in $(seq 1 50); do xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; sleep 0.1; done
