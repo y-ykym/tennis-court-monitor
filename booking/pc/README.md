@@ -33,7 +33,7 @@ LINE「<呼び名>で予約」ボタン(postback) → Worker が「受け付け�
 5. microSD の中身を SSD に複製し、NVMe 起動へ切替(§5)
 6. `.env` を書いて `docker compose up -d --build` → 疎通確認(§6)
 7. 実枠で通し → GitHub Secrets に BOOKING_BASE_URL を登録して運用開始(§7)
-8. ケース到着後に組み替え。自動復帰・更新の運用(§8)
+8. ケースへの組み替え(2026-09-19 完了)。自動復帰・更新の運用(§8)
 
 ---
 
@@ -201,7 +201,12 @@ docker compose ps                                                      # 3 サ�
   届かなければ LINE グループに「⚠️ 自宅の予約サーバーに繋がりません」を 1 回、復帰したら「✅ 復帰しました」を 1 回送る。
   最長 1 時間気づかない代わりに、トンネルの一時的な切断やコンテナの作り直しでは鳴らない。状態は KV の `monitor_state`。
   **`docker compose up -d` などの作り直しは毎時 0 分前後を避ける**(初回 2026-09-13 21:00 はデプロイの瞬間に当たって誤報した)
-- **ケース到着後**: 電源を切って P579 に組み込む(Active Cooler と HAT+ をそのまま収める。スペーサーは付属の 16mm)
+- **ケース(2026-09-19 に組み込み済み)**: Geekworm P579 V4。Active Cooler と HAT+ はそのまま収まる。
+  公式 wiki の組み立て図は Geekworm 自社の X1001 HAT を前提にしているので、**板の間の 17mm スペーサーと銅ナットは使わない**
+  (公式 M.2 HAT+ 付属の 16mm がそのまま使える)。使うのは **M2.5x5+5mm スペーサー ×4(基板の裏の脚)**、
+  **KM2.5x4mm ネジ ×4**、ゴム足 ×4 だけ。組み込み後の実測は 40℃ 前後
+- **電源を切るときの注意**: `sudo shutdown -h now` → 緑の ACT ランプが消えてから電源を抜く。
+  作業は**毎時 00 分の直後**に始める(Worker の生存確認がその時刻。10 分を超えると LINE に ⚠️ が出る)
 - **更新**: `cd ~/tennis-court-monitor/booking/pc && git pull && docker compose up -d --build`
 - **OS の更新(方針 2026-09-13。予約中断のリスクは受け入れる判断)**: **毎朝 4:00(±10 分)に OS・カーネル・Docker をすべて自動更新**し、
   再起動が必要なら **4:30 に自動再起動**する(`unattended-upgrades`。設定は `apt/` と `systemd/apt-daily-upgrade-override.conf`、pi-init.sh §7 が置く)。
