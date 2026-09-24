@@ -55,7 +55,7 @@ import { createAutoState } from '../src/auto-state.js';
 import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 
 const require = createRequire(import.meta.url);
-const { sendHeartbeat, addExcludedSlots } = require('../../lib/auto-client.js');
+const { sendHeartbeat, addExcludedSlots, fetchTennisbearPlans } = require('../../lib/auto-client.js');
 const { AUTO_BOOKING } = require('../../lib/config.js');
 const { slotKey } = require('../../lib/auto-rules.js');
 // 従来の空き通知カード(予約ボタン付き)。予約直前に対象外になった枠を Pi から通知するのに使う。
@@ -241,6 +241,7 @@ if (AUTO_MODE !== 'off') {
       worker: {
         heartbeat: (payload) => sendHeartbeat(WORKER_URL, SECRET, payload),
         addExcludedSlots: (slots) => addExcludedSlots(WORKER_URL, SECRET, slots),
+        tennisbear: (person) => fetchTennisbearPlans(WORKER_URL, SECRET, person),
       },
       credentialsFor: (person) => {
         const c = credentialsFor(person);

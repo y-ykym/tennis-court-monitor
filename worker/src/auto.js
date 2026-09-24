@@ -10,6 +10,10 @@
 //     GET  /auto/state        → { alive, active, mode, lastSeenAt, dates, slots }   Actions が通知を絞る判断に使う(Pi を直接 probe する)
 //     POST /auto/heartbeat    { active, mode, ... } → 除外一覧 { dates, slots }     Pi が 1 分おきに呼ぶ(除外一覧の取得。KV には書かない)
 //     POST /auto/exclusions   { addSlots: [{ park, date, start, end, facility, reason }] } → 除外一覧   Pi が「手放した枠」を登録
+//     POST /auto/tennisbear   { person: 'A'|'B' } → { configured, events: [{ date, start, end, park, facility, source:'tennisbear' }] }
+//                             Pi が予約直前に呼ぶ(2026-09-24)。その人のテニスベアの今後の予定(tennisbear.js)を、公園コードを付けて返す。
+//                             隣の時間帯に別の場所の予定があれば Pi は自動予約を見送る。TB_EMAIL_*/TB_PASS_* が無い人は configured:false・events:[]。
+//                             取得に失敗したら 502(Pi は直近の結果があればそれで判定し、無ければ見送る)。イベント名は返さない・ログにも出さない
 //
 //   LINE:
 //     「じどう」→ 除外日・除外枠の一覧カード(各行に「解除」、フッターに「日を追加」= 日付ピッカー)。auto-flex.js
@@ -23,8 +27,9 @@
 //
 //   枠キーは lib/auto-rules.js と同じ "<公園コード>|<YYYY-MM-DD>|<HH:MM>"。過ぎた除外日・開始時刻を過ぎた除外枠は読むときに落とす
 // ============================================================
-import { PARK_NAMES } from './courts.js';
+import { PARK_NAMES, courtByTbCode, courtByFacility } from './courts.js';
 import { buildAutoSettingsFlex, autoSettingsText } from './auto-flex.js';
+import { fetchTennisbearEvents } from './tennisbear.js';
 
 export const AUTO_COMMAND_TEXT = 'じどう';
 export const AUTO_ON_TEXT = 'じどうおん';
@@ -45,6 +50,8 @@ const PROBE_RETRY_MS = 1500;
 const PROBE_TIMEOUT_MS = 8000;
 // 署名付きリクエストの時刻のずれの許容(リプレイ防止)
 export const AUTH_WINDOW_MS = 5 * 60 * 1000;
+// /auto/tennisbear でテニスベアを取るときの上限(Pi 側の待ち 10 秒に収める)
+const TENNISBEAR_BUDGET_MS = 8000;
 // 「じどう」カードのボタンの有効期限
 const SETTINGS_BUTTON_TTL_SEC = 60 * 60;
 // 除外日に指定できる範囲(今日から)
@@ -235,8 +242,24 @@ export async function verifyAutoRequest(secret, { method, path, body = '', ts, a
   return safeEqual(expected, auth);
 }
 
+// ---- テニスベアの予定(Pi が予約直前の隣接判定に使う。2026-09-24) ----
+// テニスベアのイベントを Pi が照合しやすい形に。公園コードは place.code(courts.js の台帳)→ コート名の順で引き、都営以外は park:null
+export function tennisbearPlanOf(ev) {
+  const court = courtByTbCode(ev.placeCode) || courtByFacility(ev.facility);
+  return { source: 'tennisbear', date: ev.date, start: ev.start, end: ev.end || '', park: court ? court.parkCode : null, facility: ev.facility || '' };
+}
+export async function fetchTennisbearPlans(env, person, { fetchEvents = fetchTennisbearEvents, budgetMs = TENNISBEAR_BUDGET_MS } = {}) {
+  const p = String(person || '').toUpperCase();
+  if (p !== 'A' && p !== 'B') throw new Error('person は A か B');
+  const email = env[`TB_EMAIL_${p}`];
+  const password = env[`TB_PASS_${p}`];
+  if (!email || !password) return { person: p, configured: false, events: [] };
+  const events = await fetchEvents({ email, password }, { signal: AbortSignal.timeout(budgetMs), log: (msg) => console.log(`[tb:${p}] ${msg}`) });
+  return { person: p, configured: true, events: events.map(tennisbearPlanOf) };
+}
+
 // このモジュールが扱うパス(/auto/*)なら Response、それ以外は null
-export async function handleAuto(request, env, ctx, { now = Date.now() } = {}) {
+export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEvents } = {}) {
   const url = new URL(request.url);
   const p = url.pathname;
   if (!p.startsWith('/auto/')) return null;
@@ -272,6 +295,15 @@ export async function handleAuto(request, env, ctx, { now = Date.now() } = {}) {
   if (p === '/auto/exclusions' && request.method === 'POST') {
     const ex = await addExcludedSlots(env, Array.isArray(json.addSlots) ? json.addSlots : [], now);
     return Response.json(ex);
+  }
+  if (p === '/auto/tennisbear' && request.method === 'POST') {
+    if (json.person !== 'A' && json.person !== 'B') return new Response('bad request', { status: 400 });
+    try {
+      return Response.json(await fetchTennisbearPlans(env, json.person, fetchEvents ? { fetchEvents } : {}));
+    } catch (e) {
+      console.error(`[tb:${json.person}] 自動予約向けの取得に失敗: ${e.message}`);
+      return Response.json({ error: `テニスベアの予定を取得できませんでした(${e.name === 'TennisbearAuthError' ? '認証エラー' : e.name === 'TimeoutError' ? 'タイムアウト' : 'エラー'})` }, { status: 502 });
+    }
   }
   return new Response('not found', { status: 404 });
 }
