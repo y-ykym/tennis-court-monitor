@@ -20,7 +20,7 @@
 //                          画像は KV に入れたスクショを GET /card/<A|B>.png?s=<署名> で返す。予約サイトには行かない
 //   フェーズ8(src/contacts.js): 「きゃんせる」→ 監視対象の都営コート 3 公園の公園名と電話番号のカード(行をタップで電話)。
 //                          番号は src/courts.js の台帳から。予約サイト・KV には行かない
-//   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
+//   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠)。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
 //
@@ -152,7 +152,7 @@ async function handleWebhook(request, env, ctx) {
   const cardCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CARD_COMMAND_TEXT]);
   const contactCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CONTACT_COMMAND_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
-  console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, postback ${postbacks.length}件`);
+  console.log(`webhook受信: 対象イベント ${targets.length}件, せってい ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, postback ${postbacks.length}件`);
 
   // 取得と返信は応答後に続ける(即座に200を返さないとLINE側に切られる)
   for (const ev of targets) {
@@ -396,8 +396,9 @@ export async function buildReservationReply(
   return { flex: buildReservationFlex(results), text };
 }
 
-// ---- フェーズ3 「じどう」(自動予約の除外設定) ----
-// command: 「じどう」(表示のみ)/「じどうおん」「じどうおふ」(自動予約の ON/OFF)/「つうちおん」「つうちおふ」(空き通知カードの ON/OFF)
+// ---- フェーズ3 「せってい」(bot の設定メニュー) ----
+// command: 「せってい」(表示のみ)/「じどうおん」「じどうおふ」(自動予約の ON/OFF)/「つうちおん」「つうちおふ」(空き通知カードの ON/OFF)。
+//   ON/OFF の 4 つはカードの「ON にする」「OFF にする」ボタン(message アクション)からも送られる
 async function replyAutoSettings(env, replyToken, command = AUTO_COMMAND_TEXT) {
   const started = Date.now();
   try {
@@ -442,7 +443,7 @@ async function handlePostback(env, replyToken, data, params) {
 //   params: LINE の postback.params(日付ピッカーで選んだ日 { date })。cancel: 取消の実行関数(テストで差し替える)
 export async function buildPostbackReply(env, data, { deferLogout, now = Date.now(), budgetMs = FETCH_BUDGET_MS, params = null, cancel = cancelReservation } = {}) {
   if (data === POSTBACK_NO) return { text: MSG_CANCEL_DECLINED };
-  // フェーズ3 「じどう」カードのボタン(除外日の追加・解除、除外枠の解除)
+  // フェーズ3 「せってい」カードのボタン(除外日の追加・解除、除外枠の解除)
   if (data.startsWith(AUTO_POSTBACK_PREFIX)) {
     if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) return { text: MSG_AUTO_UNAVAILABLE };
     return handleAutoPostback(env, data, params, { now });

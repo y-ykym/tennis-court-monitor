@@ -18,5 +18,5 @@ export const MSG_CANCEL_MISMATCH = '予約の内容が一覧と一致しない�
 export const MSG_CANCEL_DECLINED = 'キャンセルしませんでした';
 export const MSG_CANCEL_DISABLED = 'キャンセル機能は現在停止しています。予約サイトから操作してください';
 
-// ---- フェーズ3 自動予約(「じどう」) ----
+// ---- フェーズ3 自動予約(「せってい」) ----
 export const MSG_AUTO_UNAVAILABLE = '自動予約の設定は現在使えません(署名鍵または KV が未設定)';
