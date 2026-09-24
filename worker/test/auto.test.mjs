@@ -320,3 +320,41 @@ test('「つうちおふ」「つうちおん」: 空き通知のスイッチを
   assert.equal((await loadNotifySwitch(env)).enabled, true);
   assert.match(on.text, /空き通知カード: 届く/);
 });
+
+test('POST /auto/tennisbear(2026-09-24): その人のテニスベアの予定を公園コード付きで返す。未設定は configured:false、失敗は 502、person 不正は 400。イベント名は返さない', async () => {
+  const env = { ...envOf(), TB_EMAIL_A: 'a@example.com', TB_PASS_A: 'pw' };
+  const calls = [];
+  const fetchEvents = async ({ email, password }, { log }) => {
+    calls.push(email);
+    log('GET events/me/future 200 100ms');
+    if (email === 'fail@example.com') throw new Error('down');
+    return [
+      { source: 'tennisbear', id: '1', title: '秘密のイベント名', date: '2026-09-27', start: '11:00', end: '13:00', facility: '亀戸中央公園', placeCode: '0100010009', lat: 1, lng: 2, organizer: false },
+      { source: 'tennisbear', id: '2', title: 'x', date: '2026-09-28', start: '19:00', end: '', facility: '有明テニスの森 A', placeCode: '9999999999', lat: null, lng: null, organizer: true },
+      { source: 'tennisbear', id: '3', title: 'y', date: '2026-09-29', start: '09:00', end: '11:00', facility: '大島小松川公園Ａ', placeCode: '', lat: null, lng: null, organizer: true },
+    ];
+  };
+  const r = await handleAuto(signed('POST', '/auto/tennisbear', { person: 'A' }, NOW), env, ctx, { now: NOW, fetchEvents });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.configured, true);
+  assert.deepEqual(body.events, [
+    { source: 'tennisbear', date: '2026-09-27', start: '11:00', end: '13:00', park: '1050', facility: '亀戸中央公園' },
+    { source: 'tennisbear', date: '2026-09-28', start: '19:00', end: '', park: null, facility: '有明テニスの森 A' },
+    { source: 'tennisbear', date: '2026-09-29', start: '09:00', end: '11:00', park: '1160', facility: '大島小松川公園Ａ' },
+  ]);
+  assert.ok(!JSON.stringify(body).includes('秘密のイベント名'), 'イベント名は返さない');
+  assert.deepEqual(calls, ['a@example.com']);
+  // B は未設定
+  const rb = await (await handleAuto(signed('POST', '/auto/tennisbear', { person: 'B' }, NOW), env, ctx, { now: NOW, fetchEvents })).json();
+  assert.deepEqual(rb, { person: 'B', configured: false, events: [] });
+  assert.deepEqual(calls, ['a@example.com'], '未設定なら取りに行かない');
+  // 失敗は 502
+  const envFail = { ...env, TB_EMAIL_A: 'fail@example.com' };
+  const rf = await handleAuto(signed('POST', '/auto/tennisbear', { person: 'A' }, NOW), envFail, ctx, { now: NOW, fetchEvents });
+  assert.equal(rf.status, 502);
+  assert.match((await rf.json()).error, /テニスベアの予定を取得できませんでした/);
+  // person 不正・認証なし
+  assert.equal((await handleAuto(signed('POST', '/auto/tennisbear', { person: 'C' }, NOW), env, ctx, { now: NOW, fetchEvents })).status, 400);
+  assert.equal((await handleAuto(new Request('https://w.example/auto/tennisbear', { method: 'POST', body: '{"person":"A"}' }), env, ctx, { now: NOW, fetchEvents })).status, 401);
+});

@@ -11,8 +11,13 @@
 //     まず「いま」の時刻で対象かどうかをもう一度判定する(要件 #11。23:59 に見つけて 00:01 に実行すると +3 日 = ペナルティ期間になる。
 //     +4 日の枠は 23:35 以降は自動予約しない)。対象外になっていたら予約せず、Pi 自身が従来の空き通知カード(予約ボタン付き)を送る
 //     (Actions は見つけた時点で「対象枠だから通知しない」と処理済みのことがあるため)。除外日・除外枠になっていたらカードも送らない。
-//     その利用日の残り枚数が 0 なら見送り(ログイン不要)。そうでなければ reserve() を reservationList + beforeApply 付きで呼び、
-//     ログイン直後の予約一覧でその日の件数を数え、上限(2 件)なら予約せず 'capped'。成立したら結果カード(自動予約の表記。
+//     その利用日の残り枚数が 0 なら見送り(ログイン不要)。
+//     次に Worker からその人のテニスベアの予定を取り(/auto/tennisbear。10 分は使い回す)、候補と時間が重なる予定(場所を問わず)、
+//     または時間が接する別の場所の予定があれば見送り 'conflict'(ログイン不要。2026-09-24 追加。lib/auto-rules.js の findPlaceConflict)。
+//     テニスベアの予定が取れなければ、直近 60 分以内の結果があればそれで判定し、無ければ見送る(判定できないため予約しない)。
+//     そうでなければ reserve() を reservationList + beforeApply 付きで呼び、ログイン直後の予約一覧でその日の件数を数え、
+//     上限(MAX_PER_DAY 件。テニスベアの予定は数えない)なら予約せず 'capped'。同じ一覧で、候補と時間が重なる予約・接する別の公園の予約が
+//     あれば同じく 'conflict'。成立したら結果カード(自動予約の表記。
 //     利用日 = 今日+4 日なら「ペナルティなしで取り消せるのは今日 23:59 まで」とキャンセルボタン)。見送りはカードなし。
 //     失敗のうち「先に取られた(taken)」「サイトが断った(duplicate)」は LINE の通数を節約するためカードを送らずログのみ(人が何もできない失敗)。
 //     ログインできない・reCAPTCHA で拒否・サイトのエラーは放置すると自動予約が全部止まるのでカードで知らせる
@@ -41,7 +46,7 @@ const { AUTO_BOOKING } = require('../../lib/config.js');
 const { filterTargetSlots } = require('../../lib/filter.js');
 const { inMaintenanceWindow } = require('../../lib/maintenance.js');
 const { jstTodayIso, jstEndOfDaySec, jstHHMM } = require('../../lib/date.js');
-const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, startHHMM } = require('../../lib/auto-rules.js');
+const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, startHHMM, findPlaceConflict } = require('../../lib/auto-rules.js');
 
 // 除外一覧はこれより古いものを使わない(Worker に繋がらない間は、これを過ぎたら予約しない)
 const EXCLUSIONS_MAX_AGE_MS = 30 * 60 * 1000;
@@ -55,6 +60,10 @@ export const DAY_REMAINING_TTL_MS = 60 * 60 * 1000;
 // ログインが拒否された(auth_error)予約者は、この時間はその人の自動予約を止める(パスワード誤り等で繰り返すとアカウントロックの恐れ。
 // カードも最初の 1 回だけ)。時間が過ぎたら次の候補で 1 回だけ試し直す
 export const AUTH_PAUSE_MS = 6 * 60 * 60 * 1000;
+// テニスベアの予定(隣接の判定用)を使い回す時間。同じ周期に候補が複数あっても Worker 経由のテニスベアへのログインを 1 回に抑える
+export const TB_PLANS_TTL_MS = 10 * 60 * 1000;
+// テニスベアの予定が取れなかったとき、これより新しい直近の結果があればそれで判定する(無ければ見送る)
+export const TB_PLANS_STALE_MAX_MS = 60 * 60 * 1000;
 
 // 次の照会までの待ち時間: 「前回の開始 + 間隔」を目標にし、既に過ぎていれば MIN_GAP_MS だけ空ける
 export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_GAP_MS }) {
@@ -74,14 +83,14 @@ export function pollIntervalAt(nowMs, baseIntervalMs, schedule = AUTO_BOOKING.PO
 
 // 結果カードを送らない結果: 見送りと、人が何もできない失敗(先に取られた・サイトが断った・サイトのエラー)。LINE の月 200 通の枠を節約する。
 // 送るのは 成功、ログインできない(auth_error)、reCAPTCHA で拒否(rejected)、人に渡したが完了しなかった(abandoned)
-const SILENT_STATUSES = new Set(['capped', 'skipped', 'dry_run', 'taken', 'duplicate', 'error']);
+const SILENT_STATUSES = new Set(['capped', 'conflict', 'skipped', 'dry_run', 'taken', 'duplicate', 'error']);
 
 export function createAutoRunner({
   mode = 'dry-run',
   scrape, // async () => Slot[]
   queue, // booking-queue.js
   state, // auto-state.js
-  worker, // { heartbeat(payload) → Promise<{ dates, slots }>, addExcludedSlots(slots) → Promise }
+  worker, // { heartbeat(payload) → Promise<{ dates, slots }>, addExcludedSlots(slots) → Promise, tennisbear?(person) → Promise<{ configured, events }> }
   book, // async (candidate, { credentials, beforeApply }) → reserve() の結果
   credentialsFor, // (person) → { userId, password, label } | null
   notify = async () => {}, // (flexMessage, what) → LINE に push(server の lineQueue.send)
@@ -108,6 +117,7 @@ export function createAutoRunner({
   // (本人が LINE やサイトで取り消した後に「まだ 1 件ある」と思い込み続けないため)
   const dayRemaining = new Map(); // date → { remaining, at }
   const authFailedAt = new Map(); // person → ログインが拒否された時刻
+  const tbPlans = new Map(); // person → { configured, events, at }(テニスベアの予定。隣接の判定用)
   const remainingFor = (date) => {
     const r = dayRemaining.get(date);
     if (!r) return null;
@@ -290,15 +300,34 @@ export function createAutoRunner({
       state.save();
       return { status: 'capped' };
     }
+    // 隣接の判定(その 1): テニスベアの予定。ログインの前に見て、隣の時間帯に別の場所の予定があれば見送る(ログインせず)
+    const tb = await tennisbearPlansFor(c.person);
+    if (!tb) {
+      log(`見送り: ${describe(c)} (テニスベアの予定が取れず、隣の時間帯に別の場所の予定が無いか判定できないため。ログインせず)`);
+      state.markAttempt(key, 'skipped_tennisbear');
+      state.save();
+      return { status: 'skipped', message: 'テニスベアの予定が取れないため' };
+    }
+    const tbConflict = findPlaceConflict(c, tb.events);
+    if (tbConflict) {
+      log(`見送り: ${describe(c)} (${tbConflict.reason}。ログインせず)`);
+      state.markAttempt(key, 'conflict');
+      state.save();
+      return { status: 'conflict', message: tbConflict.reason };
+    }
     state.markAttempt(key, 'running');
     state.save();
     let listCount = null;
     const beforeApply = async ({ reservations }) => {
-      listCount = reservations.filter((r) => r.date === c.date).length;
+      const sameDay = reservations.filter((r) => r.date === c.date);
+      listCount = sameDay.length;
       await detectReleased(c.person, reservations, today);
       if (listCount >= AUTO_BOOKING.MAX_PER_DAY) {
         return { status: 'capped', message: `${c.date} は既に ${listCount} 件の予約があるため見送りました(手動分を含む)` };
       }
+      // 隣接の判定(その 2): 都の予約一覧。時間が重なる予約・隣の時間帯の別の公園の予約があれば見送る(上限が 1 件のうちは通常ここに来ないが、上限を戻したときのため)
+      const conflict = findPlaceConflict(c, sameDay);
+      if (conflict) return { status: 'conflict', message: conflict.reason };
       return null;
     };
     log(`自動予約 開始: ${describe(c)} 予約者=${creds.label}(${c.person})`);
@@ -358,6 +387,29 @@ export function createAutoRunner({
     return result;
   }
 
+  // その人のテニスベアの予定(隣接の判定用)。Worker の /auto/tennisbear を呼び、TB_PLANS_TTL_MS の間は使い回す。
+  // 取れなければ直近 TB_PLANS_STALE_MAX_MS 以内の結果で代用し、それも無ければ null(呼び出し側は見送る)。
+  // worker.tennisbear が配線されていない(テスト等)ときは「予定なし」として都の予約だけで判定する
+  async function tennisbearPlansFor(person) {
+    if (typeof worker.tennisbear !== 'function') return { configured: false, events: [], at: now() };
+    const cached = tbPlans.get(person);
+    if (cached && now() - cached.at <= TB_PLANS_TTL_MS) return cached;
+    try {
+      const res = await worker.tennisbear(person);
+      const entry = { configured: res?.configured !== false, events: Array.isArray(res?.events) ? res.events : [], at: now() };
+      tbPlans.set(person, entry);
+      log(entry.configured ? `テニスベアの予定を取得: 予約者 ${person} は今後 ${entry.events.length} 件(隣接の判定に使う)` : `予約者 ${person} のテニスベアは未設定のため、隣接の判定は都の予約だけで行う`);
+      return entry;
+    } catch (e) {
+      if (cached && now() - cached.at <= TB_PLANS_STALE_MAX_MS) {
+        log(`テニスベアの予定を取得できないため、${Math.round((now() - cached.at) / 60000)} 分前の結果で判定します(${e.message})`);
+        return cached;
+      }
+      log(`テニスベアの予定を取得できません(${e.message})`);
+      return null;
+    }
+  }
+
   // 自分が自動予約した枠が、その人の予約一覧から消えていたら「サイトで手放した」とみなして除外枠に登録する
   async function detectReleased(person, reservations, today) {
     const mine = state.own().filter((o) => o.person === person && o.date >= today);
@@ -409,7 +461,7 @@ export function createAutoRunner({
   const api = {
     tick, start, stop, mode, active, intervalMs: interval,
     effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
-    exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining,
+    exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining, tbPlans,
   };
   return api;
 }

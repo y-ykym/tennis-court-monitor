@@ -188,3 +188,38 @@ test('通知の振り分け: LINE の「つうちおふ」(notifyEnabled=false)�
   const on = splitForNotification(slots, { today: TODAY, autoState: { alive: false, active: false, dates: [], slots: [], notifyEnabled: true } });
   assert.equal(on.notify.length, 2);
 });
+
+test('隣接の判定(2026-09-24): 時間が重なる予定は場所を問わず見送り。接する予定は別の公園なら見送り、同じ公園なら問題なし。離れている・別の日は問題なし', () => {
+  const { findPlaceConflict } = require('../lib/auto-rules.js');
+  const cand = { park: '1040', date: '2026-09-27', startHour: 13 }; // 猿江 13:00-15:00
+  // 直前(11-13)に別の公園の都の予約
+  const before = findPlaceConflict(cand, [{ date: '2026-09-27', start: '11:00', end: '13:00', facility: '亀戸中央公園' }]);
+  assert.equal(before?.relation, 'before');
+  assert.match(before.reason, /直前に別の場所の予約/);
+  // 直後(15-17)に別の公園のテニスベアの予定(公園コード付き)
+  const after = findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '15:00', end: '17:00', park: '1160', facility: '大島小松川公園Ａ' }]);
+  assert.equal(after?.relation, 'after');
+  assert.match(after.reason, /直後に別の場所のテニスベアの予定/);
+  // 時間が重なる(14-16)別の場所(都営以外 = 公園が分からない)
+  const overlap = findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '14:00', end: '16:00', park: null, facility: '有明テニスの森' }]);
+  assert.equal(overlap?.relation, 'overlap');
+  assert.match(overlap.reason, /時間が重なるテニスベアの予定/);
+  // 時間が重なるなら同じ公園でも見送り(同時に 2 面はできない)
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '13:00', end: '15:00', park: '1040', facility: '猿江恩賜公園' }])?.relation, 'overlap');
+  assert.equal(findPlaceConflict(cand, [{ date: '2026-09-27', start: '13:00', end: '15:00', facility: '猿江恩賜公園' }])?.relation, 'overlap');
+  // 接するだけなら同じ公園は問題なし
+  assert.equal(findPlaceConflict(cand, [{ date: '2026-09-27', start: '11:00', end: '13:00', facility: '猿江恩賜公園' }]), null);
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '15:00', end: '17:00', park: '1040', facility: '猿江恩賜公園' }]), null);
+  // 離れている(9-11 と 13-15 の間に 2 時間)・別の日 は問題なし
+  assert.equal(findPlaceConflict(cand, [{ date: '2026-09-27', start: '09:00', end: '11:00', facility: '亀戸中央公園' }]), null);
+  assert.equal(findPlaceConflict(cand, [{ date: '2026-09-28', start: '11:00', end: '13:00', facility: '亀戸中央公園' }]), null);
+  // 終了時刻が無いテニスベアの予定は 2 時間と仮定(11:00 開始 → 13:00 終了 = 接する)。11:30 開始なら 13:30 終了で重なる
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '11:00', end: '', park: null, facility: 'どこか' }])?.relation, 'before');
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '11:30', end: '', park: null, facility: 'どこか' }])?.relation, 'overlap');
+  // 間の空きの許容(既定 0 分): 12:30 終了なら 30 分空くので問題なし。gapMinutes を 30 にすれば見送り
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '10:30', end: '12:30', park: null, facility: 'どこか' }]), null);
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '10:30', end: '12:30', park: null, facility: 'どこか' }], { gapMinutes: 30 })?.relation, 'before');
+  assert.equal(AUTO_BOOKING.ADJACENT_GAP_MINUTES, 0);
+  // 空き枠の形(facility + time)の候補でも判定できる
+  assert.equal(findPlaceConflict(slot('猿江恩賜公園', '2026-09-27', '13:00-15:00'), [{ date: '2026-09-27', start: '15:00', end: '17:00', facility: '亀戸中央公園' }])?.relation, 'after');
+});

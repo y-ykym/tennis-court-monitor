@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
+
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { AUTO_BOOKING } = require('../../lib/config.js');
 
 const SECRET = 'test-signing-secret';
 // 2026-09-14(月) JST 10:00
@@ -15,7 +19,7 @@ const slot = (facility, date, time, count = 1) => ({ facility, date, time, count
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ar-')), 'auto-state.json');
 const flush = () => new Promise((r) => setTimeout(r, 20));
 
-function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] }, book, reservations = {}, creds = { A: true, B: true }, heartbeatFails = false, start = T0 } = {}) {
+function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] }, book, reservations = {}, creds = { A: true, B: true }, heartbeatFails = false, start = T0, workerOverride = null } = {}) {
   let t = start;
   const logs = [];
   const notified = [];
@@ -26,19 +30,20 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
   const state = createAutoState({ file: tmpFile(), now: () => t });
   const queue = createBookingQueue();
   let current = slots;
+  const workerRef = Object.assign(workerOverride || {}, {
+    heartbeat: async (p) => {
+      heartbeats.push(p);
+      if (heartbeatFails) throw new Error('offline');
+      return exclusions;
+    },
+    addExcludedSlots: async (s) => added.push(...s),
+  });
   const runner = createAutoRunner({
     mode,
     scrape: async () => current,
     queue,
     state,
-    worker: {
-      heartbeat: async (p) => {
-        heartbeats.push(p);
-        if (heartbeatFails) throw new Error('offline');
-        return exclusions;
-      },
-      addExcludedSlots: async (s) => added.push(...s),
-    },
+    worker: workerRef,
     book:
       book ||
       (async (c, { beforeApply }) => {
@@ -57,7 +62,7 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
     maintenance: () => false,
   });
   return {
-    runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards,
+    runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards, workerRef,
     setSlots: (s) => (current = s),
     advance: (ms) => (t += ms),
     now: () => t,
@@ -629,4 +634,139 @@ test('LINE の「つうちおふ」: 予約直前に対象外になった枠の�
   assert.equal(vac.length, 0, 'カードを送らない');
   assert.ok(logs.some((l) => l.includes('つうちおふ') && l.includes('送らない')));
   assert.equal(runner.remoteNotify(), false);
+});
+
+// ---- 隣接の判定(2026-09-24 追加): 隣の時間帯に別の場所の予定があれば見送る ----
+function withTennisbear(h, impl) {
+  // harness の worker にテニスベアの取得を配線する(createAutoRunner は worker オブジェクトを参照で持つ)
+  h.tbCalls = [];
+  h.workerRef.tennisbear = async (person) => {
+    h.tbCalls.push(person);
+    return impl(person);
+  };
+  return h;
+}
+// harness の worker オブジェクトに後から手を入れられるよう、参照を残す
+const harnessTb = (opts, impl) => {
+  const worker = {};
+  const h = harness({ ...opts, workerOverride: worker });
+  return withTennisbear(h, impl);
+};
+
+test('隣接(テニスベア): 隣の時間帯に別の場所のテニスベアの予定があれば、ログインせず見送り(conflict)。カードは送らない。同じ公園なら予約する', async () => {
+  // 9/27(日) A。テニスベアに 11:00-13:00 亀戸中央 の予定がある → 猿江 13:00 は見送り、大島 15:00 は離れているので予約、亀戸 13:00 は同じ公園なので候補になる
+  const h = harnessTb({}, async () => ({ configured: true, events: [{ source: 'tennisbear', date: '2026-09-27', start: '11:00', end: '13:00', park: '1050', facility: '亀戸中央公園' }] }));
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-27', '13:00-15:00')]);
+  assert.deepEqual(await h.runner.tick(), { newSlots: 1, planned: 1 });
+  await flush();
+  assert.deepEqual(h.bookings, [], 'ログイン(book)まで行かない');
+  assert.equal(h.notified.length, 0, 'カードなし');
+  assert.equal(h.state.attemptStatus('1040|2026-09-27|13:00'), 'conflict');
+  assert.ok(h.logs.some((l) => l.includes('見送り') && l.includes('直前に別の場所のテニスベアの予定') && l.includes('ログインせず')), h.logs.join('\n'));
+  assert.deepEqual(h.tbCalls, ['A']);
+  // 同じ公園(亀戸 13:00)なら予約する。10 分以内なのでテニスベアは取り直さない
+  h.advance(60_000);
+  h.setSlots([slot('亀戸中央公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(h.bookings, ['2026-09-27 1050 13 A']);
+  assert.equal(h.notified.length, 1, '成功カード');
+  assert.deepEqual(h.tbCalls, ['A'], '10 分は使い回す');
+  // 10 分を過ぎたら取り直す(9/28(月)の猿江 19 時 → 予約者は B)
+  h.advance(TB_PLANS_TTL_MS + 1000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-28', '19:00-21:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(h.tbCalls, ['A', 'B'], '9/28(月)は B');
+  assert.equal(h.state.attemptStatus('1040|2026-09-28|19:00'), 'success');
+});
+
+test('隣接(テニスベア): 予定が取れなければ見送る(判定できないため予約しない)。直近 60 分以内の結果があればそれで判定する', async () => {
+  let fail = true;
+  const h = harnessTb({}, async () => {
+    if (fail) throw new Error('Worker HTTP 502 /auto/tennisbear');
+    return { configured: true, events: [] };
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(h.bookings, []);
+  assert.equal(h.state.attemptStatus('1040|2026-09-27|13:00'), 'skipped_tennisbear');
+  assert.ok(h.logs.some((l) => l.includes('テニスベアの予定が取れず')), h.logs.join('\n'));
+  // 取れるようになったら予約する
+  fail = false;
+  h.advance(60_000);
+  h.setSlots([]);
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(h.bookings, ['2026-09-27 1040 13 A']);
+  // その後また失敗しても、60 分以内の結果で判定して予約する(別の日 10/3(土)。9/27 は上限に達している)
+  fail = true;
+  h.advance(TB_PLANS_TTL_MS + 1000);
+  h.setSlots([slot('大島小松川公園', '2026-10-03', '09:00-11:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.ok(h.logs.some((l) => l.includes('分前の結果で判定します')), h.logs.join('\n'));
+  assert.equal(h.state.attemptStatus('1160|2026-10-03|09:00'), 'success');
+});
+
+test('隣接(テニスベア未設定): configured=false なら都の予約だけで判定し、予約する', async () => {
+  const h = harnessTb({}, async () => ({ configured: false, events: [] }));
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(h.bookings, ['2026-09-27 1040 13 A']);
+  assert.ok(h.logs.some((l) => l.includes('テニスベアは未設定')));
+});
+
+test('隣接(都の予約): 予約直前の一覧に、隣の時間帯の別の公園の予約があれば見送り(conflict)。上限を 2 件にして確認(上限 1 件のうちは capped が先に当たる)', async () => {
+  const saved = AUTO_BOOKING.MAX_PER_DAY;
+  AUTO_BOOKING.MAX_PER_DAY = 2;
+  try {
+    // A は 9/27 に 亀戸 11:00-13:00 を手動で持っている → 猿江 13:00 は見送り(ログインして一覧を見た上で)、猿江 15:00 は 2 時間空くので予約
+    const reservations = { A: [{ id: 'R9', date: '2026-09-27', start: '11:00', end: '13:00', facility: '亀戸中央公園' }] };
+    const h = harnessTb({ reservations }, async () => ({ configured: true, events: [] }));
+    await h.runner.tick();
+    h.advance(60_000);
+    h.setSlots([slot('猿江恩賜公園', '2026-09-27', '13:00-15:00')]);
+    await h.runner.tick();
+    await flush();
+    assert.equal(h.state.attemptStatus('1040|2026-09-27|13:00'), 'conflict');
+    assert.deepEqual(h.bookings, ['2026-09-27 1040 13 A'], '都の予約との隣接は一覧を見ないと分からないのでログインはする');
+    h.advance(60_000);
+    h.setSlots([slot('猿江恩賜公園', '2026-09-27', '15:00-17:00')]);
+    await h.runner.tick();
+    await flush();
+    assert.equal(h.state.attemptStatus('1040|2026-09-27|15:00'), 'success');
+    assert.equal(h.notified.length, 1, '成功カードだけ');
+    assert.ok(h.logs.some((l) => l.includes('conflict') && l.includes('直前に別の場所の予約')), h.logs.join('\n'));
+    // テニスベアのイベントは上限の件数に数えない: 同じ日に予定が 2 件あっても(離れた時間・同じ公園)予約できる。
+    // ただし時間が重なる予定(同じ公園でも)があれば見送り
+    const h2 = harnessTb({ reservations: { A: [] } }, async () => ({
+      configured: true,
+      events: [
+        { source: 'tennisbear', date: '2026-09-27', start: '09:00', end: '11:00', park: '1040', facility: '猿江恩賜公園' },
+        { source: 'tennisbear', date: '2026-09-27', start: '17:00', end: '19:00', park: '1050', facility: '亀戸中央公園' },
+      ],
+    }));
+    await h2.runner.tick();
+    h2.advance(60_000);
+    h2.setSlots([slot('猿江恩賜公園', '2026-09-27', '13:00-15:00'), slot('猿江恩賜公園', '2026-09-27', '09:00-11:00')]);
+    await h2.runner.tick();
+    await flush();
+    assert.deepEqual(h2.bookings, ['2026-09-27 1040 13 A']);
+    assert.equal(h2.state.attemptStatus('1040|2026-09-27|09:00'), 'conflict', '同じ公園でも時間が重なれば見送り');
+    assert.ok(h2.logs.some((l) => l.includes('時間が重なるテニスベアの予定') && l.includes('ログインせず')), h2.logs.join('\n'));
+  } finally {
+    AUTO_BOOKING.MAX_PER_DAY = saved;
+  }
 });
