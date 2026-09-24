@@ -18,6 +18,8 @@
 //                                         キャンセルボタン付きのカードで知らせる(フェーズ4。src/penalty-alert.js)
 //   フェーズ7(src/card.js): 「うけつけ」→ 受付で見せる利用者カードの画像を人数分だけ返す(文章は添えない)。
 //                          画像は KV に入れたスクショを GET /card/<A|B>.png?s=<署名> で返す。予約サイトには行かない
+//   フェーズ8(src/contacts.js): 「きゃんせる」→ 監視対象の都営コート 3 公園の公園名と電話番号のカード(行をタップで電話)。
+//                          番号は src/courts.js の台帳から。予約サイト・KV には行かない
 //   フェーズ3(src/auto.js): 「じどう」→ 自動予約の除外日・除外枠のカード。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -61,6 +63,7 @@ import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor
 import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, handleAutoSwitchCommand, handleNotifySwitchCommand, AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
+import { CONTACT_COMMAND_TEXT, buildContactReply, MSG_CONTACT_FAILED } from './contacts.js';
 import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANCEL_DECLINED, MSG_CANCEL_DISABLED, MSG_AUTO_UNAVAILABLE } from './messages.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
@@ -147,8 +150,9 @@ async function handleWebhook(request, env, ctx) {
   const targets = pickCommandEvents(rawBody, env.LINE_GROUP_ID);
   const autoCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT]);
   const cardCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CARD_COMMAND_TEXT]);
+  const contactCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CONTACT_COMMAND_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
-  console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, うけつけ ${cardCommands.length}件, postback ${postbacks.length}件`);
+  console.log(`webhook受信: 対象イベント ${targets.length}件, じどう ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, postback ${postbacks.length}件`);
 
   // 取得と返信は応答後に続ける(即座に200を返さないとLINE側に切られる)
   for (const ev of targets) {
@@ -160,6 +164,10 @@ async function handleWebhook(request, env, ctx) {
   // フェーズ7: バーコード画像の URL に自分自身の origin が必要なので、Webhook を受けた URL から取る
   for (const ev of cardCommands) {
     ctx.waitUntil(replyUserCard(env, ev.replyToken, new URL(request.url).origin));
+  }
+  // フェーズ8: 台帳の電話番号を返すだけ(サイト・KV に行かない)
+  for (const ev of contactCommands) {
+    ctx.waitUntil(replyContacts(env, ev.replyToken));
   }
   for (const ev of postbacks) {
     ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data, ev.postback.params));
@@ -218,6 +226,25 @@ async function replyUserCard(env, replyToken, origin) {
     console.log(`利用者カードを返信しました (${Date.now() - started}ms)`);
   } catch (e) {
     console.error(`利用者カードの返信に失敗 (${Date.now() - started}ms): ${e.message}`);
+  }
+}
+
+// フェーズ8: コートの連絡先を reply する(waitUntil 内。例外は全て握ってログに出す)
+async function replyContacts(env, replyToken) {
+  const started = Date.now();
+  let reply;
+  try {
+    reply = buildContactReply();
+  } catch (e) {
+    console.error(`連絡先カードの作成に失敗: ${e.message}`);
+    reply = { text: MSG_CONTACT_FAILED };
+  }
+  try {
+    if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
+    else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
+    console.log(`連絡先を返信しました (${Date.now() - started}ms)`);
+  } catch (e) {
+    console.error(`連絡先の返信に失敗 (${Date.now() - started}ms): ${e.message}`);
   }
 }
 
