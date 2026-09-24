@@ -8,15 +8,15 @@
 //   │ 📖 使い方                             │  ← 濃紺ヘッダー(他のカードと同じ配色)
 //   │    グループで送る合言葉                 │
 //   ├──────────────────────────────────┤
-//   │ [よやく]     予約一覧                  │  ← 行をタップするとその合言葉が送られる(message アクション)
-//   │              都の予約とテニスベアの予定   │
+//   │ [よやく]     予約の一覧                │  ← 行をタップするとその合言葉が送られる(message アクション)
+//   │              都営コートとテニスベアの予定 │
 //   │ ───────────────────────────────── │
-//   │ [せってい]   設定メニュー               │
-//   │              自動予約・空き通知の ON/OFF…│
+//   │ [せってい]   設定                      │
+//   │              自動予約と空き通知を止める…  │
 //   │ ───────────────────────────────── │
-//   │ [うけつけ]   利用者カード               │
+//   │ [うけつけ]   受付で見せるカード          │
 //   │ ───────────────────────────────── │
-//   │ [きゃんせる] キャンセルの連絡先          │
+//   │ [きゃんせる] 電話でキャンセル            │
 //   │ ───────────────────────────────── │
 //   │ [へるぷ]     この一覧                  │
 //   │ 行をタップすると、その合言葉が送られます │
@@ -26,7 +26,7 @@
 //   予約サイト・KV・Secrets には触らないので返信は 1 秒以内。フッターのボタンは置かない(行そのものが導線)。
 // ============================================================
 import { COMMAND_TEXT } from './line.js';
-import { AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT } from './auto.js';
+import { AUTO_COMMAND_TEXT } from './auto.js';
 import { CARD_COMMAND_TEXT } from './card.js';
 import { CONTACT_COMMAND_TEXT } from './contacts.js';
 
@@ -47,19 +47,15 @@ const COLOR_PILL_FG = '#1F2A44';
 const text = (str, extra = {}) => ({ type: 'text', text: String(str), ...extra });
 
 // カードに載せる合言葉の一覧(表示順)。keyword は各モジュールの定数そのもの
-//   title: 何が返るか(1 語)。desc: 補足(1〜2 文)。note: さらに小さく出す補足(打ち込みでも動く合言葉など)
+//   title: したいこと(1 語)。desc: 補足(1〜2 文)。読む人は家族・仲間なので、仕組みの用語(除外枠など)は使わない。
+//   ON/OFF の打ち込み合言葉(じどうおん など)は載せない(設定カードのボタンで押せる。2026-09-25 本人決定)
 export function helpRows() {
   return [
-    { keyword: COMMAND_TEXT, title: '予約一覧', desc: '都の予約とテニスベアの予定を日付順に。各行に天気、都の予約には「キャンセル」' },
-    {
-      keyword: AUTO_COMMAND_TEXT,
-      title: '設定メニュー',
-      desc: '自動予約・空き通知カードの ON/OFF、除外日・除外枠の一覧と追加・解除',
-      note: `打ち込みでも切り替えられます: ${AUTO_ON_TEXT}/${AUTO_OFF_TEXT}(自動予約)、${NOTIFY_ON_TEXT}/${NOTIFY_OFF_TEXT}(空き通知)`,
-    },
-    { keyword: CARD_COMMAND_TEXT, title: '利用者カード', desc: '受付で見せるカードの画像を人数分(文章は添えません)' },
-    { keyword: CONTACT_COMMAND_TEXT, title: 'キャンセルの連絡先', desc: '都営コートの公園のサービスセンターの電話番号。番号をタップすると電話がかかります' },
-    { keyword: HELP_COMMAND_TEXT, title: 'この一覧', desc: '合言葉の使い方' },
+    { keyword: COMMAND_TEXT, title: '予約の一覧', desc: '都営コートとテニスベアの予定を日付順に。天気も出ます。キャンセルもここから' },
+    { keyword: AUTO_COMMAND_TEXT, title: '設定', desc: '自動予約と空き通知を止める・戻す。予約したくない日を決める' },
+    { keyword: CARD_COMMAND_TEXT, title: '受付で見せるカード', desc: '利用者カードの画像を人数分' },
+    { keyword: CONTACT_COMMAND_TEXT, title: '電話でキャンセル', desc: '都営コートの電話番号。タップでかかります' },
+    { keyword: HELP_COMMAND_TEXT, title: 'この一覧', desc: '合言葉と、送ると何が返るか' },
   ];
 }
 
@@ -82,12 +78,11 @@ function keywordPill(keyword) {
   };
 }
 
-function helpRow({ keyword, title, desc, note }, { first }) {
+function helpRow({ keyword, title, desc }, { first }) {
   const right = [
     text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT, wrap: true }),
     text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' }),
   ];
-  if (note) right.push(text(note, { size: 'xxs', color: COLOR_MUTED, wrap: true, margin: 'xs' }));
   return {
     type: 'box',
     layout: 'horizontal',

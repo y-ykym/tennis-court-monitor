@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HELP_COMMAND_TEXT, helpRows, buildHelpFlex, helpText, buildHelpReply } from '../src/help.js';
 import { COMMAND_TEXT, pickTextCommandEvents } from '../src/line.js';
-import { AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT } from '../src/auto.js';
+import { AUTO_COMMAND_TEXT } from '../src/auto.js';
 import { CARD_COMMAND_TEXT } from '../src/card.js';
 import { CONTACT_COMMAND_TEXT } from '../src/contacts.js';
 
@@ -30,9 +30,9 @@ test('help: 合言葉は「へるぷ」。一覧には bot が受け付ける合
   assert.deepEqual(keywords, [COMMAND_TEXT, AUTO_COMMAND_TEXT, CARD_COMMAND_TEXT, CONTACT_COMMAND_TEXT, HELP_COMMAND_TEXT]);
   assert.deepEqual(keywords, ['よやく', 'せってい', 'うけつけ', 'きゃんせる', 'へるぷ']);
   assert.equal(new Set(keywords).size, keywords.length);
-  // ON/OFF の打ち込み合言葉は「せってい」の行の補足に出す(行は増やさない)
-  const settings = helpRows().find((r) => r.keyword === AUTO_COMMAND_TEXT);
-  for (const k of [AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT]) assert.ok(settings.note.includes(k), `${k} が補足に載っている`);
+  // ON/OFF の打ち込み合言葉(じどうおん など)は載せない(設定カードのボタンで押せる)。仕組みの用語も使わない
+  const all = JSON.stringify(helpRows());
+  for (const w of ['じどうおん', 'じどうおふ', 'つうちおん', 'つうちおふ', '除外', 'A・B']) assert.ok(!all.includes(w), `${w} は載せない`);
 });
 
 test('help: カードに合言葉と説明が全部載り、行ごとに message アクション(その合言葉を送る)が付く', () => {
