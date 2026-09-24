@@ -1,5 +1,5 @@
 // ============================================================
-// フェーズ3 自動予約の Worker 側(状態の置き場・API・「じどう」コマンドの postback)
+// フェーズ3 自動予約の Worker 側(状態の置き場・API・「せってい」コマンドの postback)
 //
 //   KV(BOOKING_KV):
 //     auto_exclusions  { dates: ['YYYY-MM-DD'], slots: [{ park, date, start, end, facility, reason, at }] }  除外日・除外枠(A/B 共通)
@@ -16,10 +16,11 @@
 //                             取得に失敗したら 502(Pi は直近の結果があればそれで判定し、無ければ見送る)。イベント名は返さない・ログにも出さない
 //
 //   LINE:
-//     「じどう」→ 除外日・除外枠の一覧カード(各行に「解除」、フッターに「日を追加」= 日付ピッカー)。auto-flex.js
-//     「じどうおふ」/「じどうおん」→ 自動予約の一時停止 / 再開(KV auto_switch。Pi は heartbeat の応答で受け取り、次の照会から従う。
+//     「せってい」→ 設定メニューのカード(自動予約・空き通知カードの ON/OFF ボタン、除外日・除外枠の一覧と「解除」、
+//       フッターに「除外日を追加」= 日付ピッカー)。auto-flex.js。2026-09-25 まで合言葉は「じどう」
+//     「じどうおふ」/「じどうおん」→ 自動予約の一時停止 / 再開(カードの「OFF にする」「ON にする」もこの合言葉を送る。KV auto_switch。Pi は heartbeat の応答で受け取り、次の照会から従う。
 //       停止中は Pi が mode='paused' を申告し、Actions は従来どおり全部通知する。Pi 側の .env が dry-run/off のときは LINE から ON にはできない)
-//     「つうちおふ」/「つうちおん」→ 空き通知カードを止める / 戻す(KV notify_switch)。Actions は /auto/state の notifyEnabled、
+//     「つうちおふ」/「つうちおん」→ 空き通知カードを止める / 戻す(カードのボタンも同じ。KV notify_switch)。Actions は /auto/state の notifyEnabled、
 //       Pi は heartbeat の応答の notifyEnabled で受け取る。自動予約の結果カード・フェーズ4 の予告・「よやく」の返信は止めない
 //     postback 'x|a|-|<exp>.<sig>'(日を追加。params.date に選んだ日)/ 'x|d|YYYYMMDD|<exp>.<sig>'(除外日を解除)/
 //              'x|s|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(除外枠を解除)。署名は cancel-token.js と同じ HMAC 先頭 16 バイト
@@ -31,7 +32,7 @@ import { PARK_NAMES, courtByTbCode, courtByFacility } from './courts.js';
 import { buildAutoSettingsFlex, autoSettingsText } from './auto-flex.js';
 import { fetchTennisbearEvents } from './tennisbear.js';
 
-export const AUTO_COMMAND_TEXT = 'じどう';
+export const AUTO_COMMAND_TEXT = 'せってい'; // 2026-09-25 まで「じどう」
 export const AUTO_ON_TEXT = 'じどうおん';
 export const AUTO_OFF_TEXT = 'じどうおふ';
 export const KV_SWITCH = 'auto_switch'; // { enabled: boolean, at }。無ければ有効
@@ -52,7 +53,7 @@ const PROBE_TIMEOUT_MS = 8000;
 export const AUTH_WINDOW_MS = 5 * 60 * 1000;
 // /auto/tennisbear でテニスベアを取るときの上限(Pi 側の待ち 10 秒に収める)
 const TENNISBEAR_BUDGET_MS = 8000;
-// 「じどう」カードのボタンの有効期限
+// 「せってい」カードの postback ボタン(解除・日を追加)の有効期限。スイッチのボタンは message アクションなので期限なし
 const SETTINGS_BUTTON_TTL_SEC = 60 * 60;
 // 除外日に指定できる範囲(今日から)
 export const MAX_DAYS_AHEAD = 35;
@@ -308,7 +309,7 @@ export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEve
   return new Response('not found', { status: 404 });
 }
 
-// ---- 「じどう」カードの postback data(短い署名付き) ----
+// ---- 「せってい」カードの postback data(短い署名付き) ----
 export async function signAutoData(secret, kind, value, exp) {
   if (!secret) throw new Error('署名鍵が未設定です');
   if (!['a', 'd', 's'].includes(kind)) throw new Error('kind が不正です');
@@ -343,7 +344,7 @@ export async function handleAutoSwitchCommand(env, enabled, { now = Date.now() }
       note += '(いま Pi に届いていません。Pi が動いていれば、復帰後に反映されます)';
     }
   } else {
-    note = '自動予約を OFF にしました。Pi は次の照会(1〜3 分以内)から予約せず、空きは従来どおり通知カードで届きます。再開は「じどうおん」';
+    note = '自動予約を OFF にしました。Pi は次の照会(1〜3 分以内)から予約せず、空きは従来どおり通知カードで届きます。再開は「ON にする」';
   }
   return buildAutoSettingsReply(env, { now, note });
 }
@@ -353,11 +354,11 @@ export async function handleNotifySwitchCommand(env, enabled, { now = Date.now()
   await setNotifySwitch(env, enabled, now);
   const note = enabled
     ? '空き通知を ON にしました。次の空きチェック(3 分以内)から、新しい空きのカードが届きます'
-    : '空き通知を OFF にしました。新しい空きのカードは届きません(自動予約と、その結果カード・予告カード・「よやく」は動きます)。戻すのは「つうちおん」';
+    : '空き通知を OFF にしました。新しい空きのカードは届きません(自動予約と、その結果カード・予告カード・「よやく」は動きます)。戻すのは「ON にする」';
   return buildAutoSettingsReply(env, { now, note });
 }
 
-// 「じどう」への返信(一覧カード)。戻り値 { flex, text }
+// 「せってい」への返信(設定メニューのカード)。戻り値 { flex, text }
 export async function buildAutoSettingsReply(env, { now = Date.now(), note = null } = {}) {
   const [status, ex, sw, ns] = await Promise.all([autoStatus(env, now), loadExclusions(env, now), loadAutoSwitch(env), loadNotifySwitch(env)]);
   status.enabled = sw.enabled;
@@ -376,10 +377,10 @@ export async function buildAutoSettingsReply(env, { now = Date.now(), note = nul
   return { flex: buildAutoSettingsFlex(model), text: autoSettingsText(model) };
 }
 
-export const MSG_AUTO_EXPIRED = '時間切れです。「じどう」からやり直してください';
-export const MSG_AUTO_BAD_DATE = 'その日は指定できません(今日から 35 日先まで)。「じどう」からやり直してください';
+export const MSG_AUTO_EXPIRED = '時間切れです。「せってい」からやり直してください';
+export const MSG_AUTO_BAD_DATE = 'その日は指定できません(今日から 35 日先まで)。「せってい」からやり直してください';
 
-// 「じどう」カードのボタン(postback)を処理する。戻り値 { flex, text } | { text } | null(無視)
+// 「せってい」カードのボタン(postback)を処理する。戻り値 { flex, text } | { text } | null(無視)
 export async function handleAutoPostback(env, data, params, { now = Date.now() } = {}) {
   const t = await verifyAutoData(env.BOOKING_SIGNING_SECRET, data, now);
   if (!t) {

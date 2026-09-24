@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import {
   handleAuto, verifyAutoRequest, pruneExclusions, addExcludedSlots, loadExclusions, autoStatus, signAutoData, verifyAutoData,
-  buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE,
+  buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE, AUTO_COMMAND_TEXT,
 } from '../src/auto.js';
 import { buildPostbackReply } from '../src/index.js';
 import { MSG_AUTO_UNAVAILABLE } from '../src/messages.js';
@@ -187,7 +187,7 @@ test('キャンセル成功 → その枠が除外枠に載る(返信より前�
   assert.equal((await loadExclusions(env3, NOW)).slots.length, 0);
 });
 
-test('「じどう」カード: 状態・除外日(解除)・除外枠(解除)・日を追加(datetimepicker)。ボタンの data は署名付きで 300 文字以内', async () => {
+test('「せってい」カード: スイッチ 2 つ(ON/OFF ボタン)・除外日(解除)・除外枠(解除)・日を追加(datetimepicker)。postback の data は署名付きで 300 文字以内', async () => {
   const env = envOf();
   const d = new Date(NOW + 13 * 86400000).toISOString().slice(0, 10);
   await addExcludedSlots(env, [{ park: '1160', date: d, start: '13:00', reason: 'cancel' }], NOW);
@@ -196,8 +196,9 @@ test('「じどう」カード: 状態・除外日(解除)・除外枠(解除)�
 
   const reply = await withPiStatus({ mode: 'on', active: true, lastCycle: { at: NOW } }, () => buildAutoSettingsReply(env, { now: NOW + 1000 }));
   const t = texts(reply.flex.contents);
-  assert.ok(t.includes('🤖 自動予約の設定'));
+  assert.ok(t.includes('⚙️ 設定'));
   assert.ok(t.some((s) => s.includes('稼働中')));
+  assert.equal(t.filter((s) => s === 'ON').length, 2, '自動予約・空き通知カードとも ON');
   assert.ok(t.some((s) => s.includes('大島小松川公園') && s.includes('キャンセル済み')));
   const acts = actions(reply.flex.contents);
   const picker = acts.find((a) => a.type === 'datetimepicker');
@@ -213,11 +214,17 @@ test('「じどう」カード: 状態・除外日(解除)・除外枠(解除)�
   }
   assert.ok(new TextEncoder().encode(JSON.stringify(reply.flex.contents)).length < 28000);
   assert.match(reply.text, /除外日: /);
-  // ぶら下がる「更新」はメッセージアクションで「じどう」
-  assert.ok(acts.some((a) => a.type === 'message' && a.text === 'じどう'));
+  // ぶら下がる「更新」はメッセージアクションで「せってい」
+  assert.ok(acts.some((a) => a.type === 'message' && a.text === 'せってい'));
+  // スイッチのボタンは message アクション(署名・期限なし)。どちらも ON なので「OFF にする」が 2 つ
+  const offs = acts.filter((a) => a.type === 'message' && a.label === 'OFF にする');
+  assert.deepEqual(offs.map((a) => a.text), ['じどうおふ', 'つうちおふ']);
+  assert.equal(acts.filter((a) => a.type === 'message' && a.label === 'ON にする').length, 0);
+  assert.match(reply.text, /^⚙️ 設定/);
+  assert.match(reply.text, /「じどうおん」「じどうおふ」/, 'テキスト版はボタンが無いので合言葉を添える');
 });
 
-test('「じどう」postback: 日を追加(params.date)・除外日の解除・除外枠の解除。期限切れ・範囲外・署名不正', async () => {
+test('「せってい」postback: 日を追加(params.date)・除外日の解除・除外枠の解除。期限切れ・範囲外・署名不正', async () => {
   const env = envOf();
   const exp = Math.floor(NOW / 1000) + 3600;
   const add = await signAutoData(SECRET, 'a', '-', exp);
@@ -244,10 +251,11 @@ test('「じどう」postback: 日を追加(params.date)・除外日の解除・
   assert.deepEqual(await buildPostbackReply({ ...env, BOOKING_KV: undefined }, add, { now: NOW }), { text: MSG_AUTO_UNAVAILABLE });
 });
 
-test('「じどう」の抽出は pickTextCommandEvents で(「よやく」と同じ条件)', () => {
+test('「せってい」の抽出は pickTextCommandEvents で(「よやく」と同じ条件)。旧合言葉「じどう」は拾わない', () => {
   const ev = (text) => ({ type: 'message', replyToken: 'rt', source: { type: 'group', groupId: 'C1' }, message: { type: 'text', text } });
-  const raw = JSON.stringify({ events: [ev('じどう'), ev(' じどう '), ev('よやく'), ev('じどう!')] });
-  assert.equal(pickTextCommandEvents(raw, 'C1', ['じどう']).length, 2);
+  const raw = JSON.stringify({ events: [ev('せってい'), ev(' せってい '), ev('よやく'), ev('せってい!'), ev('じどう')] });
+  assert.equal(AUTO_COMMAND_TEXT, 'せってい');
+  assert.equal(pickTextCommandEvents(raw, 'C1', [AUTO_COMMAND_TEXT]).length, 2);
   assert.equal(pickTextCommandEvents(raw, 'C1', ['よやく']).length, 1);
 });
 
@@ -285,7 +293,9 @@ test('「じどうおふ」「じどうおん」: KV のスイッチを切り替
   // OFF
   const off = await withPiStatus({ mode: 'on', active: true, lastCycle: { at: NOW } }, () => handleAutoSwitchCommand(env, false, { now: NOW }));
   assert.ok(texts(off.flex.contents).some((s) => s.includes('自動予約を OFF にしました')));
-  assert.ok(texts(off.flex.contents).some((s) => s.includes('じどうおふ') && s.includes('OFF')), '状態行が OFF 表示');
+  assert.ok(texts(off.flex.contents).some((s) => s.includes('停止中')), '自動予約の行が停止中の説明');
+  assert.ok(texts(off.flex.contents).includes('OFF'), 'スイッチが OFF 表示');
+  assert.ok(actions(off.flex.contents).some((a) => a.type === 'message' && a.label === 'ON にする' && a.text === AUTO_ON_TEXT), 'ボタンは「ON にする」(じどうおん)');
   assert.equal((await loadAutoSwitch(env)).enabled, false);
   const hb = await (await handleAuto(signed('POST', '/auto/heartbeat', { active: true, mode: 'on' }, NOW), env, ctx, { now: NOW })).json();
   assert.equal(hb.enabled, false, 'Pi は heartbeat の応答で受け取る');
@@ -300,8 +310,8 @@ test('「じどうおふ」「じどうおん」: KV のスイッチを切り替
   assert.equal((await loadAutoSwitch(env)).enabled, true);
   // 合言葉の抽出
   const ev = (text) => ({ type: 'message', replyToken: 'rt', source: { type: 'group', groupId: 'C1' }, message: { type: 'text', text } });
-  const raw = JSON.stringify({ events: [ev('じどうおん'), ev('じどうおふ'), ev('じどう'), ev('じどう おん')] });
-  assert.equal(pickTextCommandEvents(raw, 'C1', ['じどう', AUTO_ON_TEXT, AUTO_OFF_TEXT]).length, 3);
+  const raw = JSON.stringify({ events: [ev('じどうおん'), ev('じどうおふ'), ev('せってい'), ev('じどう おん')] });
+  assert.equal(pickTextCommandEvents(raw, 'C1', [AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT]).length, 3);
 });
 
 test('「つうちおふ」「つうちおん」: 空き通知のスイッチを KV に持ち、/auto/state と heartbeat に notifyEnabled が載る。カードに状態行が出る', async () => {
@@ -309,7 +319,8 @@ test('「つうちおふ」「つうちおん」: 空き通知のスイッチを
   assert.equal((await loadNotifySwitch(env)).enabled, true, '既定は届く');
   const off = await withPiStatus(null, () => handleNotifySwitchCommand(env, false, { now: NOW }));
   assert.ok(texts(off.flex.contents).some((s) => s.includes('空き通知を OFF にしました')));
-  assert.ok(texts(off.flex.contents).some((s) => s.includes('止めている') && s.includes('つうちおん')));
+  assert.ok(texts(off.flex.contents).some((s) => s.includes('止めています')));
+  assert.ok(actions(off.flex.contents).some((a) => a.type === 'message' && a.label === 'ON にする' && a.text === 'つうちおん'), 'ボタンは「ON にする」(つうちおん)');
   assert.equal((await loadNotifySwitch(env)).enabled, false);
   const st = await (await handleAuto(signed('GET', '/auto/state', undefined, NOW), env, ctx, { now: NOW })).json();
   assert.equal(st.notifyEnabled, false);
@@ -318,7 +329,7 @@ test('「つうちおふ」「つうちおん」: 空き通知のスイッチを
   const on = await withPiStatus(null, () => handleNotifySwitchCommand(env, true, { now: NOW }));
   assert.ok(texts(on.flex.contents).some((s) => s.includes('空き通知を ON にしました')));
   assert.equal((await loadNotifySwitch(env)).enabled, true);
-  assert.match(on.text, /空き通知カード: 届く/);
+  assert.match(on.text, /空き通知カード: ON/);
 });
 
 test('POST /auto/tennisbear(2026-09-24): その人のテニスベアの予定を公園コード付きで返す。未設定は configured:false、失敗は 502、person 不正は 400。イベント名は返さない', async () => {
