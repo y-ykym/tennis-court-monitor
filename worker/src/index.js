@@ -20,6 +20,8 @@
 //                          画像は KV に入れたスクショを GET /card/<A|B>.png?s=<署名> で返す。予約サイトには行かない
 //   フェーズ8(src/contacts.js): 「きゃんせる」→ 監視対象の都営コート 3 公園の公園名と電話番号のカード(行をタップで電話)。
 //                          番号は src/courts.js の台帳から。予約サイト・KV には行かない
+//   フェーズ9(src/help.js): 「へるぷ」→ この bot が反応する合言葉の一覧カード(行をタップでその合言葉を送る)。
+//                          合言葉は各モジュールの定数から出す。予約サイト・KV には行かない
 //   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠)。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -64,6 +66,7 @@ import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostbac
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
 import { CONTACT_COMMAND_TEXT, buildContactReply, MSG_CONTACT_FAILED } from './contacts.js';
+import { HELP_COMMAND_TEXT, buildHelpReply, MSG_HELP_FAILED } from './help.js';
 import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANCEL_DECLINED, MSG_CANCEL_DISABLED, MSG_AUTO_UNAVAILABLE } from './messages.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
@@ -151,8 +154,9 @@ async function handleWebhook(request, env, ctx) {
   const autoCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT]);
   const cardCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CARD_COMMAND_TEXT]);
   const contactCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CONTACT_COMMAND_TEXT]);
+  const helpCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [HELP_COMMAND_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
-  console.log(`webhook受信: 対象イベント ${targets.length}件, せってい ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, postback ${postbacks.length}件`);
+  console.log(`webhook受信: 対象イベント ${targets.length}件, せってい ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, へるぷ ${helpCommands.length}件, postback ${postbacks.length}件`);
 
   // 取得と返信は応答後に続ける(即座に200を返さないとLINE側に切られる)
   for (const ev of targets) {
@@ -168,6 +172,10 @@ async function handleWebhook(request, env, ctx) {
   // フェーズ8: 台帳の電話番号を返すだけ(サイト・KV に行かない)
   for (const ev of contactCommands) {
     ctx.waitUntil(replyContacts(env, ev.replyToken));
+  }
+  // フェーズ9: 合言葉の一覧を返すだけ(サイト・KV に行かない)
+  for (const ev of helpCommands) {
+    ctx.waitUntil(replyHelp(env, ev.replyToken));
   }
   for (const ev of postbacks) {
     ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data, ev.postback.params));
@@ -245,6 +253,25 @@ async function replyContacts(env, replyToken) {
     console.log(`連絡先を返信しました (${Date.now() - started}ms)`);
   } catch (e) {
     console.error(`連絡先の返信に失敗 (${Date.now() - started}ms): ${e.message}`);
+  }
+}
+
+// フェーズ9: 使い方(合言葉の一覧)を reply する(waitUntil 内。例外は全て握ってログに出す)
+async function replyHelp(env, replyToken) {
+  const started = Date.now();
+  let reply;
+  try {
+    reply = buildHelpReply();
+  } catch (e) {
+    console.error(`使い方カードの作成に失敗: ${e.message}`);
+    reply = { text: MSG_HELP_FAILED };
+  }
+  try {
+    if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
+    else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
+    console.log(`使い方を返信しました (${Date.now() - started}ms)`);
+  } catch (e) {
+    console.error(`使い方の返信に失敗 (${Date.now() - started}ms): ${e.message}`);
   }
 }
 
