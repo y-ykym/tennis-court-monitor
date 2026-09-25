@@ -73,6 +73,11 @@ import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANC
 const FETCH_BUDGET_MS = 25000;
 // これより後に失敗した場合は再試行せず諦める(再試行しても30秒枠に収まらないため)
 const RETRY_UNTIL_MS = 10000;
+// フェーズ4 の Cron(9:00 / 23:35)は LINE の返信期限に縛られないので、待ち時間と再試行の期限を長めに取る。
+// 2026-09-25 23:35 に予約サイトの応答が遅く、25 秒で A・B とも打ち切られて「確認できませんでした」を送った反省
+// (Cloudflare の Cron は数分動けるため、90 秒待っても問題ない)
+const CRON_FETCH_BUDGET_MS = 90000;
+const CRON_RETRY_UNTIL_MS = 60000;
 // テニスベアの取得全体の上限(都より短く。遅れても都の予約は返す)
 const TB_BUDGET_MS = 12000;
 // キャンセルボタン(kind='c')と「はい」(kind='y')の有効期限
@@ -124,7 +129,7 @@ export default {
       ctx.waitUntil(
         runPenaltyAlert(env, {
           kind: event.cron === DEADLINE_CRON ? 'deadline' : 'morning',
-          fetchResults: () => fetchAllReservations(env),
+          fetchResults: () => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS }),
           attach: (results, opts) => attachCancelData(env, results, opts),
         }).catch((e) => console.error(`[alert] 送信に失敗: ${e.message}`))
       );
@@ -320,9 +325,10 @@ export async function attachCancelData(env, results, { today = jstTodayIso(), no
   return results;
 }
 
-// A・B の予約一覧を並行取得する。全体で FETCH_BUDGET_MS を超えたら打ち切る。
+// A・B の予約一覧を並行取得する。全体で budgetMs(既定 FETCH_BUDGET_MS)を超えたら打ち切り、
+// 開始から retryUntilMs(既定 RETRY_UNTIL_MS)を過ぎたら再試行しない。Cron からは両方とも長めに渡す。
 // 戻り値: [{ slot, label, reservations } | { slot, label, error }](利用者が未設定なら空配列)
-export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, deferLogout } = {}) {
+export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, retryUntilMs = RETRY_UNTIL_MS, deferLogout } = {}) {
   const started = Date.now();
   const people = configuredPeople(env);
   if (people.length === 0) {
@@ -340,7 +346,7 @@ export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, de
           {
             signal: controller.signal,
             log: (msg) => console.log(`[${p.slot}] ${msg}`),
-            retryUntil: started + RETRY_UNTIL_MS,
+            retryUntil: started + retryUntilMs,
             deferLogout,
           }
         )
