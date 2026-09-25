@@ -64,6 +64,7 @@ import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotTe
 import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
 import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, handleAutoSwitchCommand, handleNotifySwitchCommand, AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
+import { runWeeklyReport, WEEKLY_REPORT_CRON } from './auto-report.js';
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
 import { CONTACT_COMMAND_TEXT, buildContactReply, MSG_CONTACT_FAILED } from './contacts.js';
 import { HELP_COMMAND_TEXT, buildHelpReply, MSG_HELP_FAILED } from './help.js';
@@ -117,6 +118,11 @@ export default {
     }
     if (event.cron === MAINTENANCE_CRON) {
       ctx.waitUntil(sendMaintenanceReminder(env).catch((e) => console.error(`[monitor] お知らせの送信に失敗: ${e.message}`)));
+      return;
+    }
+    // フェーズ3: 自動予約の週報(毎週月曜 9:00。前の週の成立・見送り・照会の失敗率・いまの状態)。src/auto-report.js
+    if (event.cron === WEEKLY_REPORT_CRON) {
+      ctx.waitUntil(runWeeklyReport(env).catch((e) => console.error(`[report] 週報の送信に失敗: ${e.message}`)));
       return;
     }
     // フェーズ4: 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を知らせる(朝 9:00 と 23:35)
