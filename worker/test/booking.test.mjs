@@ -33,15 +33,9 @@ test('通知側(Node crypto)で署名したトークンを Worker 側(Web Crypto
   assert.equal(await verifyBookingToken(token, SECRET, Date.UTC(2099, 8, 17, 6, 1)), null, '利用開始時刻(15:00 JST)を過ぎたら無効');
 });
 
-test('/book(ブラウザから): PC が未登録なら 503 の案内、登録があれば PC の /book を叩いて「受け付けました」画面', async () => {
+test('/book(GET): 廃止。署名が正しく PC が登録済みでも、PC の /book は叩かず 410 の案内だけ返す(リンク先読みロボット対策)', async () => {
   const token = sign({ ...payload, person: 'A' }, SECRET);
-  const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV(), LABEL_A: 'ゆうたそ' };
-  const req = new Request(`https://w.example/book?token=${token}`);
-  const r1 = await handleBooking(req, env, ctx);
-  assert.equal(r1.status, 503);
-  assert.match(await r1.text(), /繋がりませんでした/);
-
-  env.BOOKING_KV.store.set('booking_url', 'https://abc-def.trycloudflare.com');
+  const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV({ booking_url: 'https://abc-def.trycloudflare.com' }), LABEL_A: 'ゆうたそ' };
   const calls = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (target) => {
@@ -49,15 +43,10 @@ test('/book(ブラウザから): PC が未登録なら 503 の案内、登録が
     return Response.json({ status: 'started' }, { status: 202 });
   };
   try {
-    const r2 = await handleBooking(req, env, ctx);
-    assert.equal(r2.status, 200);
-    const body = await r2.text();
-    assert.match(body, /受け付けました/);
-    assert.match(body, /ゆうたそ: 9\/17\(木\) 15:00-17:00 亀戸中央公園/);
-    assert.equal(calls.length, 1);
-    const t = new URL(calls[0]);
-    assert.equal(t.origin + t.pathname, 'https://abc-def.trycloudflare.com/book');
-    assert.equal(t.searchParams.get('token'), token);
+    const r = await handleBooking(new Request(`https://w.example/book?token=${token}&person=A`, { headers: { 'user-agent': 'facebookexternalhit/1.1;line-poker/1.0' } }), env, ctx);
+    assert.equal(r.status, 410);
+    assert.match(await r.text(), /LINE の通知カード/);
+    assert.equal(calls.length, 0, 'PC には何も送らない');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -91,10 +80,10 @@ test('中継: 全部失敗しても PC の登録は消さない(瞬断で直後�
   }
 });
 
-test('/book: 署名が不正なら 403', async () => {
+test('/book: 署名が不正でも同じ 410(トークンの検証すらしない)', async () => {
   const env = { BOOKING_SIGNING_SECRET: SECRET, BOOKING_KV: fakeKV({ booking_url: 'https://abc.trycloudflare.com' }) };
   const r = await handleBooking(new Request('https://w.example/book?token=abc.def'), env, ctx);
-  assert.equal(r.status, 403);
+  assert.equal(r.status, 410);
 });
 
 test('/booking/register: 認証値が合えば登録、合わなければ 401', async () => {
