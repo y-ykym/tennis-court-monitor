@@ -5,7 +5,9 @@
 // そこで固定 URL のこの Worker を LINE の「予約」ボタンの宛先にし、PC が登録した現在の URL へ転送する。
 //
 //   (LINE postback 'book|<token>')   index.js から startBooking(): PC の /book を叩いて予約フローを開始し、結果コードを返す。ブラウザは開かない
-//   GET  /book?token=…               ブラウザから開かれたとき(古い通知の URL ボタン): 同じく startBooking() して結果を画面で返す
+//   GET  /book                       **廃止(2026-09-25)**。かつては「URL を開いただけで予約開始」だったが、LINE のリンク先読みロボット
+//                                  (User-Agent line-poker)がトークに残っていた古い署名 URL を開いて勝手に予約が成立した(亀戸 9/30 13:00)。
+//                                  今のカードは全部 postback なので、この入口は案内画面(410)だけ返し、PC へは中継しない
 //   GET  /status /result /vnc /abort /novnc/rfb.js, WS /websockify
 //                                  PC の noVNC 画面・API・WebSocket を中継(reCAPTCHA の「確認が必要です」カードのボタンが /vnc を開く)。
 //                                  スマホは常にこの Worker(固定 URL)だけと通信し、
@@ -26,8 +28,8 @@
 import { PARK_NAMES } from './courts.js';
 
 const KV_KEY = 'booking_url';
-// PC(トンネル)へ中継するパス。これ以外(/webhook など)は触らない
-const PROXY_PATHS = new Set(['/book', '/status', '/result', '/vnc', '/abort', '/websockify', '/novnc/rfb.js']);
+// PC(トンネル)へ中継するパス。これ以外(/webhook など)は触らない。/book は中継しない(下の handleBooking で 410 を返す)
+const PROXY_PATHS = new Set(['/status', '/result', '/vnc', '/abort', '/websockify', '/novnc/rfb.js']);
 // トンネルの一時エラー時のやり直し(回数・間隔)
 const PROXY_RETRIES = 4;
 const PROXY_RETRY_MS = 1500;
@@ -110,7 +112,18 @@ a.btn{display:inline-block;margin-top:14px;padding:10px 16px;border-radius:8px;b
 export async function handleBooking(request, env, ctx) {
   const url = new URL(request.url);
   const p = url.pathname;
-  if (!PROXY_PATHS.has(p) && !['/booking/register', '/warmup', '/booking/status'].includes(p)) return null;
+  if (!PROXY_PATHS.has(p) && !['/book', '/booking/register', '/warmup', '/booking/status'].includes(p)) return null;
+
+  // 廃止した入口。開いただけで予約が始まる作りだったため、リンクの先読みロボットでも予約が成立してしまった。
+  // 署名鍵の有無や PC の登録に関係なく、何もせずに案内だけ返す(PC へ中継もしない)
+  if (p === '/book') {
+    console.warn(`[book] 廃止した GET /book を開かれたが予約は始めない: ua=${request.headers.get('user-agent') || ''}`);
+    return html(
+      'このリンクは使えません',
+      `この URL から予約を始める仕組みは終了しました。予約は LINE の通知カードの「〇〇で予約」ボタンから行ってください。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`,
+      410
+    );
+  }
 
   if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) {
     console.error('BOOKING_SIGNING_SECRET または BOOKING_KV が未設定です');
@@ -148,15 +161,6 @@ export async function handleBooking(request, env, ctx) {
   if (p === '/warmup') {
     if (registered) ctx.waitUntil(fetch(`${registered}/warmup`, { signal: AbortSignal.timeout(8000) }).catch(() => {}));
     return new Response(registered ? 'ok' : 'no server', { status: 200 });
-  }
-
-  // ブラウザから /book を開かれた(古い通知の URL 型ボタン)。postback と同じ処理をして結果を画面で返す
-  if (p === '/book') {
-    const { status, payload } = await startBooking(env, url.searchParams.get('token') || '');
-    const who = payload ? env[`LABEL_${payload.person}`] || payload.person || '' : '';
-    const text = (MSG_BOOK[status] || MSG_BOOK.error)(who, payload ? bookSlotText(payload) : '');
-    const ok = status === 'started';
-    return html(ok ? '受け付けました' : '予約を始められませんでした', `${esc(text).replace(/\n/g, '<br>')}<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`, ok ? 200 : status === 'offline' ? 503 : status === 'invalid' ? 403 : 409);
   }
 
   if (!registered) return html('予約サーバーに繋がりません', `自宅の予約サーバー(PC)が起動していないようです。<br><a class="btn" href="${SITE_URL}">予約サイトを開く</a>`, 503);
