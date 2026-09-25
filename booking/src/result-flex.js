@@ -72,8 +72,10 @@ function row(k, v) {
 // 予約結果。成功: 緑ヘッダー + 予約番号を大きく + 取消の案内。失敗: 赤ヘッダー + 理由 + 手動で続けるリンク
 export function buildResultFlex(r, label = '', { auto = false, cancelData = null } = {}) {
   const ok = r.status === 'success';
-  const suffix = auto ? '(自動予約)' : '';
-  const title = ok ? `🎾 予約完了${suffix}` : `⚠️ 予約できませんでした${suffix}`;
+  // 見出しと小見出しで「自動予約」と「LINE のボタン(手動)」を見分けられるようにする(2026-09-25。それまでは手動側も「自動で予約しました」と出て紛らわしかった)
+  //   自動予約: 🤖 + 「自動予約」。手動: 🎾/⚠️ + 「(ボタン)」と、押したボタンの名前
+  const title = auto ? (ok ? '🤖 自動予約が完了' : '🤖 自動予約できませんでした') : ok ? '🎾 予約完了(ボタン)' : '⚠️ 予約できませんでした(ボタン)';
+  const buttonName = label ? `「${label}で予約」ボタン` : '予約ボタン';
   const rows = [row('予約者', label), row('日時', slotText(r.slot)), row('公園', r.facility || r.slot.park)];
   if (ok && cancelData) {
     // 利用日が 4 日後: ペナルティなしで取り消せるのは今日中だけなので目立たせる(取消自体に費用はかからない。付くのはペナルティ 1 点)
@@ -141,7 +143,9 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
       ],
     };
   }
-  const sub = ok ? (auto ? '空きを見つけて自宅の予約サーバーが自動で予約しました' : '自宅の予約サーバーが自動で予約しました') : auto ? '自動予約を試みましたが完了しませんでした' : null;
+  const sub = auto
+    ? ok ? '空きを見つけて自宅の予約サーバーが自動で予約しました' : '自動予約を試みましたが完了しませんでした'
+    : ok ? `LINE の${buttonName}が押されたので予約しました` : `LINE の${buttonName}の予約は完了しませんでした`;
   return {
     type: 'flex',
     altText: ok ? `${title} ${label} ${slotText(r.slot)} ${r.facility || ''}` : `${title} ${slotText(r.slot)}: ${STATUS_TEXT[r.status] || r.status}`,
