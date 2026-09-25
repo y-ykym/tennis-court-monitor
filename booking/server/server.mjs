@@ -16,7 +16,6 @@
 //   GET /warmup          監視・生存確認の空叩き
 //   GET /healthz
 //   GET /auto/status     フェーズ3 自動予約の状態(mode・行列・最終照会・起動時刻)。Pi 自身の確認用と、Worker が生存判定に使う(トンネル越し)
-//   GET /auto/report     直近 N 日(?days=7、最大 14)の日ごとの記録と候補ごとの結果、自分が自動予約した枠。Worker の週報(毎週月曜 9:00)が読む
 //
 // 環境変数(.env と docker-compose.yml から):
 //   BOOKING_SIGNING_SECRET  トークン署名鍵(通知側・Worker と同じ値)
@@ -53,7 +52,6 @@ import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { createAutoState } from '../src/auto-state.js';
-import { createAutoJournal, JOURNAL_KEEP_DAYS } from '../src/auto-journal.js';
 import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 
 const require = createRequire(import.meta.url);
@@ -229,17 +227,12 @@ const AUTO_MODE = (() => {
 })();
 const WORKER_URL = (process.env.WORKER_URL || process.env.BOOKING_PUBLIC_URL || '').replace(/\/$/, '');
 let autoRunner = null;
-let autoState = null;
-let autoJournal = null;
 if (AUTO_MODE !== 'off') {
   if (!WORKER_URL || !SECRET) {
     log('自動予約: WORKER_URL と BOOKING_SIGNING_SECRET が必要です。起動しません');
   } else {
     const stateFile = process.env.AUTO_STATE_FILE || '/var/lib/booking/auto-state.json';
     const state = createAutoState({ file: stateFile });
-    const journal = createAutoJournal({ file: path.join(path.dirname(stateFile), 'auto-journal.json') });
-    autoState = state;
-    autoJournal = journal;
     autoRunner = createAutoRunner({
       mode: AUTO_MODE,
       scrape: createScraper(),
@@ -271,7 +264,6 @@ if (AUTO_MODE !== 'off') {
       pollMs: Number(process.env.AUTO_POLL_MS) || AUTO_BOOKING.POLL_INTERVAL_MS,
       // 実枠テスト用(README「フェーズ3」参照): このファイルに枠キーを書くと、その枠を「新しく出た」扱いにする
       forgetFile: path.join(path.dirname(stateFile), 'forget-keys.txt'),
-      journal,
     }).start();
   }
 }
@@ -408,29 +400,6 @@ const server = http.createServer((req, res) => {
         targets: autoRunner ? autoRunner.lastTargets().map((s) => ({ key: slotKey(s), ...s })) : null,
         exclusions: autoRunner?.exclusions() ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, at: autoRunner.exclusions().at } : null,
         queue: { running: queue.current() ? { kind: queue.current().kind, id: queue.current().id } : null, waiting: queue.waiting().map((j) => ({ kind: j.kind, id: j.id })) },
-      }),
-      'application/json'
-    );
-  }
-
-  // 週報用(Worker の auto-report.js が月曜 9:00 にトンネル越しに読む)。予約番号・利用者情報は含めない
-  if (p === '/auto/report') {
-    const days = Math.max(1, Math.min(Number(url.searchParams.get('days')) || 7, JOURNAL_KEEP_DAYS));
-    const nowMs = Date.now();
-    return send(
-      res,
-      200,
-      JSON.stringify({
-        mode: autoRunner ? autoRunner.effectiveMode() : AUTO_MODE,
-        envMode: AUTO_MODE,
-        enabled: autoRunner ? autoRunner.remoteEnabled() : null,
-        startedAt: SERVER_STARTED_AT,
-        now: nowMs,
-        intervalMs: autoRunner?.intervalMs ?? null,
-        lastCycle: autoRunner?.lastCycle() ?? null,
-        authPaused: autoRunner?.authPaused() ?? [],
-        ...(autoJournal ? autoJournal.summary({ days, nowMs }) : { from: null, to: null, days: [], events: [] }),
-        own: autoState ? autoState.own().map(({ key, person, date, start, end, park, facility, at }) => ({ key, person, date, start, end, park, facility, at })) : [],
       }),
       'application/json'
     );
