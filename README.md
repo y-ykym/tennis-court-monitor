@@ -81,7 +81,8 @@ booking/                     フェーズ2 予約支援 + フェーズ3 自動�
   src/booking-queue.js       予約実行の行列(1 件ずつ。手動ボタンを自動予約より優先)
   src/auto-state.js          自動予約の状態ファイル(既知の枠・試行記録・自分が取った枠。/var/lib/booking/auto-state.json)
   src/auto-runner.js         フェーズ3 の中核: 1 分おきの空き照会 → 差分 → 振り分け → 行列へ → 結果カード。Worker への heartbeat
-  server/server.mjs          Web アプリ(/book は Worker 向け JSON、/vnc は reCAPTCHA 時の noVNC 画面、/status /result /abort、/auto/status)。
+  src/auto-journal.js        自動予約の日ごとの記録(照会の回数・失敗、合図の失敗、再起動、候補ごとの結果を 14 日分。/var/lib/booking/auto-journal.json。週報の元データ)
+  server/server.mjs          Web アプリ(/book は Worker 向け JSON、/vnc は reCAPTCHA 時の noVNC 画面、/status /result /abort、/auto/status、/auto/report)。
                              WebSocket 橋渡しも内蔵。AUTO_BOOKING=on|dry-run で自動予約ループを起動
   server/register.mjs        Tunnel の現在の URL を 4 分ごとに Worker へ登録
   scripts/reserve-cli.mjs    予約実行を手元から動かす CLI(--dry-run で予約直前まで)
@@ -104,6 +105,7 @@ worker/                      フェーズ1.5 予約確認ボット + 1.6 予約�
   src/flex.js                予約一覧(人ごとのカルーセル。🐻 テニスベアの行も)・キャンセル確認・結果・フェーズ4 予告アラートのFlex Message。30KB/50KB制限に収まるよう行数を自動調整
   src/booking.js             フェーズ2 予約支援の玄関(予約ボタンの postback → 自宅サーバーの /book を叩く。noVNC の中継、URL 登録)
   src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初のメンテのお知らせ。自動予約の照会ループが止まったときの ⚠️ も
+  src/auto-report.js         Cron: 毎週月曜 9:00 の「📋 自動予約の週報」カード(Pi の /auto/report を集計。成立・見送りの理由・照会の失敗率・気になる点)
   src/auto.js                フェーズ3: 除外日・除外枠・Pi の最終チェックを KV に持つ。/auto/state /auto/heartbeat /auto/exclusions(署名付き API)、
                              「せってい」コマンドと「解除」「日を追加」の postback、キャンセル成功時の除外枠の記録
   src/auto-flex.js           「せってい」への返信カード(設定メニュー。2026-09-25 に「じどう」から改名・ON/OFF ボタンを追加)
@@ -476,6 +478,11 @@ npx wrangler tail --format pretty
 - **Pi 不達の判定**(Actions 側): Worker が登録済みのトンネル URL 越しに Pi の `/auto/status` を直接聞き、mode が on で最後の照会が 5 分以内のときだけ「生きている」。
   届かない・取れなければ全部通知(安全側)。**Pi の生存は KV に書かない**(2026-09-16 変更。1 分ごとに書くと KV 無料枠の書き込み 1 日 1,000 回を URL 登録と合わせて超え、Worker がエラーになった)
 - **同じ枠を二重に試さない**: 枠キー `公園コード|日付|開始時刻` で行列・試行記録を管理。成功した枠は再出現しても取り直さない(取り消したなら除外枠)
+- **週報(2026-09-25 追加)**: 毎週月曜 9:00 に「📋 自動予約の週報」カードが LINE に届く(`worker/src/auto-report.js`。グループ宛 push 1 回 = 2 通/週)。
+  前の週(月〜日)の 成立した枠 / 取れなかった・見送った候補の理由別の件数 / 照会の回数と失敗率・合図の失敗・再起動 / いまの状態 / 今後の自動予約 を 1 枚に。
+  上に「⚠ 気になる点」(ON になっていない・最後の照会が古い・ログイン拒否・reCAPTCHA・照会の無い日・失敗率 20% 以上・合図の失敗 10% 以上・再起動 4 回以上・テニスベアが取れず見送り・サイトのエラー 3 件以上)。無ければ「✅ 気になる点はありません」。
+  元データは Pi の **日ごとの記録** `booking/src/auto-journal.js`(`/var/lib/booking/auto-journal.json`、14 日分。docker のログはコンテナの作り直しで消えるため別に残す)で、Worker が `/auto/report?days=8` をトンネル越しに読む。
+  Pi に繋がらない週はテキスト 1 通「集計できませんでした」。KV には書かない。プレビューは `docs/flex-design-report.html`
 
 ### 設定と起動(Pi の `.env`)
 
@@ -526,6 +533,7 @@ cd booking && node scripts/auto-tick.mjs --mock ../test/mock-slots.json --all-ne
 - `除外一覧を更新: 除外日 N 件、除外枠 N 件` … Worker の一覧が変わったとき
 - `Worker への合図に失敗(…)` … 回線断や Worker のエラー。直近の一覧(30 分以内)で続けるか、無ければ `見送り: …(Worker から除外一覧が取れていないため)`
   ※ ログを絞るときに「除外一覧」で除外すると、この 2 行も消えてしまう。除くのは「除外一覧を更新」だけにする
+- ログはコンテナを作り直すと消える。**先週の分を後から見るなら** `curl -s http://localhost:8080/auto/report?days=7`(日ごとの照会回数・失敗、候補ごとの結果、自分が取った枠。週報と同じ元データ)
 
 ### 気をつけること
 
