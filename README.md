@@ -89,7 +89,7 @@ booking/                     フェーズ2 予約支援 + フェーズ3 自動�
   scripts/explore-flow.mjs   予約フローの調査スクリプト(本人ログイン。確定は押さない)
   Dockerfile / docker-entrypoint.sh  Playwright 公式イメージ + Xvfb + x11vnc。noVNC クライアントは esbuild で束ねる。
                              ビルドコンテキストはリポジトリ直下(lib/ を同梱するため。除外は直下の .dockerignore)
-  pc/                        自宅 Pi 用: docker-compose.yml(本体+Tunnel+URL登録)、README.md(構築・運用手順)、pi-init.sh(初期化)、pi-check.sh(確認)、
+  pc/                        自宅 Pi 用: docker-compose.yml(本体+Tunnel+URL登録)、README.md(構築・運用手順)、pi-init.sh(初期化)、pi-check.sh(確認)、auto-check.sh(自動予約の点検)、
                              tunnel-watchdog.sh + systemd/(Tunnel の見張り)、apt/(OS 自動更新の方針)
   test/                      node --test(トークン署名・カード・持ち越し・一覧の解析・行列・自動予約の振り分けと実行)
 
