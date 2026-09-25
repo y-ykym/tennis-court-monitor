@@ -23,9 +23,6 @@
 //     ログインできない・reCAPTCHA で拒否・サイトのエラーは放置すると自動予約が全部止まるのでカードで知らせる
 //     予約一覧に「自分が自動予約した枠」が無ければ、サイトで手放したとみなして Worker に除外枠として登録する
 //
-//   日ごとの記録(auto-journal.js。2026-09-25 追加): 照会の回数・失敗、Worker への合図の失敗、再起動、候補ごとの結果を JST の日付ごとに
-//         14 日分残す(docker のログはコンテナ再作成で消えるため)。Worker の週報(/auto/report)が読む
-//
 //   mode: 'on'     予約まで行う(heartbeat の active=true → Actions は対象期間の枠を通知しない)
 //         'dry-run' 照会と振り分けだけ行い、予約するはずの枠をログに出す(active=false → Actions は従来どおり全部通知)
 //   LINE の「じどうおふ」/「じどうおん」: Worker の KV のスイッチを heartbeat の応答(enabled)で受け取る。OFF の間は mode='on' でも
@@ -104,7 +101,6 @@ export function createAutoRunner({
   pollMs = AUTO_BOOKING.POLL_INTERVAL_MS,
   maintenance = inMaintenanceWindow,
   forgetFile = null,
-  journal = null, // auto-journal.js(日ごとの記録。週報用。無ければ記録しない)
 }) {
   const interval = Math.max(Number(pollMs) || AUTO_BOOKING.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
   const active = mode === 'on';
@@ -133,18 +129,6 @@ export function createAutoRunner({
   };
 
   const describe = (s) => `${s.date} ${s.time || `${startHHMM(s.startHour)}-`} ${s.facility || parkOf(s.park)?.name || s.park}`;
-  // 状態ファイルと日ごとの記録を一緒に保存する
-  const persist = () => {
-    state.save();
-    journal?.save();
-  };
-  // 試行記録に書くと同時に、途中の状態(queued / running)以外は日ごとの記録にも残す(週報用)
-  const record = (c, status, message = null) => {
-    state.markAttempt(c.key, status);
-    if (journal && status !== 'queued' && status !== 'running') {
-      journal.addEvent({ status, key: c.key, person: c.person ?? null, date: c.date ?? null, start: c.startHour != null ? startHHMM(c.startHour) : null, facility: parkOf(c.park)?.name || c.facility || null, message });
-    }
-  };
 
   async function heartbeat(extra = {}) {
     const payload = { active: bookingEnabled(), mode: effectiveMode(), at: now(), queued: queue.waiting().length, running: queue.isBusy(), lastCycle, ...extra };
@@ -163,10 +147,8 @@ export function createAutoRunner({
         exclusions = { dates: res.dates, slots: res.slots, at: now() };
         if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件`);
       }
-      journal?.countHeartbeat(true);
       return true;
     } catch (e) {
-      journal?.countHeartbeat(false);
       log(`Worker への合図に失敗(${e.message})${exclusions ? `。直近の除外一覧(${Math.round((now() - exclusions.at) / 60000)} 分前)で続けます` : '。除外一覧が無いため予約はしません'}`);
       return false;
     }
@@ -196,9 +178,7 @@ export function createAutoRunner({
       } catch (e) {
         log(`空き照会に失敗(今回はスキップ): ${e.message}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
-        journal?.countCycle({ ok: false });
         await heartbeat();
-        journal?.save();
         return { skipped: 'scrape_failed' };
       }
       const targets = filterTargetSlots(slots);
@@ -215,9 +195,8 @@ export function createAutoRunner({
       state.setKnown(keys);
       state.prune(today);
       lastCycle = { at: started, ms: now() - started, error: null, newSlots: newSlots.length };
-      journal?.countCycle({ ok: true, newSlots: newSlots.length });
       await heartbeat();
-      persist();
+      state.save();
       // 動いていることが分かるよう毎回 1 行(1 日 1,440 行程度。docker のログ上限 10MB×3 に収まる)
       log(`照会: 監視対象 ${targets.length} 件(全体 ${slots.length} 件)、新規 ${newSlots.length} 件、所要 ${Math.round(lastCycle.ms / 1000)} 秒`);
 
@@ -258,7 +237,7 @@ export function createAutoRunner({
           }
           if (!bookingEnabled()) {
             log(`  [${mode === 'on' ? 'LINE で停止中' : 'dry-run'}] 予約するはず: ${describe(c)} 予約者=${creds.label}(${person})`);
-            record(c, 'dry_run');
+            state.markAttempt(c.key, 'dry_run');
             continue;
           }
           const r = queue.submit({ id: c.key, kind: 'auto', meta: c, run: () => runCandidate(c, creds) });
@@ -266,12 +245,12 @@ export function createAutoRunner({
             log(`  見送り: ${describe(c)} (行列に既にある)`);
             continue;
           }
-          record(c, 'queued');
+          state.markAttempt(c.key, 'queued');
           planned++;
           log(`  行列へ: ${describe(c)} 予約者=${creds.label}(${person}) [${r.status}]`);
         }
       }
-      persist();
+      state.save();
       return { newSlots: newSlots.length, planned };
     } catch (e) {
       log(`照会ループでエラー(次の周期で続けます): ${e.stack || e.message}`);
@@ -287,8 +266,8 @@ export function createAutoRunner({
     // 行列で待っている間に「じどうおふ」が来ていたら予約しない(カードも送らない。Actions が従来どおり通知する)
     if (!bookingEnabled()) {
       log(`見送り(実行直前): ${describe(c)} (LINE で自動予約が停止中)`);
-      record(c, 'dry_run', 'LINE で自動予約が停止中');
-      persist();
+      state.markAttempt(key, 'dry_run');
+      state.save();
       return { status: 'skipped', message: 'LINE で自動予約が停止中' };
     }
     // 予約の直前に「いま」で対象かどうかをもう一度判定する(見つけた時の判定を使い回さない。日付が変わる・23:35 を過ぎる)
@@ -296,8 +275,8 @@ export function createAutoRunner({
     const today = jstTodayIso(t);
     const again = classifySlot(c, { now: t, exclusions: usableExclusions() || exclusions || { dates: [], slots: [] } });
     if (again.kind !== 'auto') {
-      record(c, `skipped_${again.kind}`, again.reason);
-      persist();
+      state.markAttempt(key, `skipped_${again.kind}`);
+      state.save();
       if (again.kind === 'excluded_slot' || again.kind === 'excluded_date') {
         log(`見送り(予約直前の再判定): ${describe(c)} (${again.reason}。通知もしない)`);
         return { status: 'skipped', message: again.reason };
@@ -317,27 +296,27 @@ export function createAutoRunner({
     const remaining = remainingFor(c.date);
     if (remaining != null && remaining <= 0) {
       log(`見送り: ${describe(c)} (${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため。ログインせず)`);
-      record(c, 'capped', `${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため`);
-      persist();
+      state.markAttempt(key, 'capped');
+      state.save();
       return { status: 'capped' };
     }
     // 隣接の判定(その 1): テニスベアの予定。ログインの前に見て、隣の時間帯に別の場所の予定があれば見送る(ログインせず)
     const tb = await tennisbearPlansFor(c.person);
     if (!tb) {
       log(`見送り: ${describe(c)} (テニスベアの予定が取れず、隣の時間帯に別の場所の予定が無いか判定できないため。ログインせず)`);
-      record(c, 'skipped_tennisbear', 'テニスベアの予定が取れないため');
-      persist();
+      state.markAttempt(key, 'skipped_tennisbear');
+      state.save();
       return { status: 'skipped', message: 'テニスベアの予定が取れないため' };
     }
     const tbConflict = findPlaceConflict(c, tb.events);
     if (tbConflict) {
       log(`見送り: ${describe(c)} (${tbConflict.reason}。ログインせず)`);
-      record(c, 'conflict', tbConflict.reason);
-      persist();
+      state.markAttempt(key, 'conflict');
+      state.save();
       return { status: 'conflict', message: tbConflict.reason };
     }
-    record(c, 'running');
-    persist();
+    state.markAttempt(key, 'running');
+    state.save();
     let listCount = null;
     const beforeApply = async ({ reservations }) => {
       const sameDay = reservations.filter((r) => r.date === c.date);
@@ -365,14 +344,14 @@ export function createAutoRunner({
       authFailedAt.set(c.person, now());
       log(`予約者 ${c.person} のログインが拒否されたため、${Math.round(AUTH_PAUSE_MS / 3600000)} 時間は ${c.person} の自動予約を止めます`);
       if (!first) {
-        record(c, result.status, result.message);
-        persist();
+        state.markAttempt(key, result.status);
+        state.save();
         return result;
       }
     } else if (ok) {
       authFailedAt.delete(c.person);
     }
-    record(c, result.status, result.message);
+    state.markAttempt(key, result.status);
     log(`自動予約 結果: ${result.status} ${describe(c)} ${result.message || ''}`.trim());
 
     if (ok) {
@@ -404,7 +383,7 @@ export function createAutoRunner({
     } else if (result.status === 'taken' || result.status === 'duplicate' || result.status === 'error') {
       log(`結果カードは送りません(${result.status}。人が対応できる失敗ではないため。LINE の通数節約)`);
     }
-    persist();
+    state.save();
     return result;
   }
 
@@ -442,7 +421,7 @@ export function createAutoRunner({
     try {
       await worker.addExcludedSlots(released.map((o) => ({ park: o.park, date: o.date, start: o.start, end: o.end, facility: o.facility, reason: 'released' })));
       for (const o of released) state.removeOwn(o.key);
-      persist();
+      state.save();
     } catch (e) {
       log(`除外枠の登録に失敗(次回また試します): ${e.message}`);
     }
@@ -466,7 +445,6 @@ export function createAutoRunner({
     if (timer) return api;
     const sched = (AUTO_BOOKING.POLL_SCHEDULE || []).map((w) => `${w.FROM}〜${w.TO} は ${Math.round(w.POLL_INTERVAL_MS / 1000)} 秒`).join('、');
     log(`自動予約の照会ループを開始: mode=${mode} 間隔=${Math.round(interval / 1000)}秒${sched ? `(${sched})` : ''}`);
-    journal?.countRestart();
     const loop = async () => {
       const startedAt = now();
       await tick();
@@ -484,8 +462,6 @@ export function createAutoRunner({
     tick, start, stop, mode, active, intervalMs: interval,
     effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
     exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining, tbPlans,
-    // ログイン拒否で止めている予約者(週報・/auto/report 用)
-    authPaused: () => [...authFailedAt].filter(([, at]) => now() - at < AUTH_PAUSE_MS).map(([p]) => p),
   };
   return api;
 }
