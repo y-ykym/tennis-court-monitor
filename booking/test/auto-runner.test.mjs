@@ -175,7 +175,7 @@ test('1 日の上限: 一覧で既にその日に予約(手動分)があれば�
   assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'capped');
   assert.equal(h.state.attemptStatus('1040|2026-09-25|19:00'), 'taken');
   assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'success');
-  assert.deepEqual(h.notified.map((x) => x.m.contents.header.contents[0].text), ['🎾 予約完了(自動予約)'], 'taken のカードは送らない');
+  assert.deepEqual(h.notified.map((x) => x.m.contents.header.contents[0].text), ['🤖 自動予約が完了'], 'taken のカードは送らない');
   assert.ok(h.logs.some((l) => l.includes('結果カードは送りません(taken')));
 });
 
