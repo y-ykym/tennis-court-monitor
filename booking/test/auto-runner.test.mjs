@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
-import { createAutoJournal } from '../src/auto-journal.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
 
@@ -20,7 +19,7 @@ const slot = (facility, date, time, count = 1) => ({ facility, date, time, count
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ar-')), 'auto-state.json');
 const flush = () => new Promise((r) => setTimeout(r, 20));
 
-function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] }, book, reservations = {}, creds = { A: true, B: true }, heartbeatFails = false, start = T0, workerOverride = null, journal = null } = {}) {
+function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] }, book, reservations = {}, creds = { A: true, B: true }, heartbeatFails = false, start = T0, workerOverride = null } = {}) {
   let t = start;
   const logs = [];
   const notified = [];
@@ -41,10 +40,7 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
   });
   const runner = createAutoRunner({
     mode,
-    scrape: async () => {
-      if (current instanceof Error) throw current;
-      return current;
-    },
+    scrape: async () => current,
     queue,
     state,
     worker: workerRef,
@@ -64,10 +60,9 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
     log: (m) => logs.push(m),
     now: () => t,
     maintenance: () => false,
-    journal,
   });
   return {
-    runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards, workerRef, journal,
+    runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards, workerRef,
     setSlots: (s) => (current = s),
     advance: (ms) => (t += ms),
     now: () => t,
@@ -774,49 +769,4 @@ test('隣接(都の予約): 予約直前の一覧に、隣の時間帯の別の�
   } finally {
     AUTO_BOOKING.MAX_PER_DAY = saved;
   }
-});
-
-test('日ごとの記録(週報用): 照会の回数・失敗・合図の失敗・再起動と、候補ごとの結果(成功・先に取られた・見送り)が残る。queued/running は残さない', async () => {
-  let t = T0;
-  const journalFile = path.join(path.dirname(tmpFile()), 'auto-journal.json');
-  const journal = createAutoJournal({ file: journalFile, now: () => t });
-  const h = harness({
-    journal,
-    reservations: {},
-    book: async (c, { beforeApply }) => {
-      await beforeApply({ reservations: [] });
-      return c.date === '2026-09-27' ? { status: 'taken', message: '先に取られました' } : { status: 'success', reservationNo: 'R1', fee: '2,600円', facility: c.facility, reservationsBefore: [] };
-    },
-  });
-  h.runner.start(); // 再起動 1 回
-  h.runner.stop();
-  await h.runner.tick(); // 初回起動(既知の登録)
-  h.advance(60_000);
-  t = h.now();
-  h.setSlots([slot('猿江恩賜公園', '2026-09-25', '19:00-21:00'), slot('大島小松川公園', '2026-09-27', '09:00-11:00')]);
-  await h.runner.tick();
-  await flush();
-  // 照会の失敗
-  h.advance(60_000);
-  t = h.now();
-  h.setSlots(new Error('HTTP 502'));
-  assert.deepEqual(await h.runner.tick(), { skipped: 'scrape_failed' });
-
-  const sum = journal.summary({ days: 7, nowMs: t });
-  const today = sum.days.at(-1);
-  assert.equal(today.date, '2026-09-14');
-  assert.equal(today.restarts, 1);
-  assert.equal(today.cycles, 3);
-  assert.equal(today.failed, 1);
-  assert.equal(today.newSlots, 2);
-  assert.equal(today.heartbeatFailed, 0);
-  const statuses = sum.events.map((e) => `${e.status}:${e.date}`);
-  assert.deepEqual(statuses.sort(), ['success:2026-09-25', 'taken:2026-09-27']);
-  assert.ok(sum.events.every((e) => e.status !== 'queued' && e.status !== 'running'));
-  const ok = sum.events.find((e) => e.status === 'success');
-  assert.deepEqual([ok.person, ok.start, ok.facility, ok.key], ['B', '19:00', '猿江恩賜公園', '1040|2026-09-25|19:00']);
-  // ファイルにも保存されている(再起動しても残る)
-  const again = createAutoJournal({ file: journalFile, now: () => t });
-  assert.equal(again.summary({ nowMs: t }).events.length, 2);
-  assert.equal(again.summary({ nowMs: t }).days.at(-1).cycles, 3);
 });
