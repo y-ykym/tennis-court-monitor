@@ -22,6 +22,8 @@ import {
   pickNew,
   priceText,
   buildEventMessages,
+  hostLine,
+  hostText,
   altText,
   eventText,
   runEventNotify,
@@ -42,7 +44,7 @@ const RAW = {
   maxLevel: { id: 6, name: '中上級' },
   isFull: false,
   callOff: false,
-  organizer: { id: 1, name: 'x', myInfo: { isFriend: false } },
+  organizer: { id: 107258, name: 'Kei', imageUrl: 'https://d2pe1b7tquzekz.cloudfront.net/users/107258/e8968978-cb01-4771-9195-2650369e59fd.jpg', myInfo: { isFriend: false } },
 };
 const raw = (over = {}) => ({ ...RAW, ...over });
 const ev = (over = {}) => ({
@@ -59,6 +61,8 @@ const ev = (over = {}) => ({
   organizer: false,
   isFull: false,
   callOff: false,
+  hostName: 'Kei',
+  hostIcon: 'https://d2pe1b7tquzekz.cloudfront.net/users/107258/e8968978-cb01-4771-9195-2650369e59fd.jpg',
   ...over,
 });
 // 2026-09-26(土) 20:00 JST
@@ -148,11 +152,19 @@ test('events: 検索条件は 6 コート・土日祝・募集中・テニスの
   assert.deepEqual(b.regionCodeList, []);
 });
 
-test('events: 一覧の 1 件を整形(tennisbear.js と同じ形 + 満員・中止)。形が崩れた件は null', () => {
+test('events: 一覧の 1 件を整形(tennisbear.js と同じ形 + 満員・中止 + 主催者)。形が崩れた件は null', () => {
   assert.deepEqual(normalizeSearchItem(RAW), ev());
   assert.equal(normalizeSearchItem(raw({ isFull: true })).isFull, true);
   assert.equal(normalizeSearchItem({ id: 1 }), null);
   assert.equal(normalizeSearchItem(null), null);
+  // 主催者: 名前は前後の空白を落とす。アイコンは https の URL だけ採用(http・空・文字列以外・2000 字超は '')
+  assert.deepEqual(normalizeSearchItem(raw({ organizer: { id: 2, name: ' たかさん ', imageUrl: 'http://example.com/a.png' } })).hostName, 'たかさん');
+  assert.equal(normalizeSearchItem(raw({ organizer: { id: 2, name: 'x', imageUrl: 'http://example.com/a.png' } })).hostIcon, '');
+  assert.equal(normalizeSearchItem(raw({ organizer: { id: 2, name: 'x', imageUrl: `https://e.com/${'a'.repeat(2000)}` } })).hostIcon, '');
+  assert.deepEqual(normalizeSearchItem(raw({ organizer: null })), ev({ hostName: '', hostIcon: '' }));
+  assert.deepEqual(normalizeSearchItem(raw({ organizer: { name: 5, imageUrl: 5 } })), ev({ hostName: '', hostIcon: '' }));
+  // 団体(circle)はカードに載せないので整形にも持たない(2026-09-27 本人判断)
+  assert.equal('hostCircle' in normalizeSearchItem(raw({ circle: { id: 19532, name: '荒川エイト' } })), false);
 });
 
 test('events: 検索は 200 件ずつ offset をずらして取り、200 件未満が返ったら止める', async () => {
@@ -279,10 +291,10 @@ test('events: KV の控え。無い・壊れている → null(初回)。過去�
   assert.deepEqual(next.events, { 2: { d: '2026-10-03', p: null }, 3: { d: '2026-10-04', p: 800 }, 4: { d: '2026-10-10', p: 1200 } });
 });
 
-test('events: カードは日付ごとに 1 枚(開始時刻順)。行に時間・札・料金・イベント名、行のリンクは詳細ページ。見出しの色は土=青・日祝=赤', () => {
+test('events: カードは日付ごとに 1 枚(開始時刻順)。行に時間・札・料金・イベント名・主催者、行のリンクは詳細ページ。見出しの色は土=青・日祝=赤', () => {
   const events = [
-    ev({ id: '3', date: '2026-10-17', start: '14:00', end: '17:00', title: '基礎練習会(3 時間)' }),
-    ev({ id: '1', date: '2026-10-12', start: '10:00', end: '12:00', placeCode: '0100010020', title: 'ダブルス練習' }),
+    ev({ id: '3', date: '2026-10-17', start: '14:00', end: '17:00', title: '基礎練習会(3 時間)', hostName: 'たかさん', hostIcon: 'https://d2pe1b7tquzekz.cloudfront.net/default/user/ic_faceicon_15@3x.png' }),
+    ev({ id: '1', date: '2026-10-12', start: '10:00', end: '12:00', placeCode: '0100010020', title: 'ダブルス練習', hostName: '', hostIcon: '' }),
     ev({ id: '2', date: '2026-10-17', start: '07:50', end: '10:00', title: 'サーブ＆レシーブ自由練習会 ★動画＆AI分析付★' }),
   ];
   const prices = new Map([['1', 1200], ['2', 0], ['3', null]]);
@@ -299,16 +311,35 @@ test('events: カードは日付ごとに 1 枚(開始時刻順)。行に時間�
   assert.deepEqual(texts(b1.header), ['10/12', '(月祝)', '新着 1 件']);
   assert.equal(b2.header.backgroundColor, '#E3EEFB');
   assert.deepEqual(texts(b2.header), ['10/17', '(土)', '新着 2 件']);
-  // 行: 開始時刻順、時間・札・料金・イベント名
+  // 行: 開始時刻順、時間・札・料金・イベント名・主催者名。主催者が取れない行は名前の行を足さない
   const t2 = texts(b2.body);
-  assert.deepEqual(t2, ['7:50 - 10:00', '荒川砂町', '無料', 'サーブ＆レシーブ自由練習会 ★動画＆AI分析付★', '14:00 - 17:00', '荒川砂町', '料金 -', '基礎練習会(3 時間)']);
+  assert.deepEqual(t2, ['7:50 - 10:00', '荒川砂町', '無料', 'サーブ＆レシーブ自由練習会 ★動画＆AI分析付★', 'Kei', '14:00 - 17:00', '荒川砂町', '料金 -', '基礎練習会(3 時間)', 'たかさん']);
+  // 主催者の行は横 1 段(アイコン + 名前)。名前は xs・#4B5563
+  const keiText = nodes(b2.body, (n) => n.type === 'text' && n.text === 'Kei')[0];
+  assert.deepEqual([keiText.size, keiText.color], ['xs', '#4B5563']);
+  const keiLine = nodes(b2.body, (n) => n.type === 'box' && n.contents?.includes(keiText))[0];
+  assert.deepEqual([keiLine.layout, keiLine.margin], ['horizontal', 'sm']);
   assert.deepEqual(texts(b1.body), ['10:00 - 12:00', '大島小松川', '¥1,200', 'ダブルス練習']);
+  // 主催者のアイコンは丸い枠(18px・cornerRadius 9px)の中の image(1:1・cover)。行ごとに 1 つ
+  const icons = nodes(b2.body, (n) => n.type === 'image');
+  assert.deepEqual(icons.map((n) => n.url), ['https://d2pe1b7tquzekz.cloudfront.net/users/107258/e8968978-cb01-4771-9195-2650369e59fd.jpg', 'https://d2pe1b7tquzekz.cloudfront.net/default/user/ic_faceicon_15@3x.png']);
+  assert.deepEqual(icons.map((n) => [n.size, n.aspectRatio, n.aspectMode]), [['full', '1:1', 'cover'], ['full', '1:1', 'cover']]);
+  const frames = nodes(b2.body, (n) => n.type === 'box' && n.contents?.some((c) => c.type === 'image'));
+  assert.deepEqual(frames.map((n) => [n.width, n.height, n.cornerRadius]), [['18px', '18px', '9px'], ['18px', '18px', '9px']]);
+  assert.equal(nodes(b1.body, (n) => n.type === 'image').length, 0);
+  // アイコンだけ無い(名前はある)→ 名前だけの行。名前が無い → 行なし
+  assert.equal(nodes(hostLine(ev({ hostIcon: '' })), (n) => n.type === 'image').length, 0);
+  assert.deepEqual(texts(hostLine(ev({ hostIcon: '' }))), ['Kei']);
+  assert.equal(hostLine(ev({ hostName: '' })), null);
+  assert.equal(hostText(ev()), '(主催: Kei)');
+  assert.equal(hostText(ev({ hostName: '' })), '');
   // 行のリンクは詳細ページ。ボタンは置かない
   assert.deepEqual(uris(b2), ['https://www.tennisbear.net/event/2/info', 'https://www.tennisbear.net/event/3/info']);
   assert.equal(nodes(carousel, (n) => n.type === 'button').length, 0);
-  // イベント名は 2 行まで、フッターは文字だけ
-  const titles = nodes(b2.body, (n) => n.type === 'text' && n.maxLines === 2);
+  // イベント名は sm・2 行まで(主催者名は xs)、フッターは文字だけ
+  const titles = nodes(b2.body, (n) => n.type === 'text' && n.size === 'sm' && n.maxLines === 2);
   assert.equal(titles.length, 2);
+  assert.deepEqual(nodes(b2.body, (n) => n.type === 'text' && ['Kei', 'たかさん'].includes(n.text)).map((n) => n.size), ['xs', 'xs']);
   assert.deepEqual(texts(b2.footer), ['タップでイベントの詳細を開く']);
   // 「いべんと」(mode: all)は「新着」を付けない
   const all = buildEventMessages(events, prices, { mode: 'all' });
@@ -346,7 +377,8 @@ test('events: 1 日 9 件以上はその日を 2 枚に分ける。13 日分以�
   // テキスト版
   const txt = eventText(spread.slice(0, 2), new Map([['200', 1000]]));
   assert.match(txt, /^🐻 新着イベント 2 件\(10\/3〜10\/4\)/);
-  assert.match(txt, /■ 10\/3\(土\)\n8:00-10:00 荒川砂町 ¥1,000/);
+  assert.match(txt, /■ 10\/3\(土\)\n8:00-10:00 荒川砂町 ¥1,000\n  基礎練習会　荒川砂町庭球場\(主催: Kei\)\n/);
+  assert.match(eventText([ev({ hostName: '' })]), /\n  基礎練習会　荒川砂町庭球場\n/, '主催者が無ければ添えない');
   assert.match(txt, /https:\/\/www\.tennisbear\.net\/event\/200\/info/);
 });
 
@@ -385,7 +417,7 @@ test('events: 2 回目以降は控えに無いイベントだけ、予定と重�
   assert.equal(push.sent[0].to, 'Cgroup');
   const msg = push.sent[0].messages[0];
   assert.equal(msg.altText, '🐻 新着イベント 1 件(10/17(土))');
-  assert.deepEqual(texts(msg.contents.body), ['13:00 - 15:00', '荒川砂町', '¥1,500', '新着 A']);
+  assert.deepEqual(texts(msg.contents.body), ['13:00 - 15:00', '荒川砂町', '¥1,500', '新着 A', 'Kei']);
   // 料金は送った 1 件だけ取りに行く(除外した分は取らない)
   assert.equal(fetchImpl.calls.filter((c) => c.url.includes('detail-page')).length, 1);
   // 控えは送った分も除外した分も入る
@@ -468,7 +500,7 @@ test('events: 「いべんと」は控えに関係なく全件(除外ルール�
   const reply = await buildEventReply(envWith(kv), { now: NOW, fetchImpl: fakeFetch({ searchRows: rows, prices: { 1: 1000 } }), fetchResults, fetchTb: async () => [], log: () => {} });
   assert.equal(reply.messages.length, 1);
   assert.equal(reply.messages[0].altText, '🐻 イベント 1 件(10/17(土))');
-  assert.deepEqual(texts(reply.messages[0].contents.body), ['13:00 - 15:00', '荒川砂町', '¥1,000', '基礎練習会　荒川砂町庭球場']);
+  assert.deepEqual(texts(reply.messages[0].contents.body), ['13:00 - 15:00', '荒川砂町', '¥1,000', '基礎練習会　荒川砂町庭球場', 'Kei']);
   assert.match(reply.text, /13:00-15:00 荒川砂町 ¥1,000/);
   assert.equal(JSON.parse(kv.store.get(KV_STATE_KEY)).events['1'].p, 1000, '料金を控えに足す');
   assert.equal(kv.puts, 1);

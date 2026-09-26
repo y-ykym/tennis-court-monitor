@@ -523,6 +523,7 @@ reserve.js をマウス移動・1文字ずつ入力・操作間の小休止を�
 | こだわり | `indoorFlg`、コート面 `courtTypeOmniFlg` など、`priceUpperLimit`、`fullSoonFlg`、主催者が友達/同年代/同性/同レベルのフラグ |
 
 一覧の 1 件は フェーズ5 の `/events/me/future` と同じ形(`normalizeEvent` がそのまま使える)。加えて `isFull` `callOff` `pickupPriorityNumber` `minLevel/maxLevel` `nowParticipantsNumber` がある。**料金は無い**。
+主催者は `organizer: { id, name, imageUrl, myInfo: { isFriend } }`(2026-09-27 に 79 件で確認。全件に name と imageUrl が入り、自分でアイコンを登録していない人は `…/default/user/ic_faceicon_15@3x.png`)。画像は `d2pe1b7tquzekz.cloudfront.net` で 186〜1000px 四方の jpeg/png(LINE の image 部品の上限 1024px 以内)。一部は `content-type: application/octet-stream` で返る。団体主催の 26 件には `circle: { id, name, imageUrl, lookingForMembers, memberCount, … }` も付く(名前は最長 36 字)。カードには載せない(2026-09-27 に一度載せて本人判断で外した)。サイトの詳細ページでは団体名がイベント名の上に「サークルメンバー以外も参加可能」と共に出る。
 
 イベントの登録日時は API に無い。ID は連番なので、Web アーカイブの一覧ページ(9/11・9/19・9/23)とサイトマップの最新 ID から 1 日あたり約 1,900 増えると分かった(登録日の逆算に使える。誤差 ±1 日)。
 6 コート・土日祝・テニス・Lv.4 の 115 件で見ると、**開催の 3〜5 週間前に登録されるものが大半**、**満員になるのは開催前の 1 週間が主**(今週末 88%、1 週間後 42%、2 週間後 14%)。
