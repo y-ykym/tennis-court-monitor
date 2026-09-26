@@ -13,7 +13,8 @@
 //   │ 10/12 (月祝)          新着 4 件 │ │ 10/17 (土)            新着 4 件 │  ← ヘッダー(土=青 / 日祝=赤。「よやく」の日付タイルと同じ色)
 //   ├──────────────────────────────┤ ├──────────────────────────────┤
 //   │ 10:00 - 12:00 [荒川砂町]  ¥900 │ │ 7:50 - 10:00 [荒川砂町] ¥1,200 │  ← 1 行目: 時間(md 太字)・コートの札(色つき)・料金(右端)
-//   │ 10月12日10-12時 江東区荒川砂町… │ │ サーブ＆レシーブ自由練習会 江東… │  ← 2 行目: イベント名(xs・薄い色・2 行まで)
+//   │ 10月12日10-12時 江東区荒川砂町… │ │ サーブ＆レシーブ自由練習会 江東… │  ← 2 行目: イベント名(sm・やや薄い色・2 行まで。当初 xs → 2026-09-27 に sm)
+//   │ (◯) Kei                        │ │ (◯) カノヒロ                    │  ← 3 行目: 主催者のアイコン(丸・18px)と名前(xs。当初 xxs)。2026-09-27 追加。団体名は一度載せて本人判断で外した
 //   │ ───────────────────────────── │ │ ───────────────────────────── │     行をタップするとイベント詳細ページが開く(uri アクション)
 //   │ 14:00 - 17:00 [荒川砂町] ¥1,500 │ │ …                              │
 //   ├──────────────────────────────┤ ├──────────────────────────────┤
@@ -24,7 +25,9 @@
 // 通信(2026-09-26 に実機で調査。docs/site-notes.md):
 //   PUT /api/v3/events/search/for-web?limit=200&offset=N   本文 = 検索条件(JSON)。認証不要。並びは「おすすめ」→ 開始日時順
 //   GET /api/v3/events/{id}/detail-page-no-add-view          料金(priceOverview)はこれでしか取れない。閲覧数を増やさない方を使う
-//   一覧の 1 件は tennisbear.js の normalizeEvent でそのまま整形できる(同じ形)
+//   一覧の 1 件は tennisbear.js の normalizeEvent でそのまま整形できる(同じ形)。主催者は organizer { id, name, imageUrl }(全件に入っている。
+//   自分でアイコンを登録していない人はサイト既定の顔アイコンの URL が来る。画像は最大 1000px 四方・jpeg/png で LINE の上限 1024px に収まる。2026-09-27 実測)。
+//   団体(サークル)主催のイベントは circle { id, name, imageUrl, … } も付く(79 件中 26 件)が、カードには載せない(2026-09-27 に一度載せて本人が「いらない」と判断)
 //
 // 「新着」の判定と KV(BOOKING_KV の KV_STATE_KEY 1 キー):
 //   { events: { "<id>": { d: "YYYY-MM-DD", p: <料金|null> } } }  … 一度カードに載せた(または載せないと決めた)イベント
@@ -96,7 +99,7 @@ const HEADER_COLORS = {
   weekday: { bg: '#EEF0F3', fg: '#374151' },
 };
 const COLOR_TEXT = '#111827';
-const COLOR_SUB = '#6B7280';
+const COLOR_SUB = '#4B5563'; // イベント名・主催者名(2026-09-27 に #6B7280 から少し濃く。本人が「文字が小さくない?」と指摘 → 大きさと濃さを一段上げた)
 const COLOR_MUTED = '#9CA3AF';
 const COLOR_LINE = '#E5E7EB';
 const COLOR_WARN = '#B45309';
@@ -208,11 +211,15 @@ async function requestJson(pathname, { method = 'GET', body, signal, fetchImpl =
   return res.json();
 }
 
-// 一覧の 1 件を整形する。normalizeEvent(tennisbear.js)の形 + 満員・中止の印
+// 一覧の 1 件を整形する。normalizeEvent(tennisbear.js)の形 + 満員・中止の印 + 主催者の名前とアイコン(hostName / hostIcon。無ければ '')
+//   アイコンは LINE の image 部品に渡すので https の URL だけ採用(内部 API の形が変わって別物が来ても、カード全体が 400 で弾かれないように)
 export function normalizeSearchItem(raw) {
   const ev = normalizeEvent(raw);
   if (!ev) return null;
-  return { ...ev, isFull: raw.isFull === true, callOff: raw.callOff === true };
+  const org = raw.organizer && typeof raw.organizer === 'object' ? raw.organizer : {};
+  const hostName = typeof org.name === 'string' ? org.name.trim() : '';
+  const hostIcon = typeof org.imageUrl === 'string' && /^https:\/\/\S{1,1990}$/.test(org.imageUrl.trim()) ? org.imageUrl.trim() : '';
+  return { ...ev, isFull: raw.isFull === true, callOff: raw.callOff === true, hostName, hostIcon };
 }
 
 // 検索 API を offset をずらして呼び、全件を整形して返す(形が崩れた件は飛ばす)
@@ -406,9 +413,32 @@ function placeChip(placeCode) {
   };
 }
 
-// 1 行 = 1 イベント。1 行目: 時間・コートの札・料金、2 行目: イベント名(2 行まで)。行全体が詳細ページへのリンク
+// 主催者の行: 丸いアイコン(18px)+ 名前。アイコンの URL が無ければ名前だけ、名前も無ければ null(行を足さない)
+//   丸くするのは「枠(box)に cornerRadius を付けて中の image を切り抜く」LINE Flex の定石。読み込み前は薄い灰色の丸が出る(backgroundColor)
+const HOST_ICON_PX = 18;
+export function hostLine(ev) {
+  if (!ev.hostName) return null;
+  const contents = [];
+  if (ev.hostIcon) {
+    contents.push({
+      type: 'box',
+      layout: 'vertical',
+      flex: 0,
+      width: `${HOST_ICON_PX}px`,
+      height: `${HOST_ICON_PX}px`,
+      cornerRadius: `${HOST_ICON_PX / 2}px`,
+      backgroundColor: COLOR_LINE,
+      contents: [{ type: 'image', url: ev.hostIcon, size: 'full', aspectRatio: '1:1', aspectMode: 'cover' }],
+    });
+  }
+  contents.push(text(ev.hostName, { size: 'xs', color: COLOR_SUB, flex: 1, gravity: 'center' }));
+  return { type: 'box', layout: 'horizontal', alignItems: 'center', spacing: 'sm', margin: 'sm', contents };
+}
+
+// 1 行 = 1 イベント。1 行目: 時間・コートの札・料金、2 行目: イベント名(sm・2 行まで)、3 行目: 主催者のアイコンと名前(xs)。行全体が詳細ページへのリンク
 export function eventRow(ev, price, { first }) {
   const time = ev.start && ev.end ? `${formatTime(ev.start)} - ${formatTime(ev.end)}` : ev.start ? `${formatTime(ev.start)} -` : '時間不明';
+  const host = hostLine(ev);
   return {
     type: 'box',
     layout: 'vertical',
@@ -428,7 +458,8 @@ export function eventRow(ev, price, { first }) {
           text(priceText(price), { size: 'sm', weight: 'bold', color: COLOR_TEXT, align: 'end', flex: 1, gravity: 'center' }),
         ],
       },
-      text(ev.title || 'イベント', { size: 'xs', color: COLOR_SUB, wrap: true, maxLines: 2, margin: 'sm' }),
+      text(ev.title || 'イベント', { size: 'sm', color: COLOR_SUB, wrap: true, maxLines: 2, margin: 'sm' }),
+      ...(host ? [host] : []),
     ],
   };
 }
@@ -482,7 +513,7 @@ function dateBubble(iso, rows, prices, { mode, part, total, note, range }) {
 }
 
 // 日付ごとに 1 枚。1 日が ROWS_PER_BUBBLE 行(またはバイト上限)を超えたら「その1」「その2」に分ける。
-// カルーセルは 12 枚まで、かつ全体 50KB まで(実測 8 行の枡が約 8.7KB → 1 つのカルーセルに 5 枚前後)。
+// カルーセルは 12 枚まで、かつ全体 50KB まで(実測 8 行の枡が約 8.7KB、主催者の行を足して約 11.5KB → 1 つのカルーセルに 4 枚前後)。
 // 溢れたら次のカルーセルに送る(1 回の送信は 5 メッセージまで。それ以上は切り捨てて件数だけ altText に残す)
 //   events: inScope 済み・任意の順。prices: Map(id → 料金|null)。mode: 'new'(定期通知)| 'all'(「いべんと」)。note: 先頭の枡に添える注意書き
 // 戻り値: Flex メッセージの配列(空配列 = 0 件)
@@ -547,7 +578,12 @@ export function altText(events, mode = 'new') {
   return `🐻 ${mode === 'new' ? '新着イベント' : 'イベント'} ${sorted.length} 件(${range})`.slice(0, 400);
 }
 
-// テキスト版(Flex が 400 で弾かれたときの再送)。1 イベント 1 行、日付ごとに見出し
+// テキスト版の主催者: 「(主催: Kei)」。無ければ ''
+export function hostText(ev) {
+  return ev.hostName ? `(主催: ${ev.hostName})` : '';
+}
+
+// テキスト版(Flex が 400 で弾かれたときの再送)。1 イベント 1 行 + イベント名(主催者名を添える)+ URL、日付ごとに見出し
 export function eventText(events, prices = new Map(), { mode = 'new', note = null } = {}) {
   const sorted = sortEvents(events);
   const lines = [altText(sorted, mode)];
@@ -558,7 +594,7 @@ export function eventText(events, prices = new Map(), { mode = 'new', note = nul
       lines.push('', `■ ${shortDate(ev.date)}(${dowLabel(ev.date)})`);
     }
     const place = EVENT_PLACES.find((p) => p.code === ev.placeCode)?.short || ev.facility || '';
-    lines.push(`${formatTime(ev.start)}-${formatTime(ev.end)} ${place} ${priceText(prices.get(ev.id))}`, `  ${ev.title}`, `  ${EVENT_INFO_URL(ev.id)}`);
+    lines.push(`${formatTime(ev.start)}-${formatTime(ev.end)} ${place} ${priceText(prices.get(ev.id))}`, `  ${ev.title}${hostText(ev)}`, `  ${EVENT_INFO_URL(ev.id)}`);
   }
   if (note) lines.push('', note);
   return lines.join('\n').slice(0, 5000);
