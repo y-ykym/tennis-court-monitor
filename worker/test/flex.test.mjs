@@ -236,6 +236,23 @@ test('flex(§15): テニスベアの cancelData は無視する(万一混ざっ�
   assert.equal(msg.altText, '📅 予約一覧 1件: A 9/22(火) 19:00-21:00 🐻 ストローク多め練');
 });
 
+test('flex(§15): テニスベアの行は行全体がイベント詳細ページへの uri アクション(都の行には付かない・ID が無ければ付かない)', () => {
+  const site = A.map((r) => ({ ...r, cancelData: DATA }));
+  const msg = buildReservationFlex([{ label: 'A', reservations: site, tennisbear: { events: TB } }], opts);
+  const links = find(msg.contents, (n) => n.action?.type === 'uri' && n.type === 'box' && n.layout === 'horizontal');
+  assert.deepEqual(
+    links.map((n) => n.action.uri).sort(),
+    ['https://www.tennisbear.net/event/1621297/info', 'https://www.tennisbear.net/event/2/info'],
+    'テニスベアの 2 行だけ。URL は「いべんと」の行と同じ /event/{id}/info'
+  );
+  assert.ok(links.every((n) => texts(n).some((t) => t.includes('🐻'))), 'リンクが付くのは 🐻 の行だけ');
+  assert.equal(pills(msg).length, 2, '都の行のキャンセルボタンはそのまま');
+  // 終了済みのテニスベアの行にも付ける(ページは残っている)。ID が無い行には付けない
+  const past = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], date: '2026-09-02', start: '08:00', end: '10:00' }, { ...TB[1], id: '' }] } }], { today: '2026-09-02', nowHHMM: '12:00' });
+  const pastLinks = find(past.contents, (n) => n.action?.type === 'uri' && n.type === 'box' && n.layout === 'horizontal');
+  assert.deepEqual(pastLinks.map((n) => n.action.uri), ['https://www.tennisbear.net/event/1621297/info']);
+});
+
 test('flex(§15): テニスベアだけ失敗 → 都の予約は普通に出し、カード末尾に小さく 1 行', () => {
   const msg = buildReservationFlex([{ label: 'A', reservations: A, tennisbear: { error: new Error('x') } }, { label: 'B', reservations: B }], opts);
   const [a, b] = msg.contents.contents;

@@ -45,7 +45,8 @@
 //   ・ログにイベント名・URL・トークンは出さない(件数と所要時間だけ)
 // ============================================================
 import Holidays from 'japanese-holidays';
-import { normalizeEvent } from './tennisbear.js';
+import { normalizeEvent, EVENT_INFO_URL } from './tennisbear.js';
+export { EVENT_INFO_URL };
 import { courtByFacility, courtByTbCode } from './courts.js';
 import { pushMessages } from './line.js';
 import { formatTime, jstTodayIso } from './format.js';
@@ -77,7 +78,6 @@ const DEFAULT_DURATION_MIN = 120;
 const BASE_URL = 'https://www.tennisbear.net';
 const SEARCH_PATH = '/api/v3/events/search/for-web';
 const DETAIL_PATH = (id) => `/api/v3/events/${encodeURIComponent(id)}/detail-page-no-add-view`;
-export const EVENT_INFO_URL = (id) => `${BASE_URL}/event/${id}/info`;
 const PAGE_SIZE = 200;
 const MAX_PAGES = 3; // 600 件まで(実測は 1 か月で 80 件前後)
 const REQUEST_TIMEOUT_MS = 10000;
