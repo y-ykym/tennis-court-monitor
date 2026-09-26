@@ -492,3 +492,40 @@ reserve.js をマウス移動・1文字ずつ入力・操作間の小休止を�
 
 注意: 非公開の内部 API なので予告なく形が変わりうる。Worker は 1 件の形が崩れていてもその件だけ飛ばし、配列以外が返ったときだけ失敗扱いにする(都の予約の表示は壊さない)。
 利用規約は 2026-09-17 に本人が確認し、自動アクセスの禁止条項は無かった。
+
+---
+
+# フェーズ10 テニスベアのイベント検索 API の調査(2026-09-26、Chrome DevTools で確認)
+
+「イベント・大会」の一覧と、イベント詳細ページの裏側。**どれも認証不要**(Bearer を付けなくても 200)。
+
+| 項目 | 内容 |
+|---|---|
+| 一覧 | `PUT /api/v3/events/search/for-web?limit=40&offset=0`。本文(JSON)が検索条件。並びは「おすすめ」(pickupPriorityNumber=10)→ 開始日時順。画面は下までスクロールで offset を 40 ずつ足す(0 件で終わり)。地図用に同じ条件で limit=200 も別に取る。limit は 1000 まで通った |
+| 件数 | `PUT /api/v3/events/search/for-web/count-all`(同じ本文)→ 数字だけ |
+| 大会タブ | `PUT /api/v3/events/search/tournaments/for-web`、ランキングは `…/ranking-tournaments/for-web` |
+| 絞り込みメニュー | `GET /api/v3/search-menus?regionCode=r030&haveAvailablePlace=true&pickleballFlg=false` → 都道府県 → エリア → コート(place.code)の木。`prefectureCode=pref13` でも可 |
+| 台帳 | `GET /api/v3/regions`(r030=関東)、`/api/v3/prefectures`(pref13=東京都)、`/api/v3/levels`(1〜9。4=初中級) |
+| 詳細 | `GET /api/v3/events/{id}/detail-page`(閲覧数 viewedCount を +1 する)/ `…/detail-page-no-add-view`(増やさない)。**料金(priceOverview)はここでしか取れない**。ログイン時だけ myInfo が入る(項目数は同じ 105) |
+| 詳細ページ | `/event/{id}/info` は SSR で、この detail-page の結果を HTML に埋めて返す(ブラウザからの API 呼び出しは無い) |
+| 書き込み系(使わない) | `PUT /api/v3/events/{id}/apply`(本文 eventInputFormUserAnswerList / message / stripeCreditCardToken。3DS が要ることがある)、`/cancel`、`/on-waiting-list`、`/toggle-bookmark` など。Bearer 必須 |
+
+検索条件の本文の主な項目(空の項目は省略してもよい。`{"regionCodeList":["r030"]}` だけでも動いた):
+
+| 項目 | 値の例 |
+|---|---|
+| 場所 | `regionCodeList` `["r030"]` / `prefectureCodeList` `["pref13"]` / `placeCodeList` `["0100010009"]` / `areaCodeList` |
+| 日 | `dateList` `["2026-10-03"]`、曜日 `satFlg` `sunFlg` `holidayFlg` … |
+| 時間帯 | `timePeriodTypeList` `["PERIOD_18_20"]`(`PERIOD_06_08` 〜 `PERIOD_22_24` の 2 時間刻み 9 種) |
+| 状態 | `isOpen`(募集中のみ)、`tennisOnlyFlg`(ピックル等を除く) |
+| レベル | `levelList` `[4]` = 募集レベルの範囲に 4 を含む(Lv.1〜9 のような幅広いものも入る) |
+| 種目(大会のみ) | `tournamentTypeList` `["MEN_SINGLES","LADY_DOUBLES","MIX_DOUBLES","MEN_TEAM_MATCH", …]` |
+| こだわり | `indoorFlg`、コート面 `courtTypeOmniFlg` など、`priceUpperLimit`、`fullSoonFlg`、主催者が友達/同年代/同性/同レベルのフラグ |
+
+一覧の 1 件は フェーズ5 の `/events/me/future` と同じ形(`normalizeEvent` がそのまま使える)。加えて `isFull` `callOff` `pickupPriorityNumber` `minLevel/maxLevel` `nowParticipantsNumber` がある。**料金は無い**。
+
+イベントの登録日時は API に無い。ID は連番なので、Web アーカイブの一覧ページ(9/11・9/19・9/23)とサイトマップの最新 ID から 1 日あたり約 1,900 増えると分かった(登録日の逆算に使える。誤差 ±1 日)。
+6 コート・土日祝・テニス・Lv.4 の 115 件で見ると、**開催の 3〜5 週間前に登録されるものが大半**、**満員になるのは開催前の 1 週間が主**(今週末 88%、1 週間後 42%、2 週間後 14%)。
+`robots.txt` は不明なボット向けに `Disallow: /api/`。利用規約は 2026-09-17 に本人が確認済み(自動アクセスの禁止条項なし)。この Worker は週 2 回 + 手動の「いべんと」だけで、詳細は閲覧数を増やさない方を叩く。
+
+対象 6 コートの place.code: 大横川親水公園テニスコート `0100140006`(墨田区営)、錦糸公園テニスコート `0100140003`(墨田区営)、猿江恩賜公園 `0100010008`、亀戸中央公園 `0100010009`、大島小松川公園Ａ `0100010020`(都営)、荒川・砂町庭球場 `0100130006`(江東区営)。名前の似た別施設(亀戸庭球場 `0100130004`、GODAI 亀戸 `1100450001`、TOPインドアステージ亀戸)は対象外。

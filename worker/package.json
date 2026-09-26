@@ -2,7 +2,7 @@
   "name": "tennis-reservation-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "LINEグループで「よやく」と送ると予約サイトの予約一覧(+テニスベアの予定)を返信し、キャンセル・自動予約の設定・ペナルティ予告・利用者カード・コートの連絡先・合言葉の一覧(へるぷ)も担う Cloudflare Workers ボット(フェーズ1.5/1.6/3/4/5/7/8/9)",
+  "description": "LINEグループで「よやく」と送ると予約サイトの予約一覧(+テニスベアの予定)を返信し、キャンセル・自動予約の設定・ペナルティ予告・利用者カード・コートの連絡先・合言葉の一覧(へるぷ)・テニスベアの新着イベント通知(いべんと)も担う Cloudflare Workers ボット(フェーズ1.5/1.6/3/4/5/7/8/9/10)",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
@@ -10,7 +10,8 @@
     "tail": "wrangler tail --format pretty",
     "test": "node --test \"test/**/*.test.mjs\"",
     "send-test-event": "node scripts/send-test-event.mjs",
-    "probe-tennisbear": "node scripts/probe-tennisbear.mjs"
+    "probe-tennisbear": "node scripts/probe-tennisbear.mjs",
+    "probe-events": "node scripts/probe-events.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.128.0"
