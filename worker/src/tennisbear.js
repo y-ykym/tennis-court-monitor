@@ -5,7 +5,7 @@
 //
 //   TbEvent = {
 //     source:   'tennisbear',   // 都の予約(source 無し)と見分ける印。キャンセルボタンを付けない判定にも使う
-//     id:       string,         // イベント ID(URL 用)
+//     id:       string,         // イベント ID。行タップで開く詳細ページの URL(EVENT_INFO_URL)に使う
 //     title:    string,         // イベント名(行の見出し。🐻 を付けて出す)
 //     date:     string,         // "YYYY-MM-DD"(JST)
 //     start:    string,         // "HH:MM"(0 埋め。都の予約と桁を揃えないと日付順がずれる)
@@ -30,7 +30,8 @@
 const BASE_URL = 'https://www.tennisbear.net';
 const LOGIN_PATH = '/api/v3/auth/login/email';
 const FUTURE_PATH = '/api/v3/events/me/future';
-export const EVENT_URL = (id) => `${BASE_URL}/event/${id}`;
+// イベント詳細ページの URL。「よやく」の行タップ(flex.js)と「いべんと」の行タップ(event-notify.js)で同じものを使う
+export const EVENT_INFO_URL = (id) => `${BASE_URL}/event/${encodeURIComponent(id)}/info`;
 // 1 リクエストの上限(呼び出し側の全体予算とは別)
 const REQUEST_TIMEOUT_MS = 10000;
 
