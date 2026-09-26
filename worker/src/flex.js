@@ -24,7 +24,7 @@
 // フェーズ5(§15): 人に tennisbear が添えられていれば、テニスベアの予定を同じカードに日付順で混ぜる。
 //   │ ┌────┐ 19:00 - 21:00                  │
 //   │ │9/22│ 🐻 ストローク多め練              │  ← テニスベアの行: 🐻 + イベント名、その下にコート名。キャンセルボタンは付けない
-//   │ │ 火 │ 亀戸中央公園テニスコート         │
+//   │ │ 火 │ 亀戸中央公園テニスコート         │     行をタップするとテニスベアのイベント詳細ページが開く(uri。2026-09-26)
 //   テニスベアだけ失敗 → カード末尾に小さく「🐻 テニスベアの取得に失敗しました」。都だけ失敗 → 「繋がりませんでした」の下に予定を出す
 //
 // 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
@@ -39,6 +39,7 @@
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
 import { POP_ALERT } from './weather.js';
+import { EVENT_INFO_URL } from './tennisbear.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
@@ -222,7 +223,10 @@ function entry(r, today, nowHHMM) {
   const contents = [detailText(r, { past, rel })];
   // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)
   if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
-  return { type: 'box', layout: 'horizontal', alignItems: 'center', contents };
+  // テニスベアの行は、行全体をタップするとイベント詳細ページが開く(2026-09-26。「いべんと」の行と同じ uri アクション)。
+  // 終了済みの行も開ける(ページ自体は残っている)。ID が無い行(整形に失敗したもの)には付けない
+  const action = isTennisbear(r) && r.id ? { action: { type: 'uri', label: '詳細', uri: EVENT_INFO_URL(r.id) } } : {};
+  return { type: 'box', layout: 'horizontal', alignItems: 'center', ...action, contents };
 }
 
 // タイルと同じ幅の見えない箱。同じ日の 2 件目以降の左に置いて、時間の開始位置を 1 件目と揃える
