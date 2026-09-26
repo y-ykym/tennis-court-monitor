@@ -323,8 +323,10 @@ test('events: 1 日 9 件以上はその日を 2 枚に分ける。13 日分以�
   const many = Array.from({ length: 10 }, (_, i) => ev({ id: String(100 + i), date: '2026-10-17', start: `${String(6 + i).padStart(2, '0')}:00`, end: `${String(8 + i).padStart(2, '0')}:00` }));
   const m = buildEventMessages(many, new Map(), { mode: 'new' });
   assert.equal(m[0].contents.contents.length, 2);
-  assert.deepEqual(texts(m[0].contents.contents[0].header), ['10/17', '(土) その1', '新着 10 件']);
-  assert.deepEqual(texts(m[0].contents.contents[1].header), ['10/17', '(土) その2', '新着 10 件']);
+  // 分割した日は右側に「この枡の範囲 / その日の件数」(枡に 8 行しか無いのに「10 件」と見えないように)
+  assert.deepEqual(texts(m[0].contents.contents[0].header), ['10/17', '(土) その1', '新着 1〜8 / 10 件']);
+  assert.deepEqual(texts(m[0].contents.contents[1].header), ['10/17', '(土) その2', '新着 9〜10 / 10 件']);
+  assert.deepEqual(texts(buildEventMessages(many, new Map(), { mode: 'all' })[0].contents.contents[1].header), ['10/17', '(土) その2', '9〜10 / 10 件']);
   assert.equal(uris(m[0].contents.contents[0]).length, 8);
   assert.equal(uris(m[0].contents.contents[1]).length, 2);
   // 土日祝を 13 日分(10/3 〜 11/1 は 10 日 + 祝日 10/12 = 11 日… なので日付を偽って 13 日分)

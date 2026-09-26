@@ -433,9 +433,16 @@ export function eventRow(ev, price, { first }) {
   };
 }
 
-function dateHeader(iso, count, { mode, part }) {
+// 見出しの右側。分割していない日は「新着 N 件」「N 件」。分割した日(range = [from, to])は「1〜8 / 11 件」のように
+// この枡に載っている範囲を出す(2026-09-26 実機確認で「その1 … 11 件」だと 8 行しか無いのに 11 と見えて数が合わない、を直した)
+function countLabel(count, { mode, range }) {
+  if (range) return `${mode === 'new' ? '新着 ' : ''}${range[0]}〜${range[1]} / ${count} 件`;
+  return mode === 'new' ? `新着 ${count} 件` : `${count} 件`;
+}
+
+function dateHeader(iso, count, { mode, part, range }) {
   const colors = HEADER_COLORS[dayKind(iso)];
-  const label = mode === 'new' ? `新着 ${count} 件` : `${count} 件`;
+  const label = countLabel(count, { mode, range });
   return {
     type: 'box',
     layout: 'horizontal',
@@ -452,7 +459,7 @@ function dateHeader(iso, count, { mode, part }) {
   };
 }
 
-function dateBubble(iso, rows, prices, { mode, part, total, note }) {
+function dateBubble(iso, rows, prices, { mode, part, total, note, range }) {
   const body = [];
   rows.forEach((ev, i) => {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE });
@@ -462,7 +469,7 @@ function dateBubble(iso, rows, prices, { mode, part, total, note }) {
   return {
     type: 'bubble',
     size: 'mega',
-    header: dateHeader(iso, total, { mode, part }),
+    header: dateHeader(iso, total, { mode, part, range }),
     body: { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '0px', paddingBottom: '6px', backgroundColor: '#FFFFFF', contents: body },
     footer: {
       type: 'box',
@@ -493,11 +500,14 @@ export function buildEventMessages(events, prices = new Map(), { mode = 'new', n
     const chunks = [];
     for (let i = 0; i < rows.length; i += ROWS_PER_BUBBLE) chunks.push(rows.slice(i, i + ROWS_PER_BUBBLE));
     chunks.forEach((chunk, ci) => {
-      let bubble = dateBubble(iso, chunk, prices, { mode, part: chunks.length > 1 ? `その${ci + 1}` : '', total: rows.length, note: firstNote });
+      const part = chunks.length > 1 ? `その${ci + 1}` : '';
+      const from = ci * ROWS_PER_BUBBLE + 1;
+      const opts = () => ({ mode, part, total: rows.length, note: firstNote, range: chunks.length > 1 ? [from, from + chunk.length - 1] : null });
+      let bubble = dateBubble(iso, chunk, prices, opts());
       // バイト上限(30KB)は 8 行なら届かないが、念のため行を減らして収める
       while (bubbleBytes(bubble) > MAX_BUBBLE_BYTES && chunk.length > 1) {
         chunk.pop();
-        bubble = dateBubble(iso, chunk, prices, { mode, part: chunks.length > 1 ? `その${ci + 1}` : '', total: rows.length, note: firstNote });
+        bubble = dateBubble(iso, chunk, prices, opts());
       }
       firstNote = null;
       bubbles.push(bubble);
