@@ -11,6 +11,8 @@
 //   │ [よやく]     予約の一覧                │  ← 行をタップするとその合言葉が送られる(message アクション)
 //   │              都営コートとテニスベアの予定 │
 //   │ ───────────────────────────────── │
+//   │ [いべんと]   イベントを探す            │
+//   │ ───────────────────────────────── │
 //   │ [せってい]   設定                      │
 //   │              自動予約と空き通知を止める…  │
 //   │ ───────────────────────────────── │
@@ -29,6 +31,7 @@ import { COMMAND_TEXT } from './line.js';
 import { AUTO_COMMAND_TEXT } from './auto.js';
 import { CARD_COMMAND_TEXT } from './card.js';
 import { CONTACT_COMMAND_TEXT } from './contacts.js';
+import { EVENT_COMMAND_TEXT } from './event-notify.js';
 
 // グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)
 export const HELP_COMMAND_TEXT = 'へるぷ';
@@ -52,6 +55,7 @@ const text = (str, extra = {}) => ({ type: 'text', text: String(str), ...extra }
 export function helpRows() {
   return [
     { keyword: COMMAND_TEXT, title: '予約の一覧', desc: '都営コートとテニスベアの予定を日付順に。天気も出ます。キャンセルもここから' },
+    { keyword: EVENT_COMMAND_TEXT, title: 'イベントを探す', desc: '近くのコートの土日祝・初中級の練習会や大会。予定と重なるものは除いて、月・木の夜に新着も届きます' },
     { keyword: AUTO_COMMAND_TEXT, title: '設定', desc: '自動予約と空き通知を止める・戻す。予約したくない日を決める' },
     { keyword: CARD_COMMAND_TEXT, title: '受付で見せるカード', desc: '利用者カードの画像を人数分' },
     { keyword: CONTACT_COMMAND_TEXT, title: '電話でキャンセル', desc: '都営コートの電話番号。タップでかかります' },
