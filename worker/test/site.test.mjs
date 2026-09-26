@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseReservations, buildCancelForm, isCancelDone } from '../src/site.js';
+import { parseReservations, buildCancelForm, isCancelDone, fetchReservations } from '../src/site.js';
 
 // 実機の「予約の確認・取消画面」(2026-09-02)を、氏名・利用者番号・予約番号をダミーに置換して保存したもの
 const html = readFileSync(new URL('./fixtures/reservation-list.html', import.meta.url), 'utf8');
@@ -55,4 +55,18 @@ test('cancel: 完了判定は prwga4000.jsp または完了文言', () => {
   assert.equal(isCancelDone('<html><body><p>予約の取消が完了しました。</p></body></html>'), true);
   assert.equal(isCancelDone(html), false, '一覧画面は完了ではない');
   assert.equal(isCancelDone('<!-- pawab2000.jsp --><html></html>'), false);
+});
+
+test('fetch: 1 通信の上限は requestTimeoutMs で延ばせる(既定 15 秒は Cron には短い。2026-09-26)', async () => {
+  const orig = globalThis.fetch;
+  // 応答を返さない予約サイトの真似(abort されたら AbortError / TimeoutError を投げる)
+  globalThis.fetch = (_url, { signal }) =>
+    new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+  try {
+    const started = Date.now();
+    await assert.rejects(fetchReservations({ userId: 'u', password: 'p' }, { requestTimeoutMs: 50 }), (e) => e.name === 'TimeoutError');
+    assert.ok(Date.now() - started < 2000, '50ms で切れる(既定の 15 秒を待たない)');
+  } finally {
+    globalThis.fetch = orig;
+  }
 });

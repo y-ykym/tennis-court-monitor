@@ -82,6 +82,9 @@ const RETRY_UNTIL_MS = 10000;
 // (Cloudflare の Cron は数分動けるため、90 秒待っても問題ない)
 const CRON_FETCH_BUDGET_MS = 90000;
 const CRON_RETRY_UNTIL_MS = 60000;
+// Cron の 1 通信の上限(通常は site.js の 15 秒)。2026-09-26 23:35 に 1 通信が 15 秒を 3 回連続で超えて B が失敗し
+// 「確認できませんでした」を push した(A は 4 通信で 39 秒かかったが成功)。全体は上の 90 秒で打ち切られる
+const CRON_REQUEST_TIMEOUT_MS = 40000;
 // テニスベアの取得全体の上限(都より短く。遅れても都の予約は返す)
 const TB_BUDGET_MS = 12000;
 // フェーズ10 「いべんと」の返信で都の予約を待つ上限(検索・料金の取得と並行。30 秒枠に返信の時間を残す)
@@ -134,7 +137,7 @@ export default {
     if (event.cron === EVENT_NOTIFY_CRON) {
       ctx.waitUntil(
         runEventNotify(env, {
-          fetchResults: () => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS }),
+          fetchResults: () => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS, requestTimeoutMs: CRON_REQUEST_TIMEOUT_MS }),
           fetchTb: () => fetchAllTennisbear(env, { budgetMs: 30000 }),
         }).catch((e) => console.error(`[events] 失敗: ${e.message}`))
       );
@@ -145,7 +148,7 @@ export default {
       ctx.waitUntil(
         runPenaltyAlert(env, {
           kind: event.cron === DEADLINE_CRON ? 'deadline' : 'morning',
-          fetchResults: () => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS }),
+          fetchResults: () => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS, requestTimeoutMs: CRON_REQUEST_TIMEOUT_MS }),
           attach: (results, opts) => attachCancelData(env, results, opts),
         }).catch((e) => console.error(`[alert] 送信に失敗: ${e.message}`))
       );
@@ -374,7 +377,7 @@ export async function attachCancelData(env, results, { today = jstTodayIso(), no
 // A・B の予約一覧を並行取得する。全体で budgetMs(既定 FETCH_BUDGET_MS)を超えたら打ち切り、
 // 開始から retryUntilMs(既定 RETRY_UNTIL_MS)を過ぎたら再試行しない。Cron からは両方とも長めに渡す。
 // 戻り値: [{ slot, label, reservations } | { slot, label, error }](利用者が未設定なら空配列)
-export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, retryUntilMs = RETRY_UNTIL_MS, deferLogout } = {}) {
+export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, retryUntilMs = RETRY_UNTIL_MS, deferLogout, requestTimeoutMs } = {}) {
   const started = Date.now();
   const people = configuredPeople(env);
   if (people.length === 0) {
@@ -394,6 +397,7 @@ export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, re
             log: (msg) => console.log(`[${p.slot}] ${msg}`),
             retryUntil: started + retryUntilMs,
             deferLogout,
+            requestTimeoutMs,
           }
         )
       )
