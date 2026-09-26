@@ -1,0 +1,150 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>新着イベント通知カードの見本</title>
+<style>
+  body{margin:0;background:#fff;font-family:"Hiragino Sans","Noto Sans JP",-apple-system,sans-serif;color:#222}
+  .page{padding:24px 28px 32px;box-sizing:border-box}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:15px;margin:28px 0 6px} h2 small{font-weight:400;color:#777;font-size:12px;margin-left:8px}
+  .lead{font-size:13px;color:#555;margin:0 0 12px;line-height:1.6;max-width:760px}
+  .alt{display:inline-block;background:#F3F4F6;border-radius:8px;padding:8px 12px;font-size:13px;color:#333;margin:0 0 12px}
+  .alt b{color:#111}
+  .rail{display:flex;gap:12px;overflow-x:auto;padding:6px 2px 14px;align-items:flex-start;background:#E9EBEE;border-radius:12px;padding:14px}
+  .card{flex:0 0 300px;width:300px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.18);border:1px solid #e3e3e3}
+  .hd{padding:12px 16px;display:flex;justify-content:space-between;align-items:baseline}
+  .hd.sat{background:#E3EEFB;color:#1D4F91} .hd.sun{background:#FBE4E4;color:#9B2C2C} .hd.wd{background:#EEF0F3;color:#374151}
+  .hd .dt b{font-size:20px} .hd .dow{font-size:14px;margin-left:4px;font-weight:700} .hd .cnt{font-size:12px;opacity:.85}
+  .bd{padding:0 16px 6px}
+  .row{display:block;text-decoration:none;color:inherit;padding:11px 0}
+  .row + .row{border-top:1px solid #E5E7EB}
+  .time{font-size:15px;font-weight:700;color:#111827;line-height:1.25}
+  .ttl{font-size:13px;color:#111827;margin-top:2px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .sub{display:flex;justify-content:space-between;align-items:baseline;margin-top:3px}
+  .court{font-size:12px;color:#4B5563} .price{font-size:13px;font-weight:700;color:#0F766E;white-space:nowrap;margin-left:8px}
+  .ft{border-top:1px solid #E5E7EB;padding:8px 12px;text-align:center;color:#9CA3AF;font-size:11px}
+  /* B */
+  .single{width:300px}
+  .single .hd{background:#1F2A44;color:#fff} .single .hd b{font-size:16px} .single .hd span{font-size:11px;color:#C7D2E5}
+  .rowB{display:flex;align-items:flex-start;gap:10px;padding:12px 0}
+  .rowB + .rowB{border-top:1px solid #E5E7EB}
+  .tile{width:58px;flex:0 0 auto;border-radius:8px;text-align:center;padding:6px 0;position:sticky;top:0}
+  .tile b{display:block;font-size:17px;line-height:1.1} .tile small{font-size:10.5px}
+  .tile.sat{background:#E3EEFB;color:#1D4F91} .tile.sun{background:#FBE4E4;color:#9B2C2C} .tile.wd{background:#EEF0F3;color:#374151}
+  .mid{flex:1;min-width:0}
+  .ent{display:block;text-decoration:none;color:inherit} .ent + .ent{margin-top:10px;padding-top:10px;border-top:1px dashed #E5E7EB}
+  .note{font-size:12px;color:#555;margin:10px 0 0;line-height:1.6;max-width:760px} .note b{color:#222}
+</style></head><body><div class="page">
+<h1>新着イベント通知の見本(実データ: 2026-09-26 時点の新着 18 件・7 日分)</h1>
+<p class="lead">月・木 20:00 に LINE グループへ届く 1 回分のイメージ。行の中身は「時間」「イベント名(2 行まで)」「コート名」「料金」で、行をタップするとテニスベアのイベント詳細ページが開く(この見本もクリックで開く)。ボタンは置かない。</p>
+<div class="alt">通知バーに出る文: <b>🐻 新着イベント 18 件(10/3〜10/25)</b></div>
+
+<h2>案 A(推奨): 日付ごとに 1 枚、横にスワイプ<small>7 枚。新着があった日だけ並ぶ</small></h2>
+<div class="rail"><div class="card">
+ <div class="hd sat"><div class="dt"><b>10/3</b><span class="dow">(土)</span></div><span class="cnt">新着 3 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1641027/info" target="_blank">
+  <div class="time">9:00 - 11:00</div>
+  <div class="ttl">前半【男子シングルス】@大島小松川公園-初中級</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,500</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1641030/info" target="_blank">
+  <div class="time">11:00 - 13:00</div>
+  <div class="ttl">後半【ダブルス】@大島小松川公園-初中級</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,000</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1642043/info" target="_blank">
+  <div class="time">13:00 - 15:00</div>
+  <div class="ttl">【Level1〜4】10/3(土) 亀戸中央公園</div>
+  <div class="sub"><span class="court">亀戸中央公園</span><span class="price">¥1,000</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div><div class="card">
+ <div class="hd sat"><div class="dt"><b>10/10</b><span class="dow">(土)</span></div><span class="cnt">新着 1 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1641045/info" target="_blank">
+  <div class="time">9:00 - 11:00</div>
+  <div class="ttl">ひたすら【男子シングルス】@大島小松川公園-初中級</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,500</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div><div class="card">
+ <div class="hd sun"><div class="dt"><b>10/11</b><span class="dow">(日)</span></div><span class="cnt">新着 1 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1642772/info" target="_blank">
+  <div class="time">15:00 - 17:00</div>
+  <div class="ttl">15時〜2時間 軽いアップ後ダブルスゲーム　猿江恩師公園　上限6人　中級位</div>
+  <div class="sub"><span class="court">猿江恩賜公園</span><span class="price">¥1,000</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div><div class="card">
+ <div class="hd sun"><div class="dt"><b>10/12</b><span class="dow">(月祝)</span></div><span class="cnt">新着 4 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1643191/info" target="_blank">
+  <div class="time">10:00 - 12:00</div>
+  <div class="ttl">10月12日10-12時 江東区荒川砂町庭球場中級ダブルス</div>
+  <div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥900</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1641098/info" target="_blank">
+  <div class="time">14:00 - 17:00</div>
+  <div class="ttl">基礎練習会　荒川砂町庭球場(３時間)</div>
+  <div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,500</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1643097/info" target="_blank">
+  <div class="time">17:00 - 19:00</div>
+  <div class="ttl">☆大島小松川公園 ダブルス練習  2時間</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,200</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1641047/info" target="_blank">
+  <div class="time">19:00 - 21:00</div>
+  <div class="ttl">ひたすら【ダブルス】@大島小松川公園-初中級</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,000</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div><div class="card">
+ <div class="hd sat"><div class="dt"><b>10/17</b><span class="dow">(土)</span></div><span class="cnt">新着 4 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1642873/info" target="_blank">
+  <div class="time">7:50 - 10:00</div>
+  <div class="ttl">サーブ＆レシーブ自由練習会 江東区荒川砂町 ★動画＆AI分析付★</div>
+  <div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,200</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1645831/info" target="_blank">
+  <div class="time">8:00 - 10:00</div>
+  <div class="ttl">基礎練習会　荒川砂町庭球場</div>
+  <div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,000</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1642875/info" target="_blank">
+  <div class="time">10:00 - 12:00</div>
+  <div class="ttl">初中級レベルからの基礎練習会 荒川砂町庭球場 ★サーブ動画＆AI分析付★</div>
+  <div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,200</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1645833/info" target="_blank">
+  <div class="time">14:00 - 17:00</div>
+  <div class="ttl">基礎練習会　荒川砂町庭球場(３時間)</div>
+  <div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,500</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div><div class="card">
+ <div class="hd sun"><div class="dt"><b>10/18</b><span class="dow">(日)</span></div><span class="cnt">新着 4 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1642877/info" target="_blank">
+  <div class="time">8:50 - 11:00</div>
+  <div class="ttl">サーブ＆レシーブ自由練習会 大島小松川公園 ★動画＆AI分析付★</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,200</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1645843/info" target="_blank">
+  <div class="time">9:00 - 11:00</div>
+  <div class="ttl">サーブからのラリー練習　大島小松川公園</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥800</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1642886/info" target="_blank">
+  <div class="time">11:00 - 13:00</div>
+  <div class="ttl">初中級レベルからの基礎練習会 大島小松川公園 ★サーブ動画＆AI分析付★</div>
+  <div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,200</span></div>
+</a><a class="row" href="https://www.tennisbear.net/event/1645848/info" target="_blank">
+  <div class="time">13:00 - 15:00</div>
+  <div class="ttl">基礎練習会　亀戸中央公園</div>
+  <div class="sub"><span class="court">亀戸中央公園</span><span class="price">¥800</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div><div class="card">
+ <div class="hd sun"><div class="dt"><b>10/25</b><span class="dow">(日)</span></div><span class="cnt">新着 1 件</span></div>
+ <div class="bd"><a class="row" href="https://www.tennisbear.net/event/1644750/info" target="_blank">
+  <div class="time">15:00 - 17:00</div>
+  <div class="ttl">テニス会【初心者〜中上級者歓迎🎾／18〜30歳中心】</div>
+  <div class="sub"><span class="court">猿江恩賜公園</span><span class="price">無料</span></div>
+</a></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div></div>
+<p class="note"><b>見出しの色</b>は「よやく」カードの日付タイルと同じ(土=青、日・祝=赤)。<b>1 枚に入り切らない日</b>(目安 8 件超)はその日を 2 枚に分ける。1 か月の土日祝は 9〜10 日なので LINE の上限 12 枚に収まる。</p>
+
+<h2>比較用 案 B: 全部を 1 枚に<small>「よやく」カードと同じ形。18 件だとこの長さになる</small></h2>
+<div class="card single">
+ <div class="hd"><b>🐻 新着イベント</b><span>9/26 ・ 18件</span></div>
+ <div class="bd"><div class="rowB"><div class="tile sat"><b>10/3</b><small>土</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1641027/info" target="_blank"><div class="time">9:00 - 11:00</div><div class="ttl">前半【男子シングルス】@大島小松川公園-初中級</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,500</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1641030/info" target="_blank"><div class="time">11:00 - 13:00</div><div class="ttl">後半【ダブルス】@大島小松川公園-初中級</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,000</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1642043/info" target="_blank"><div class="time">13:00 - 15:00</div><div class="ttl">【Level1〜4】10/3(土) 亀戸中央公園</div><div class="sub"><span class="court">亀戸中央公園</span><span class="price">¥1,000</span></div></a></div></div><div class="rowB"><div class="tile sat"><b>10/10</b><small>土</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1641045/info" target="_blank"><div class="time">9:00 - 11:00</div><div class="ttl">ひたすら【男子シングルス】@大島小松川公園-初中級</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,500</span></div></a></div></div><div class="rowB"><div class="tile sun"><b>10/11</b><small>日</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1642772/info" target="_blank"><div class="time">15:00 - 17:00</div><div class="ttl">15時〜2時間 軽いアップ後ダブルスゲーム　猿江恩師公園　上限6人　中級位</div><div class="sub"><span class="court">猿江恩賜公園</span><span class="price">¥1,000</span></div></a></div></div><div class="rowB"><div class="tile sun"><b>10/12</b><small>月祝</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1643191/info" target="_blank"><div class="time">10:00 - 12:00</div><div class="ttl">10月12日10-12時 江東区荒川砂町庭球場中級ダブルス</div><div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥900</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1641098/info" target="_blank"><div class="time">14:00 - 17:00</div><div class="ttl">基礎練習会　荒川砂町庭球場(３時間)</div><div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,500</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1643097/info" target="_blank"><div class="time">17:00 - 19:00</div><div class="ttl">☆大島小松川公園 ダブルス練習  2時間</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,200</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1641047/info" target="_blank"><div class="time">19:00 - 21:00</div><div class="ttl">ひたすら【ダブルス】@大島小松川公園-初中級</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,000</span></div></a></div></div><div class="rowB"><div class="tile sat"><b>10/17</b><small>土</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1642873/info" target="_blank"><div class="time">7:50 - 10:00</div><div class="ttl">サーブ＆レシーブ自由練習会 江東区荒川砂町 ★動画＆AI分析付★</div><div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,200</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1645831/info" target="_blank"><div class="time">8:00 - 10:00</div><div class="ttl">基礎練習会　荒川砂町庭球場</div><div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,000</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1642875/info" target="_blank"><div class="time">10:00 - 12:00</div><div class="ttl">初中級レベルからの基礎練習会 荒川砂町庭球場 ★サーブ動画＆AI分析付★</div><div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,200</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1645833/info" target="_blank"><div class="time">14:00 - 17:00</div><div class="ttl">基礎練習会　荒川砂町庭球場(３時間)</div><div class="sub"><span class="court">荒川・砂町庭球場</span><span class="price">¥1,500</span></div></a></div></div><div class="rowB"><div class="tile sun"><b>10/18</b><small>日</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1642877/info" target="_blank"><div class="time">8:50 - 11:00</div><div class="ttl">サーブ＆レシーブ自由練習会 大島小松川公園 ★動画＆AI分析付★</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,200</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1645843/info" target="_blank"><div class="time">9:00 - 11:00</div><div class="ttl">サーブからのラリー練習　大島小松川公園</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥800</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1642886/info" target="_blank"><div class="time">11:00 - 13:00</div><div class="ttl">初中級レベルからの基礎練習会 大島小松川公園 ★サーブ動画＆AI分析付★</div><div class="sub"><span class="court">大島小松川公園Ａ</span><span class="price">¥1,200</span></div></a><a class="ent" href="https://www.tennisbear.net/event/1645848/info" target="_blank"><div class="time">13:00 - 15:00</div><div class="ttl">基礎練習会　亀戸中央公園</div><div class="sub"><span class="court">亀戸中央公園</span><span class="price">¥800</span></div></a></div></div><div class="rowB"><div class="tile sun"><b>10/25</b><small>日</small></div><div class="mid"><a class="ent" href="https://www.tennisbear.net/event/1644750/info" target="_blank"><div class="time">15:00 - 17:00</div><div class="ttl">テニス会【初心者〜中上級者歓迎🎾／18〜30歳中心】</div><div class="sub"><span class="court">猿江恩賜公園</span><span class="price">無料</span></div></a></div></div></div>
+ <div class="ft">タップでイベントの詳細を開く</div>
+</div>
+<p class="note"><b>案 B の難点</b>: 1 回 15〜25 件だと縦に長くなり、LINE では画面 3〜4 枚分スクロールする。1 枚の容量上限にも近づくため、多い週は結局 2 枚以上に分けることになる。</p>
+</div></body></html>

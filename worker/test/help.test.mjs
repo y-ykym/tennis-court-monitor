@@ -6,6 +6,7 @@ import { COMMAND_TEXT, pickTextCommandEvents } from '../src/line.js';
 import { AUTO_COMMAND_TEXT } from '../src/auto.js';
 import { CARD_COMMAND_TEXT } from '../src/card.js';
 import { CONTACT_COMMAND_TEXT } from '../src/contacts.js';
+import { EVENT_COMMAND_TEXT } from '../src/event-notify.js';
 
 function texts(node, out = []) {
   if (Array.isArray(node)) node.forEach((n) => texts(n, out));
@@ -27,8 +28,8 @@ function actions(node, out = []) {
 test('help: 合言葉は「へるぷ」。一覧には bot が受け付ける合言葉が全部、重複なく載る', () => {
   assert.equal(HELP_COMMAND_TEXT, 'へるぷ');
   const keywords = helpRows().map((r) => r.keyword);
-  assert.deepEqual(keywords, [COMMAND_TEXT, AUTO_COMMAND_TEXT, CARD_COMMAND_TEXT, CONTACT_COMMAND_TEXT, HELP_COMMAND_TEXT]);
-  assert.deepEqual(keywords, ['よやく', 'せってい', 'うけつけ', 'きゃんせる', 'へるぷ']);
+  assert.deepEqual(keywords, [COMMAND_TEXT, EVENT_COMMAND_TEXT, AUTO_COMMAND_TEXT, CARD_COMMAND_TEXT, CONTACT_COMMAND_TEXT, HELP_COMMAND_TEXT]);
+  assert.deepEqual(keywords, ['よやく', 'いべんと', 'せってい', 'うけつけ', 'きゃんせる', 'へるぷ']);
   assert.equal(new Set(keywords).size, keywords.length);
   // ON/OFF の打ち込み合言葉(じどうおん など)は載せない(設定カードのボタンで押せる)。仕組みの用語も使わない
   const all = JSON.stringify(helpRows());

@@ -22,6 +22,9 @@
 //                          番号は src/courts.js の台帳から。予約サイト・KV には行かない
 //   フェーズ9(src/help.js): 「へるぷ」→ この bot が反応する合言葉の一覧カード(行をタップでその合言葉を送る)。
 //                          合言葉は各モジュールの定数から出す。予約サイト・KV には行かない
+//   フェーズ10(src/event-notify.js): Cron(月・木 20:00 JST)→ テニスベアの新着イベント(近くの 6 コート・土日祝・初中級)を
+//                          日付ごとのカードで push。A・B の予定(都の予約 + テニスベアの参加予定)と重なる・隣接するものは除く。
+//                          「いべんと」→ 同じ条件の全イベントを同じカードで reply
 //   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠)。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -67,6 +70,7 @@ import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DE
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
 import { CONTACT_COMMAND_TEXT, buildContactReply, MSG_CONTACT_FAILED } from './contacts.js';
 import { HELP_COMMAND_TEXT, buildHelpReply, MSG_HELP_FAILED } from './help.js';
+import { EVENT_COMMAND_TEXT, EVENT_NOTIFY_CRON, buildEventReply, runEventNotify, MSG_EVENT_FAILED } from './event-notify.js';
 import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANCEL_DECLINED, MSG_CANCEL_DISABLED, MSG_AUTO_UNAVAILABLE } from './messages.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
@@ -80,6 +84,8 @@ const CRON_FETCH_BUDGET_MS = 90000;
 const CRON_RETRY_UNTIL_MS = 60000;
 // テニスベアの取得全体の上限(都より短く。遅れても都の予約は返す)
 const TB_BUDGET_MS = 12000;
+// フェーズ10 「いべんと」の返信で都の予約を待つ上限(検索・料金の取得と並行。30 秒枠に返信の時間を残す)
+const EVENT_REPLY_SITE_BUDGET_MS = 20000;
 // キャンセルボタン(kind='c')と「はい」(kind='y')の有効期限
 const CANCEL_BUTTON_TTL_SEC = 60 * 60;
 const CANCEL_CONFIRM_TTL_SEC = 10 * 60;
@@ -124,6 +130,16 @@ export default {
       ctx.waitUntil(sendMaintenanceReminder(env).catch((e) => console.error(`[monitor] お知らせの送信に失敗: ${e.message}`)));
       return;
     }
+    // フェーズ10: テニスベアの新着イベント(月・木 20:00)。A・B の予定と重なる・隣接するものは除いて push
+    if (event.cron === EVENT_NOTIFY_CRON) {
+      ctx.waitUntil(
+        runEventNotify(env, {
+          fetchResults: () => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS }),
+          fetchTb: () => fetchAllTennisbear(env, { budgetMs: 30000 }),
+        }).catch((e) => console.error(`[events] 失敗: ${e.message}`))
+      );
+      return;
+    }
     // フェーズ4: 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を知らせる(朝 9:00 と 23:35)
     if (PENALTY_ALERT_CRONS.includes(event.cron)) {
       ctx.waitUntil(
@@ -160,8 +176,9 @@ async function handleWebhook(request, env, ctx) {
   const cardCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CARD_COMMAND_TEXT]);
   const contactCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [CONTACT_COMMAND_TEXT]);
   const helpCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [HELP_COMMAND_TEXT]);
+  const eventCommands = pickTextCommandEvents(rawBody, env.LINE_GROUP_ID, [EVENT_COMMAND_TEXT]);
   const postbacks = pickPostbackEvents(rawBody, env.LINE_GROUP_ID);
-  console.log(`webhook受信: 対象イベント ${targets.length}件, せってい ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, へるぷ ${helpCommands.length}件, postback ${postbacks.length}件`);
+  console.log(`webhook受信: 対象イベント ${targets.length}件, せってい ${autoCommands.length}件, うけつけ ${cardCommands.length}件, きゃんせる ${contactCommands.length}件, へるぷ ${helpCommands.length}件, いべんと ${eventCommands.length}件, postback ${postbacks.length}件`);
 
   // 取得と返信は応答後に続ける(即座に200を返さないとLINE側に切られる)
   for (const ev of targets) {
@@ -181,6 +198,10 @@ async function handleWebhook(request, env, ctx) {
   // フェーズ9: 合言葉の一覧を返すだけ(サイト・KV に行かない)
   for (const ev of helpCommands) {
     ctx.waitUntil(replyHelp(env, ev.replyToken));
+  }
+  // フェーズ10: テニスベアを検索し、A・B の予定と突き合わせてから返す(都の予約の取得と並行)
+  for (const ev of eventCommands) {
+    ctx.waitUntil(replyEvents(env, ev.replyToken));
   }
   for (const ev of postbacks) {
     ctx.waitUntil(handlePostback(env, ev.replyToken, ev.postback.data, ev.postback.params));
@@ -259,6 +280,31 @@ async function replyContacts(env, replyToken) {
   } catch (e) {
     console.error(`連絡先の返信に失敗 (${Date.now() - started}ms): ${e.message}`);
   }
+}
+
+// フェーズ10: 条件に合うイベントの一覧を reply する(waitUntil 内。例外は全て握ってログに出す)。
+// 都の予約の取得は返信の時間を残して 20 秒で打ち切る(取れなくてもカードは返し、1 行添える)
+async function replyEvents(env, replyToken) {
+  const started = Date.now();
+  const logouts = [];
+  let reply;
+  try {
+    reply = await buildEventReply(env, {
+      fetchResults: () => fetchAllReservations(env, { budgetMs: EVENT_REPLY_SITE_BUDGET_MS, deferLogout: (fn) => logouts.push(fn) }),
+      fetchTb: () => fetchAllTennisbear(env),
+    });
+  } catch (e) {
+    console.error(`[events] 一覧の作成に失敗: ${e.message}`);
+    reply = { text: MSG_EVENT_FAILED };
+  }
+  try {
+    if (reply.messages) await replyFlexOrText(env, replyToken, reply.messages, reply.text);
+    else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
+    console.log(`[events] 返信しました (${Date.now() - started}ms)`);
+  } catch (e) {
+    console.error(`[events] 返信に失敗 (${Date.now() - started}ms): ${e.message}`);
+  }
+  await Promise.allSettled(logouts.map((fn) => fn()));
 }
 
 // フェーズ9: 使い方(合言葉の一覧)を reply する(waitUntil 内。例外は全て握ってログに出す)

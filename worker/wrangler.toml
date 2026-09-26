@@ -1,4 +1,4 @@
-# Cloudflare Workers の設定(フェーズ1.5 予約確認ボット + 1.6 キャンセル + フェーズ3 の状態置き場 + フェーズ4 予告アラート + フェーズ5 テニスベア合流)
+# Cloudflare Workers の設定(フェーズ1.5 予約確認ボット + 1.6 キャンセル + フェーズ3 の状態置き場 + フェーズ4 予告アラート + フェーズ5 テニスベア合流 + フェーズ10 新着イベント通知)
 #
 # ここに Secrets(トークン・パスワード・利用者番号)は絶対に書かない。
 # Secrets は `npx wrangler secret put <NAME>` で登録する(一覧は .dev.vars.example / README 参照)。
@@ -17,7 +17,8 @@ workers_dev = true
 enabled = true
 
 # フェーズ2 予約支援の玄関で使う KV(自宅 PC の現在の URL を TTL 付きで保存)。
-# フェーズ3 では 除外日・除外枠(auto_exclusions)もここに置く(src/auto.js)。Pi の生存は KV に書かず、Pi の /auto/status を直接聞く
+# フェーズ3 では 除外日・除外枠(auto_exclusions)もここに置く(src/auto.js)。
+# フェーズ10 では 通知済みイベントの控え(tb_event_notify)もここに置く(src/event-notify.js。書き込みは週 2 回)。Pi の生存は KV に書かず、Pi の /auto/status を直接聞く
 # (KV の書き込みは無料枠 1 日 1,000 回。URL 登録の 360 回/日・監視の 24 回/日と合わせて超えないようにする。
 #  上限に当たると日本時間の翌朝 9 時=UTC 0 時のリセットまで書けない)。
 # 初回: `npx wrangler kv namespace create BOOKING_KV` を実行し、表示された id を下に書く
@@ -36,5 +37,6 @@ CANCEL_ENABLED = "1"
 #   0 0 1 * *   毎月 1 日 9:00 JST = 手動メンテ(ブラウザのイメージ再ビルド)のお知らせ。src/monitor.js
 #   0 0 * * *   毎日 9:00 JST  = フェーズ4 ペナルティ予告アラート(今日 23:59 までにキャンセルすれば無料の予約)。src/penalty-alert.js
 #   35 14 * * * 毎日 23:35 JST = 同上の最終確認(自動予約が +4 日の枠を取らなくなる時刻 = 対象がこれ以上増えない時刻)
+#   0 11 * * 1,4 月・木 20:00 JST = フェーズ10 テニスベアの新着イベント通知(近くの 6 コート・土日祝・初中級)。src/event-notify.js
 [triggers]
-crons = ["0 * * * *", "0 0 1 * *", "0 0 * * *", "35 14 * * *"]
+crons = ["0 * * * *", "0 0 1 * *", "0 0 * * *", "35 14 * * *", "0 11 * * 1,4"]
