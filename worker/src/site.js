@@ -38,7 +38,8 @@ const USER_AGENT =
 
 // 新セッションからのやり直し回数(初回込み)。LINE reply の1分制限があるので少なめ
 const MAX_ATTEMPTS = 3;
-// 1リクエストの上限
+// 1リクエストの上限(既定。LINE の返信に間に合わせる用)。Cron のように急がない呼び出しは requestTimeoutMs で延ばせる
+// (2026-09-26 23:35 に予約サイトが重く、1 通信が 15 秒を 3 回連続で超えて B が「確認できませんでした」になった)
 const REQUEST_TIMEOUT_MS = 15000;
 
 // 認証そのものの失敗(パスワード誤り・カード期限切れ・reCAPTCHA有効化など)。
@@ -52,7 +53,7 @@ export class AuthError extends Error {
 
 // Cookie(JSESSIONID)を持ち回る簡易セッション。応答は Shift_JIS をデコードした文字列。
 // log には「メソッド パス ステータス 所要時間」だけを出す(Cookie や送信内容は出さない)
-function createSession(signal, log) {
+function createSession(signal, log, requestTimeoutMs = REQUEST_TIMEOUT_MS) {
   const cookies = new Map();
   async function request(pathname, form, useSignal = signal) {
     const started = Date.now();
@@ -61,7 +62,7 @@ function createSession(signal, log) {
     if (cookies.size > 0) {
       headers.cookie = [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
     }
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(requestTimeoutMs);
     const res = await fetch(BASE_URL + pathname, {
       method: form ? 'POST' : 'GET',
       headers,
@@ -246,16 +247,16 @@ async function openReservationList(request, log) {
   }
 }
 
-function sessionFor(credentials, signal, log) {
-  const request = createSession(signal, log);
+function sessionFor(credentials, signal, log, requestTimeoutMs) {
+  const request = createSession(signal, log, requestTimeoutMs);
   request.credentials = credentials;
   return request;
 }
 
 // 1回分の試行: 新セッションでログイン → 一覧取得 → ログアウト。
 // deferLogout が渡された場合、ログアウトは待たずに関数として渡す(返信を先に送るため)
-async function attempt(credentials, { signal, log, deferLogout }) {
-  const { list, logout } = await openReservationList(sessionFor(credentials, signal, log), log);
+async function attempt(credentials, { signal, log, deferLogout, requestTimeoutMs }) {
+  const { list, logout } = await openReservationList(sessionFor(credentials, signal, log, requestTimeoutMs), log);
   try {
     return parseReservations(list);
   } finally {
@@ -290,13 +291,14 @@ async function withRetry(fn, { signal, log, retryUntil, what }) {
 //   log(msg)    : 進行状況の出力用(利用者番号などは渡さない)
 //   retryUntil  : この時刻(ms)を過ぎていたら再試行しない(返信期限に間に合わせるため)
 //   deferLogout : 渡すと、ログアウト処理を待たずに関数として受け取れる(返信を先に送るため)
-export async function fetchReservations(credentials, { signal, log = () => {}, retryUntil = Infinity, deferLogout } = {}) {
+//   requestTimeoutMs : 1 通信の上限(省略時 15 秒)。Cron は長めに渡す
+export async function fetchReservations(credentials, { signal, log = () => {}, retryUntil = Infinity, deferLogout, requestTimeoutMs } = {}) {
   if (!credentials?.userId || !credentials?.password) {
     throw new AuthError('利用者番号またはパスワードが未設定です');
   }
   return withRetry(
     async (n, started) => {
-      const result = await attempt(credentials, { signal, log, deferLogout });
+      const result = await attempt(credentials, { signal, log, deferLogout, requestTimeoutMs });
       log(`取得成功 (${n}回目, ${Date.now() - started}ms, ${result.length}件)`);
       return result;
     },
