@@ -14,6 +14,13 @@
 //                             Pi が予約直前に呼ぶ(2026-09-24)。その人のテニスベアの今後の予定(tennisbear.js)を、公園コードを付けて返す。
 //                             隣の時間帯に別の場所の予定があれば Pi は自動予約を見送る。TB_EMAIL_*/TB_PASS_* が無い人は configured:false・events:[]。
 //                             取得に失敗したら 502(Pi は直近の結果があればそれで判定し、無ければ見送る)。イベント名は返さない・ログにも出さない
+//     GET  /auto/plans        → { plans: [{ person, label, source:'site'|'tennisbear', date, start, end, park, facility }], failed: ['ゆうたそ(都の予約)', …] }
+//                             Actions が空き通知を送る直前に呼ぶ(2026-09-27)。A・B 両方の都の予約(index.js の fetchAllReservations)と
+//                             テニスベアの予定(fetchAllTennisbear)を 1 本の配列にして返す。Actions は時間が重なる枠を通知せず、
+//                             接する枠は同じ公園だけ通知する(lib/auto-rules.js の filterPlaceConflicts)。取れなかった人の分は failed に名前を入れ、
+//                             取れた分だけ返す(Actions はその分だけ判定する = 安全側は「通知する」)。取得の関数は index.js が handleAuto の
+//                             オプション(fetchResults / fetchTb)で渡す(auto.js → index.js の循環 import を避ける)。配線が無ければ plans:null。
+//                             イベント名は返さない・ログにも出さない(/auto/tennisbear と同じ)
 //
 //   LINE:
 //     「せってい」→ 設定メニューのカード(自動予約・空き通知カードの ON/OFF ボタン、除外日・除外枠の一覧と「解除」、
@@ -259,8 +266,58 @@ export async function fetchTennisbearPlans(env, person, { fetchEvents = fetchTen
   return { person: p, configured: true, events: events.map(tennisbearPlanOf) };
 }
 
+// ---- A・B の予定を 1 本にする(Actions の空き通知の絞り込み用。2026-09-27) ----
+// results: index.js の fetchAllReservations の戻り値 [{ slot, label, reservations } | { slot, label, error }]
+// tb:      index.js の fetchAllTennisbear の戻り値 [{ slot, events } | { slot, error }]
+// 戻り値 { plans: [{ person, label, source, date, start, end, park, facility }], failed: ['ゆうたそ(都の予約)', …] }
+//   都の予約は公園コードを courts.js の台帳で引く(監視対象外の公園は park:null = 別の場所)。テニスベアは tennisbearPlanOf と同じ
+export function buildPlans(results = [], tb = []) {
+  const plans = [];
+  const failed = [];
+  const labelOf = (slot) => (results || []).find((p) => p.slot === slot)?.label || slot;
+  for (const p of results || []) {
+    if (p.error) {
+      failed.push(`${p.label || p.slot}(都の予約)`);
+      continue;
+    }
+    for (const r of p.reservations || []) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(r?.date || '') || !/^\d{2}:\d{2}$/.test(r?.start || '')) continue;
+      const court = courtByFacility(r.facility);
+      plans.push({ person: p.slot, label: p.label || p.slot, source: 'site', date: r.date, start: r.start, end: r.end || '', park: court ? court.parkCode : null, facility: r.facility || '' });
+    }
+  }
+  for (const t of tb || []) {
+    if (t.error) {
+      failed.push(`${labelOf(t.slot)}(テニスベアの予定)`);
+      continue;
+    }
+    for (const ev of t.events || []) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ev?.date || '') || !/^\d{2}:\d{2}$/.test(ev?.start || '')) continue;
+      plans.push({ person: t.slot, label: labelOf(t.slot), ...tennisbearPlanOf(ev) });
+    }
+  }
+  plans.sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`));
+  return { plans, failed };
+}
+// fetchResults / fetchTb(index.js が渡す。テストでは差し替え)を並行して呼び、buildPlans にかける。
+// どちらかが例外で落ちても、取れた方だけで返す(failed にその旨)。両方とも配線が無ければ plans:null
+export async function fetchAllPlans({ fetchResults, fetchTb } = {}) {
+  if (typeof fetchResults !== 'function' && typeof fetchTb !== 'function') return { plans: null, failed: ['取得の配線が無い'] };
+  const started = Date.now();
+  const [results, tb] = await Promise.all([
+    fetchResults ? fetchResults().catch((e) => (console.error(`[auto] 都の予約の取得に失敗: ${e.message}`), null)) : Promise.resolve([]),
+    fetchTb ? fetchTb().catch((e) => (console.error(`[auto] テニスベアの予定の取得に失敗: ${e.message}`), null)) : Promise.resolve([]),
+  ]);
+  const out = buildPlans(results || [], tb || []);
+  if (results === null) out.failed.unshift('都の予約');
+  if (tb === null) out.failed.push('テニスベアの予定');
+  console.log(`[auto] /auto/plans: 予定 ${out.plans.length} 件${out.failed.length ? ` / 取れなかった分: ${out.failed.join('、')}` : ''} (${Date.now() - started}ms)`);
+  return out;
+}
+
 // このモジュールが扱うパス(/auto/*)なら Response、それ以外は null
-export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEvents } = {}) {
+//   fetchEvents: /auto/tennisbear のテニスベア取得(テストで差し替え)。fetchResults / fetchTb: /auto/plans の A・B の予定の取得(index.js が渡す)
+export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEvents, fetchResults, fetchTb } = {}) {
   const url = new URL(request.url);
   const p = url.pathname;
   if (!p.startsWith('/auto/')) return null;
@@ -296,6 +353,9 @@ export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEve
   if (p === '/auto/exclusions' && request.method === 'POST') {
     const ex = await addExcludedSlots(env, Array.isArray(json.addSlots) ? json.addSlots : [], now);
     return Response.json(ex);
+  }
+  if (p === '/auto/plans' && request.method === 'GET') {
+    return Response.json(await fetchAllPlans({ fetchResults, fetchTb }));
   }
   if (p === '/auto/tennisbear' && request.method === 'POST') {
     if (json.person !== 'A' && json.person !== 'B') return new Response('bad request', { status: 400 });

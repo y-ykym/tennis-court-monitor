@@ -223,3 +223,43 @@ test('隣接の判定(2026-09-24): 時間が重なる予定は場所を問わず
   // 空き枠の形(facility + time)の候補でも判定できる
   assert.equal(findPlaceConflict(slot('猿江恩賜公園', '2026-09-27', '13:00-15:00'), [{ date: '2026-09-27', start: '15:00', end: '17:00', facility: '亀戸中央公園' }])?.relation, 'after');
 });
+
+test('空き通知の絞り込み(2026-09-27): A・B の予定と時間が重なる枠は通知しない。接する枠は別の公園なら通知せず、同じ公園なら通知。予定が取れなければ全部通知', () => {
+  const { filterPlaceConflicts } = require('../lib/auto-rules.js');
+  const slots = [
+    slot('猿江恩賜公園', '2026-09-27', '13:00-15:00'), // A の都の予約(猿江 13-15)と重なる → 通知しない
+    slot('亀戸中央公園', '2026-09-27', '15:00-17:00'), // A の予約(猿江 13-15)の直後で別の公園 → 通知しない
+    slot('猿江恩賜公園', '2026-09-27', '15:00-17:00'), // 同じ公園に接しているだけ → 通知する
+    slot('大島小松川公園', '2026-09-27', '09:00-11:00'), // 離れている → 通知する
+    slot('亀戸中央公園', '2026-09-28', '19:00-21:00'), // B のテニスベアの予定(別の場所 18-20)と重なる → 通知しない
+    slot('大島小松川公園', '2026-09-29', '11:00-13:00'), // 予定なしの日 → 通知する
+  ];
+  const plans = [
+    { person: 'A', label: 'ゆうたそ', source: 'site', date: '2026-09-27', start: '13:00', end: '15:00', park: '1040', facility: '猿江恩賜公園' },
+    { person: 'B', label: 'まきたそ', source: 'tennisbear', date: '2026-09-28', start: '18:00', end: '20:00', park: null, facility: '有明テニスの森' },
+  ];
+  const r = filterPlaceConflicts(slots, plans);
+  assert.deepEqual(r.notify.map((s) => `${s.date} ${s.time} ${s.facility}`), [
+    '2026-09-27 15:00-17:00 猿江恩賜公園',
+    '2026-09-27 09:00-11:00 大島小松川公園',
+    '2026-09-29 11:00-13:00 大島小松川公園',
+  ]);
+  assert.deepEqual(r.suppressed.map((s) => [s.slot.date, s.slot.facility, s.kind]), [
+    ['2026-09-27', '猿江恩賜公園', 'conflict'],
+    ['2026-09-27', '亀戸中央公園', 'conflict'],
+    ['2026-09-28', '亀戸中央公園', 'conflict'],
+  ]);
+  // 理由には誰の予定かが入る(呼び名付き)
+  assert.match(r.suppressed[0].reason, /^時間が重なるゆうたその予約がある\(13:00-15:00 猿江恩賜公園\)/);
+  assert.match(r.suppressed[1].reason, /^直前に別の場所のゆうたその予約がある/);
+  assert.match(r.suppressed[2].reason, /^時間が重なるまきたそのテニスベアの予定がある\(18:00-20:00 有明テニスの森\)/);
+  // 予定が取れなかった(null / undefined)→ 何も落とさない。予定が 0 件でも同じ
+  assert.equal(filterPlaceConflicts(slots, null).notify.length, 6);
+  assert.equal(filterPlaceConflicts(slots, undefined).suppressed.length, 0);
+  assert.equal(filterPlaceConflicts(slots, []).notify.length, 6);
+  // 呼び名が無い予定(Pi 側の形)では従来どおりの文言
+  assert.match(findPlaceConflictReason(slots[0], [{ date: '2026-09-27', start: '13:00', end: '15:00', facility: '猿江恩賜公園' }]), /^時間が重なる予約がある/);
+  function findPlaceConflictReason(s, p) {
+    return require('../lib/auto-rules.js').findPlaceConflict(s, p).reason;
+  }
+});
