@@ -87,6 +87,11 @@ const CRON_RETRY_UNTIL_MS = 60000;
 const CRON_REQUEST_TIMEOUT_MS = 40000;
 // テニスベアの取得全体の上限(都より短く。遅れても都の予約は返す)
 const TB_BUDGET_MS = 12000;
+// GET /auto/plans(Actions が空き通知を送る直前に A・B の予定を取る。2026-09-27)の都の予約の待ち。LINE の返信期限に縛られないが、
+// Actions 側(lib/auto-client.js の PLANS_TIMEOUT_MS = 60 秒)が待ちきれる範囲に収める(1 通信 30 秒・全体 50 秒・再試行は 20 秒まで)
+const PLANS_FETCH_BUDGET_MS = 50000;
+const PLANS_RETRY_UNTIL_MS = 20000;
+const PLANS_REQUEST_TIMEOUT_MS = 30000;
 // フェーズ10 「いべんと」の返信で都の予約を待つ上限(検索・料金の取得と並行。30 秒枠に返信の時間を残す)
 const EVENT_REPLY_SITE_BUDGET_MS = 20000;
 // キャンセルボタン(kind='c')と「はい」(kind='y')の有効期限
@@ -113,7 +118,11 @@ export default {
     if (card) return card;
 
     // フェーズ3 自動予約の API(/auto/*。Pi と Actions から署名付きで)。src/auto.js
-    const auto = await handleAuto(request, env, ctx);
+    // /auto/plans(Actions が空き通知を絞るのに使う A・B の予定。2026-09-27)の取得関数はここで渡す(auto.js → index.js の循環 import を避ける)
+    const auto = await handleAuto(request, env, ctx, {
+      fetchResults: () => fetchAllReservations(env, { budgetMs: PLANS_FETCH_BUDGET_MS, retryUntilMs: PLANS_RETRY_UNTIL_MS, requestTimeoutMs: PLANS_REQUEST_TIMEOUT_MS }),
+      fetchTb: () => fetchAllTennisbear(env),
+    });
     if (auto) return auto;
 
     // フェーズ2 予約支援の玄関(/book の転送、自宅 PC の URL 登録、/warmup)。src/booking.js

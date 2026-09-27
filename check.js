@@ -13,6 +13,9 @@
 //   「自動予約の対象(利用日 >= 今日+4 日、除外日以外)」は通知しない(Pi が予約し、結果カードで知らせる)。
 //   Pi が止まっていれば従来どおり全部通知する(受け皿)。除外枠(人が手放した枠)は通知しない。
 //   Pi の生死と除外一覧は Worker の GET /auto/state から取る(lib/auto-client.js)。取れなければ全部通知(安全側)
+// 予定との突き合わせ(2026-09-27): 通知する枠が残ったら、Worker の GET /auto/plans から A・B の予定(都の予約 + テニスベア)を取り、
+//   時間が重なる枠は通知しない。時間が接する枠は同じ公園のものだけ通知する(自動予約と同じルール。lib/auto-rules.js の filterPlaceConflicts)。
+//   予定が取れなければ従来どおり全部通知(安全側)
 // ============================================================
 const fs = require('fs');
 const { scrapeAvailability } = require('./lib/scrape');
@@ -20,8 +23,8 @@ const { filterTargetSlots } = require('./lib/filter');
 const { loadState, diffNewSlots, saveState } = require('./lib/state');
 const { sendLineMessage, formatMessage, warmupBookingServer } = require('./lib/notify');
 const { inMaintenanceWindow } = require('./lib/maintenance');
-const { splitForNotification } = require('./lib/auto-rules');
-const { fetchAutoState } = require('./lib/auto-client');
+const { splitForNotification, filterPlaceConflicts } = require('./lib/auto-rules');
+const { fetchAutoState, fetchPlans } = require('./lib/auto-client');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
@@ -65,6 +68,17 @@ const DRY_RUN = process.argv.includes('--dry-run');
     toNotify = notify;
   }
 
+  // 3.6 予定との突き合わせ: A・B の予定と時間が重なる枠は通知しない。接する枠は同じ公園のものだけ通知する(取れなければ全部通知)
+  if (toNotify.length > 0 && process.env.BOOKING_BASE_URL && process.env.BOOKING_SIGNING_SECRET) {
+    const res = await fetchPlans(process.env.BOOKING_BASE_URL, process.env.BOOKING_SIGNING_SECRET);
+    if (res) {
+      const { notify, suppressed } = filterPlaceConflicts(toNotify, res.plans);
+      console.log(`A・B の予定 ${res.plans.length} 件と照合${res.failed?.length ? `(取れなかった分: ${res.failed.join('、')}。その分の重なりは判定できない)` : ''}`);
+      for (const s of suppressed) console.log(`  通知しない: ${s.slot.date} ${s.slot.time} ${s.slot.facility} (${s.reason})`);
+      toNotify = notify;
+    }
+  }
+
   // 4. 新しい空きがあればLINEへ通知(Flex Message。dry-run時はテキスト表現で表示)
   if (toNotify.length > 0) {
     if (DRY_RUN) {
@@ -76,7 +90,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
       console.log(`LINE通知を送信しました (${toNotify.length}件)`);
     }
   } else {
-    console.log(newSlots.length > 0 ? '新しい空きはすべて自動予約の対象(または除外枠)のため通知しません。' : '新しい空きはありません。');
+    console.log(newSlots.length > 0 ? '新しい空きはすべて自動予約の対象(または除外枠・予定と重なる枠)のため通知しません。' : '新しい空きはありません。');
   }
 
   // 5. 今回の結果を保存(次回の比較用)

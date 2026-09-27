@@ -369,3 +369,42 @@ test('POST /auto/tennisbear(2026-09-24): その人のテニスベアの予定を
   assert.equal((await handleAuto(signed('POST', '/auto/tennisbear', { person: 'C' }, NOW), env, ctx, { now: NOW, fetchEvents })).status, 400);
   assert.equal((await handleAuto(new Request('https://w.example/auto/tennisbear', { method: 'POST', body: '{"person":"A"}' }), env, ctx, { now: NOW, fetchEvents })).status, 401);
 });
+
+test('GET /auto/plans(2026-09-27): A・B の都の予約とテニスベアの予定を 1 本にして返す(公園コード・呼び名付き)。取れなかった人は failed に名前。配線が無ければ plans:null。イベント名は返さない', async () => {
+  const { buildPlans } = await import('../src/auto.js');
+  const env = { ...envOf(), LABEL_B: 'まき', SITE_USER_B: 'u2', SITE_PASS_B: 'p2' };
+  const fetchResults = async () => [
+    { slot: 'A', label: 'ゆう', reservations: [
+      { id: '1', date: '2026-09-27', start: '13:00', end: '15:00', facility: '猿江恩賜公園' },
+      { id: '2', date: '2026-10-03', start: '09:00', end: '11:00', facility: '有明テニスの森公園' },
+      { id: '3', date: '', start: '', end: '', facility: '壊れた行' },
+    ] },
+    { slot: 'B', label: 'まき', error: new Error('timeout') },
+  ];
+  const fetchTb = async () => [
+    { slot: 'A', events: [{ source: 'tennisbear', id: '9', title: '秘密のイベント名', date: '2026-09-28', start: '18:00', end: '', facility: '亀戸中央公園', placeCode: '0100010009' }] },
+    { slot: 'B', events: [{ source: 'tennisbear', id: '8', title: 'x', date: '2026-09-26', start: '10:00', end: '12:00', facility: '有明テニスの森 A', placeCode: '9999999999' }] },
+  ];
+  const r = await handleAuto(signed('GET', '/auto/plans', undefined, NOW), env, ctx, { now: NOW, fetchResults, fetchTb });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.deepEqual(body.plans, [
+    { person: 'B', label: 'まき', source: 'tennisbear', date: '2026-09-26', start: '10:00', end: '12:00', park: null, facility: '有明テニスの森 A' },
+    { person: 'A', label: 'ゆう', source: 'site', date: '2026-09-27', start: '13:00', end: '15:00', park: '1040', facility: '猿江恩賜公園' },
+    { person: 'A', label: 'ゆう', source: 'tennisbear', date: '2026-09-28', start: '18:00', end: '', park: '1050', facility: '亀戸中央公園' },
+    { person: 'A', label: 'ゆう', source: 'site', date: '2026-10-03', start: '09:00', end: '11:00', park: null, facility: '有明テニスの森公園' },
+  ]);
+  assert.deepEqual(body.failed, ['まき(都の予約)']);
+  assert.ok(!JSON.stringify(body).includes('秘密のイベント名'), 'イベント名は返さない');
+  // 都の取得そのものが例外 → テニスベアの分だけ返し、failed に「都の予約」
+  const r2 = await (await handleAuto(signed('GET', '/auto/plans', undefined, NOW), env, ctx, { now: NOW, fetchResults: async () => { throw new Error('down'); }, fetchTb })).json();
+  assert.equal(r2.plans.length, 2);
+  assert.deepEqual(r2.failed, ['都の予約']);
+  // 配線が無い(index.js 以外から呼んだ)→ plans:null(Actions は従来どおり全部通知する)
+  const r3 = await (await handleAuto(signed('GET', '/auto/plans', undefined, NOW), env, ctx, { now: NOW })).json();
+  assert.equal(r3.plans, null);
+  // 認証なしは 401
+  assert.equal((await handleAuto(new Request('https://w.example/auto/plans'), env, ctx)).status, 401);
+  // buildPlans 単体: 空でも壊れない
+  assert.deepEqual(buildPlans([], []), { plans: [], failed: [] });
+});
