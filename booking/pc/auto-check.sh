@@ -39,6 +39,7 @@ mode, enabled, notify = s.get('mode'), s.get('enabled'), s.get('notifyEnabled')
 started = s.get('startedAt') or 0
 lc = s.get('lastCycle') or {}
 last_at, last_ms, last_err = lc.get('at') or 0, lc.get('ms') or 0, lc.get('error')
+fails = s.get('consecutiveFailures') or 0
 ex = s.get('exclusions') or {}
 q = s.get('queue') or {}
 age_min = int((now - last_at) / 60000) if last_at else None
@@ -48,12 +49,14 @@ verdict = '✔ 動いている'
 if mode != 'on': verdict = f'✖ 止まっている(mode={mode}。.env の AUTO_BOOKING を確認)'
 elif not enabled: verdict = '⏸ LINE の「せってい」で OFF になっている(Pi は動いているが予約しない)'
 elif not last_at: verdict = '… 起動直後(まだ初回の照会が終わっていない)' if up_min < 3 else f'✖ 起動から {up_min} 分たつのに照会が 1 度も終わっていない'
+elif fails >= 3: verdict = f'⚠ 空き照会が連続 {fails} 回失敗中(照会の間隔を最大 15 分に広げている。サイトのメンテナンスか長い障害。1 回成功すれば 1 分に戻る)'
 elif age_min >= 5: verdict = f'✖ 最後の照会が {age_min} 分前(5 分以上止まっている。ログを確認)'
 print(verdict)
 print(f"  mode={mode}  LINEスイッチ={'ON' if enabled else 'OFF'}  空き通知カード={'ON' if notify else 'OFF'}  起動 {jst(started)}({up_min} 分前)")
 print(f"  最後の照会: {jst(last_at)}({age_min} 分前、所要 {int(last_ms/1000)} 秒)" + (f'  エラー: {last_err}' if last_err else ''))
 print(f"  いま空いている監視対象: {len(s.get('targets') or [])} 件  除外一覧: 除外日 {ex.get('dates',0)}・除外枠 {ex.get('slots',0)}(更新 {jst(ex.get('at') or 0)})  予約の行列: 実行中={q.get('running') or 'なし'} 待ち={len(q.get('waiting') or [])}")
-if last_err: print('  ※ 直近の照会でエラー。回線か予約サイト側の一時的な不調が多い。下の fetch failed 件数を見る')
+if last_err: print(f'  ※ 直近の照会でエラー(連続 {fails} 回)。回線か予約サイト側の一時的な不調が多い。下の fetch failed 件数を見る')
+if fails >= 3: print('  ※ 想定外の応答の実物は docker compose exec booking cat /var/lib/booking/last-scrape-failure.html で見られる(最新 1 件)')
 
 C = '\033[1;36m'; R = '\033[0m'
 print(f"\n{C}-- 自動予約した枠(own。取消は LINE の空き通知の取消ボタンか予約サイトで){R}")

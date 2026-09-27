@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS } from '../src/auto-runner.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -59,7 +59,6 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
     signingSecret: SECRET,
     log: (m) => logs.push(m),
     now: () => t,
-    maintenance: () => false,
   });
   return {
     runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards, workerRef,
@@ -284,7 +283,7 @@ test('手放しの検出: 自分が自動予約した枠が一覧から消えて
   assert.equal(h.state.own().filter((o) => o.key === '1040|2026-09-25|19:00').length, 0);
 });
 
-test('照会の失敗・メンテナンス時間帯はスキップし、heartbeat だけ送る。30 秒未満の間隔は 30 秒に切り上げ', async () => {
+test('照会の失敗はスキップし、heartbeat だけ送る。30 秒未満の間隔は 30 秒に切り上げ', async () => {
   const h = harness();
   h.runner.stop();
   const logs = [];
@@ -299,14 +298,48 @@ test('照会の失敗・メンテナンス時間帯はスキップし、heartbea
     credentialsFor: () => null,
     log: (m) => logs.push(m),
     pollMs: 5000,
-    maintenance: () => false,
   });
   assert.equal(runner.intervalMs, 30000);
-  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed' });
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 1 });
   assert.equal(heartbeats.length, 1);
   assert.ok(heartbeats[0].lastCycle.error.includes('502'));
-  const m = createAutoRunner({ mode: 'on', scrape: async () => [], queue: createBookingQueue(), state: createAutoState({ file: tmpFile() }), worker: { heartbeat: async () => ({ dates: [], slots: [] }), addExcludedSlots: async () => {} }, book: async () => ({}), credentialsFor: () => null, maintenance: () => true });
-  assert.deepEqual(await m.tick(), { skipped: 'maintenance' });
+});
+
+test('空き照会の連続失敗で間隔を広げ、成功で戻す', async () => {
+  // 3 回目から 3 分 → 5 分 → 10 分 → 15 分(上限)。閾値未満は通常の間隔
+  assert.equal(backoffIntervalMs(0, 60000), 60000);
+  assert.equal(backoffIntervalMs(2, 60000), 60000);
+  assert.equal(backoffIntervalMs(3, 60000), 3 * 60000);
+  assert.equal(backoffIntervalMs(4, 60000), 5 * 60000);
+  assert.equal(backoffIntervalMs(5, 60000), 10 * 60000);
+  assert.equal(backoffIntervalMs(6, 60000), 15 * 60000);
+  assert.equal(backoffIntervalMs(60, 60000), 15 * 60000);
+  // 通常の間隔の方が長ければそちら(深夜 3 分 vs 3 分)
+  assert.equal(backoffIntervalMs(3, 5 * 60000), 5 * 60000);
+
+  let fail = true;
+  const logs = [];
+  const runner = createAutoRunner({
+    mode: 'on',
+    scrape: async () => { if (fail) throw new Error('fetch failed'); return []; },
+    queue: createBookingQueue(),
+    state: createAutoState({ file: tmpFile() }),
+    worker: { heartbeat: async () => ({ dates: [], slots: [] }), addExcludedSlots: async () => {} },
+    book: async () => ({}),
+    credentialsFor: () => null,
+    log: (m) => logs.push(m),
+  });
+  assert.equal(runner.consecutiveFailures(), 0);
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 1 });
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 2 });
+  assert.ok(!logs.at(-1).includes('空けます'), '2 回目までは間隔を広げない');
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 3 });
+  assert.ok(logs.at(-1).includes('次の照会まで 3 分空けます'), logs.at(-1));
+  assert.equal(runner.consecutiveFailures(), 3);
+  fail = false;
+  await runner.tick();
+  assert.equal(runner.consecutiveFailures(), 0);
+  assert.ok(logs.some((m) => m.includes('空き照会が回復しました(連続失敗 3 回のあと)')), logs.join('\n'));
 });
 
 const jst = (date, hhmm) => Date.parse(`${date}T${hhmm}:00+09:00`);
@@ -380,7 +413,7 @@ test('日付境界: 予約直前の再判定で除外枠になっていたら予
     book: async () => { throw new Error('予約してはいけない'); },
     credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
     notifyVacancy: async (s) => vac.push(...s),
-    log: (m) => logs.push(m), now: () => T0, maintenance: () => false,
+    log: (m) => logs.push(m), now: () => T0,
   });
   await runner.tick();
   current = [slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')];
@@ -441,7 +474,7 @@ test('実枠テスト用: forgetFile に書いた枠キーは既知から外れ�
     worker: { heartbeat: async () => ({ dates: [], slots: [] }), addExcludedSlots: async () => {} },
     book: async (c, { beforeApply }) => { bookings.push(c.key); await beforeApply({ reservations: [] }); return { status: 'success', reservationNo: 'R1', facility: c.facility }; },
     credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
-    log: (m) => logs.push(m), now: () => t, maintenance: () => false, forgetFile: forget,
+    log: (m) => logs.push(m), now: () => t, forgetFile: forget,
   });
   await runner.tick(); // 初回: 2 件を既知に
   assert.deepEqual(runner.lastTargets().length, 2);
@@ -472,7 +505,7 @@ test('除外日: 見つけた時点で除外日なら見送り(通知は Actions
     book: async () => { throw new Error('予約してはいけない'); },
     credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
     notifyVacancy: async (s) => vac.push(...s),
-    log: (m) => logs.push(m), now: () => T0, maintenance: () => false,
+    log: (m) => logs.push(m), now: () => T0,
   });
   await runner.tick();
   current = [slot('大島小松川公園', '2026-09-27', '09:00-11:00')];
@@ -572,7 +605,7 @@ test('LINE の「じどうおふ」: heartbeat の応答 enabled=false で予約
     worker: { heartbeat: async (p) => { heartbeats.push(p); return { dates: [], slots: [], enabled }; }, addExcludedSlots: async () => {} },
     book: async (c, { beforeApply }) => { bookings.push(c.key); await beforeApply({ reservations: [] }); return { status: 'success', reservationNo: 'R', facility: c.facility }; },
     credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
-    log: (m) => logs.push(m), now: () => t, maintenance: () => false,
+    log: (m) => logs.push(m), now: () => t,
   });
   await runner.tick();
   assert.deepEqual([runner.effectiveMode(), heartbeats.at(-1).mode, heartbeats.at(-1).active], ['on', 'on', true]);
@@ -617,7 +650,7 @@ test('LINE の「つうちおふ」: 予約直前に対象外になった枠の�
     book: async () => { throw new Error('予約してはいけない'); },
     credentialsFor: () => ({ userId: 'u', password: 'p', label: 'x' }),
     notifyVacancy: async (s) => vac.push(...s),
-    log: (m) => logs.push(m), now: () => t, maintenance: () => false,
+    log: (m) => logs.push(m), now: () => t,
   });
   await runner.tick();
   t += 60_000; // 23:34

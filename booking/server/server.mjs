@@ -396,6 +396,8 @@ const server = http.createServer((req, res) => {
         now: Date.now(),
         intervalMs: autoRunner?.intervalMs ?? null,
         lastCycle: autoRunner?.lastCycle() ?? null,
+        // 空き照会の連続失敗回数(3 回以上で照会の間隔を広げている。サイトのメンテナンス中はここが増え続ける)
+        consecutiveFailures: autoRunner?.consecutiveFailures() ?? null,
         // 直近の照会で見えていた監視対象の空き(実枠テストで枠を選ぶときに見る)
         targets: autoRunner ? autoRunner.lastTargets().map((s) => ({ key: slotKey(s), ...s })) : null,
         exclusions: autoRunner?.exclusions() ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, at: autoRunner.exclusions().at } : null,
