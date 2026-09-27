@@ -22,19 +22,12 @@ const { scrapeAvailability } = require('./lib/scrape');
 const { filterTargetSlots } = require('./lib/filter');
 const { loadState, diffNewSlots, saveState } = require('./lib/state');
 const { sendLineMessage, formatMessage, warmupBookingServer } = require('./lib/notify');
-const { inMaintenanceWindow } = require('./lib/maintenance');
 const { splitForNotification, filterPlaceConflicts } = require('./lib/auto-rules');
 const { fetchAutoState, fetchPlans } = require('./lib/auto-client');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
 (async () => {
-  // サイトの定期メンテナンス時間帯は最初からスキップ(エラー扱いにしない)
-  if (inMaintenanceWindow(new Date())) {
-    console.log('サイトのメンテナンス時間帯のため、今回はスキップします。');
-    return;
-  }
-
   // 1. 空き状況を取得
   let slots;
   if (process.env.MOCK_SLOTS_FILE) {
@@ -44,7 +37,9 @@ const DRY_RUN = process.argv.includes('--dry-run');
     try {
       slots = await scrapeAvailability();
     } catch (e) {
-      // 深夜メンテナンスや一時的な障害の可能性が高いので、静かにスキップ
+      // メンテナンスや一時的な障害の可能性が高いので、静かにスキップ(次回に任せる)。
+      // 定期メンテの時間帯の決め打ちはしない(旧システムの公表値「毎月 27 日 12:00〜28 日 8:45」で
+      // 2026-09-27 に稼働中のサイトを 21 時間飛ばしたため撤去。新システムに定期メンテの公表は無い)
       console.log(`取得失敗のためスキップします: ${e.message}`);
       return;
     }

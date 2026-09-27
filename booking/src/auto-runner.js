@@ -33,6 +33,9 @@
 //   「既知」から外す = いま見えている空きを「新しく出た」扱いにして予約の流れに乗せる(ファイルは読んだら消す)。
 //   Pi 上で: docker compose exec booking sh -c 'echo "1160|2026-09-27|15:00" > /var/lib/booking/forget-keys.txt'
 //   Worker に繋がらない: 直近 EXCLUSIONS_MAX_AGE_MS 以内に取れた除外一覧があればそれで続行、無ければ予約しない(除外日を守れないため)
+//   空き照会が連続で失敗(サイトのメンテナンス・長い障害): BACKOFF_AFTER 回目から次の照会までの間隔を BACKOFF_STEPS_MS の順に広げ、
+//     1 回成功したら通常の間隔に戻す(2026-09-27。定期メンテの時間帯の決め打ち lib/maintenance.js は撤去。
+//     旧システムの公表値「毎月 27 日 12:00〜28 日 8:45」で稼働中のサイトを 21 時間飛ばしたため。新システムに定期メンテの公表は無い)
 //
 //   ログには利用者番号・パスワード・鍵・Cookie を出さない。見送りの理由は必ず出す
 // ============================================================
@@ -44,7 +47,6 @@ import { buildResultFlex } from './result-flex.js';
 const require = createRequire(import.meta.url);
 const { AUTO_BOOKING } = require('../../lib/config.js');
 const { filterTargetSlots } = require('../../lib/filter.js');
-const { inMaintenanceWindow } = require('../../lib/maintenance.js');
 const { jstTodayIso, jstEndOfDaySec, jstHHMM } = require('../../lib/date.js');
 const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, startHHMM, findPlaceConflict } = require('../../lib/auto-rules.js');
 
@@ -64,6 +66,18 @@ export const AUTH_PAUSE_MS = 6 * 60 * 60 * 1000;
 export const TB_PLANS_TTL_MS = 10 * 60 * 1000;
 // テニスベアの予定が取れなかったとき、これより新しい直近の結果があればそれで判定する(無ければ見送る)
 export const TB_PLANS_STALE_MAX_MS = 60 * 60 * 1000;
+
+// 空き照会がこの回数連続で失敗したら間隔を広げ始める(単発の fetch failed・502 では発動しない。9/26 の失敗 10 回は全て単発だった)
+export const BACKOFF_AFTER = 3;
+// 広げた間隔(連続失敗 3 回目 → 3 分、4 回目 → 5 分、5 回目 → 10 分、6 回目以降 → 15 分)。成功で即リセット
+export const BACKOFF_STEPS_MS = [3 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000, 15 * 60 * 1000];
+
+// 連続失敗の回数に応じた照会間隔。閾値未満なら通常の間隔(normalMs)
+export function backoffIntervalMs(consecutiveFailures, normalMs, { after = BACKOFF_AFTER, steps = BACKOFF_STEPS_MS } = {}) {
+  if (consecutiveFailures < after) return normalMs;
+  const step = steps[Math.min(consecutiveFailures - after, steps.length - 1)];
+  return Math.max(step, normalMs);
+}
 
 // 次の照会までの待ち時間: 「前回の開始 + 間隔」を目標にし、既に過ぎていれば MIN_GAP_MS だけ空ける
 export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_GAP_MS }) {
@@ -99,7 +113,6 @@ export function createAutoRunner({
   log = () => {},
   now = Date.now,
   pollMs = AUTO_BOOKING.POLL_INTERVAL_MS,
-  maintenance = inMaintenanceWindow,
   forgetFile = null,
 }) {
   const interval = Math.max(Number(pollMs) || AUTO_BOOKING.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
@@ -112,6 +125,7 @@ export function createAutoRunner({
   const effectiveMode = () => (mode === 'on' && !remoteEnabled ? 'paused' : mode);
   const bookingEnabled = () => mode === 'on' && remoteEnabled;
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
+  let consecutiveFailures = 0; // 空き照会の連続失敗回数(成功で 0 に戻る。間隔を広げる判断に使う)
   let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
   // 利用日ごとの残り枚数(予約一覧を見た結果から)。DAY_REMAINING_TTL_MS を過ぎたら忘れて、次はまた一覧を見て数える
   // (本人が LINE やサイトで取り消した後に「まだ 1 件ある」と思い込み続けないため)
@@ -166,21 +180,20 @@ export function createAutoRunner({
     running = true;
     const started = now();
     try {
-      const nowDate = new Date(started);
-      if (maintenance(nowDate)) {
-        await heartbeat({ note: 'maintenance' });
-        return { skipped: 'maintenance' };
-      }
       const today = jstTodayIso(started);
       let slots;
       try {
         slots = await scrape();
       } catch (e) {
-        log(`空き照会に失敗(今回はスキップ): ${e.message}`);
+        consecutiveFailures++;
+        const backoff = backoffIntervalMs(consecutiveFailures, 0);
+        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます(メンテナンスか長い障害の可能性)` : ''}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
         await heartbeat();
-        return { skipped: 'scrape_failed' };
+        return { skipped: 'scrape_failed', consecutiveFailures };
       }
+      if (consecutiveFailures >= BACKOFF_AFTER) log(`空き照会が回復しました(連続失敗 ${consecutiveFailures} 回のあと)。通常の間隔に戻します`);
+      consecutiveFailures = 0;
       const targets = filterTargetSlots(slots);
       lastTargets = targets;
       const keys = targets.map(slotKey);
@@ -448,7 +461,8 @@ export function createAutoRunner({
     const loop = async () => {
       const startedAt = now();
       await tick();
-      timer = setTimeout(loop, nextDelayMs({ startedAt, finishedAt: now(), intervalMs: pollIntervalAt(startedAt, interval) }));
+      const intervalMs = backoffIntervalMs(consecutiveFailures, pollIntervalAt(startedAt, interval));
+      timer = setTimeout(loop, nextDelayMs({ startedAt, finishedAt: now(), intervalMs }));
     };
     timer = setTimeout(loop, 3000);
     return api;
@@ -462,6 +476,7 @@ export function createAutoRunner({
     tick, start, stop, mode, active, intervalMs: interval,
     effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
     exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining, tbPlans,
+    consecutiveFailures: () => consecutiveFailures,
   };
   return api;
 }
