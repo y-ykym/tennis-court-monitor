@@ -11,6 +11,7 @@ import {
   MSG_ALERT_FETCH_FAILED,
   MORNING_CRON,
   DEADLINE_CRON,
+  KV_RUN_KEY,
 } from '../src/penalty-alert.js';
 import { attachCancelData } from '../src/index.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -210,6 +211,8 @@ test('23:35 は朝 9:00 と同じ内容(または減っているだけ)なら送
   const env2 = { ...env, BOOKING_KV: kv };
   const pushed = [];
   const push = async (_t, _to, messages) => pushed.push(messages);
+  // 本番は 1 日に朝 1 回・夜 1 回しか起動しないが、このテストは同じ日の夜を何度も呼ぶので、二重起動よけの控えは毎回消す
+  const again = async (opts) => { store.delete(KV_RUN_KEY); return runPenaltyAlert(env2, opts); };
   const two = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '1' }), res({ id: '2', start: '13:00', end: '15:00' })] }];
   const one = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '2', start: '13:00', end: '15:00' })] }];
   const three = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '1' }), res({ id: '2', start: '13:00', end: '15:00' }), res({ id: '3', start: '15:00', end: '17:00' })] }];
@@ -219,25 +222,92 @@ test('23:35 は朝 9:00 と同じ内容(または減っているだけ)なら送
   assert.equal(m.sent, 'flex');
   assert.deepEqual(JSON.parse(store.get('penalty_alert_sent')), { date: TODAY, ids: ['1', '2'] });
   // 夜: 同じ 2 件 → 送らない
-  const d1 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  const d1 = await again({ kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
   assert.deepEqual([d1.sent, d1.skipped, pushed.length], [null, 'same_as_morning', 1]);
   // 夜: 1 件取り消して減っただけ → 送らない
-  const d2 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => one, push });
+  const d2 = await again({ kind: 'deadline', now: DEADLINE, fetchResults: async () => one, push });
   assert.deepEqual([d2.sent, pushed.length], [null, 1]);
   // 夜: 日中に自動予約で 1 件増えた → 送る(全件載せる)
-  const d3 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => three, push });
+  const d3 = await again({ kind: 'deadline', now: DEADLINE, fetchResults: async () => three, push });
   assert.equal(d3.sent, 'flex');
   assert.equal(pushed.length, 2);
   assert.match(allText(pushed[1][0].contents), /15:00 - 17:00|15:00-17:00/);
   assert.deepEqual(JSON.parse(store.get('penalty_alert_sent')).ids, ['1', '2', '3']);
   // 別の日の控えは無視して送る
   store.set('penalty_alert_sent', JSON.stringify({ date: '2026-09-16', ids: ['1', '2'] }));
-  const d4 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  const d4 = await again({ kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
   assert.equal(d4.sent, 'flex');
   // 朝に送れていなければ(控えなし)夜は送る。KV が無い環境でも動く
   store.clear();
-  const d5 = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
+  const d5 = await again({ kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
   assert.equal(d5.sent, 'flex');
   const d6 = await runPenaltyAlert(env, { kind: 'deadline', now: DEADLINE, fetchResults: async () => two, push });
   assert.equal(d6.sent, 'flex');
+});
+
+const fakeKv = (store) => ({ async get(k) { return store.has(k) ? store.get(k) : null; }, async put(k, v) { store.set(k, v); }, async delete(k) { store.delete(k); } });
+const oneRow = [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '1' })] }];
+
+test('二重起動よけ 1 段目: 同じ日・同じ種類の 2 回目は予約サイトへも行かず何も送らない。朝と夜・別の日は別扱い', async () => {
+  const store = new Map();
+  const env2 = { ...env, BOOKING_KV: fakeKv(store) };
+  const pushed = [];
+  let fetched = 0;
+  const push = async (_t, _to, messages) => pushed.push(messages);
+  const fetchResults = async () => { fetched++; return oneRow; };
+
+  const first = await runPenaltyAlert(env2, { kind: 'morning', now: MORNING, fetchResults, push });
+  assert.equal(first.sent, 'flex');
+  const lock = JSON.parse(store.get(KV_RUN_KEY));
+  assert.deepEqual([lock.date, lock.kind, typeof lock.runId, lock.at], [TODAY, 'morning', 'string', MORNING]);
+
+  // 25 秒後に Cloudflare がもう一度起動(2026-09-28 に実際に起きた形)→ 送らない・取りにも行かない
+  const second = await runPenaltyAlert(env2, { kind: 'morning', now: MORNING + 25000, fetchResults, push });
+  assert.deepEqual([second.sent, second.skipped, pushed.length, fetched], [null, 'duplicate_run', 1, 1]);
+
+  // 同じ日の 23:35(種類が違う)は朝の控えに邪魔されない(内容が同じなので送らないが、取りには行く)
+  const night = await runPenaltyAlert(env2, { kind: 'deadline', now: DEADLINE, fetchResults, push });
+  assert.deepEqual([night.skipped, fetched], ['same_as_morning', 2]);
+  // 翌朝は別の日なので送る(翌日に期限が来る = 利用日が 1 日先の予約で)
+  const nextDay = async () => [{ slot: 'A', label: 'ゆうたそ', reservations: [res({ id: '9', date: '2026-09-22' })] }];
+  const nextMorning = await runPenaltyAlert(env2, { kind: 'morning', now: MORNING + 86400000, fetchResults: nextDay, push });
+  assert.deepEqual([nextMorning.sent, pushed.length], ['flex', 2]);
+});
+
+test('二重起動よけ 2 段目: ほぼ同時に 2 回起動して両方が控えを書いたら、後から書いたほうだけが送る', async () => {
+  const store = new Map();
+  const env2 = { ...env, BOOKING_KV: fakeKv(store) };
+  const pushed = [];
+  const push = async (_t, _to, messages) => pushed.push(messages);
+  // 予約サイトの取得を手動で終わらせられるようにする(2 回とも取得中に相手が起動する)
+  const release = [];
+  const fetchResults = () => new Promise((resolve) => release.push(() => resolve(oneRow)));
+
+  const p1 = runPenaltyAlert(env2, { kind: 'morning', now: MORNING, fetchResults, push });
+  await new Promise((r) => setTimeout(r, 0)); // p1 が控えを書き、取得待ちに入る
+  const p2 = runPenaltyAlert(env2, { kind: 'morning', now: MORNING + 1000, fetchResults, push });
+  await new Promise((r) => setTimeout(r, 0));
+  // 2 段目のテストなので、1 段目をすり抜けた状況を作る = p2 の控えで上書きされた状態にする
+  assert.equal(release.length, 1, 'p2 は 1 段目で止まる(控えが見えている)');
+  const lock1 = JSON.parse(store.get(KV_RUN_KEY));
+  store.set(KV_RUN_KEY, JSON.stringify({ ...lock1, runId: 'other-run' }));
+  release.forEach((f) => f());
+  const [r1, r2] = await Promise.all([p1, p2]);
+  // p1 は取得後に相手の runId を見て送らない。p2 は 1 段目で止まっている
+  assert.deepEqual([r1.skipped, r2.skipped, pushed.length], ['duplicate_run', 'duplicate_run', 0]);
+
+  // 逆に、取得後も自分の runId のままなら送る(通常の 1 回起動)
+  store.clear();
+  const solo = await runPenaltyAlert(env2, { kind: 'morning', now: MORNING, fetchResults: async () => oneRow, push });
+  assert.deepEqual([solo.sent, pushed.length], ['flex', 1]);
+});
+
+test('二重起動よけ: KV が無い・読み書きに失敗するときは従来どおり送る(予告が届かないほうが困る)', async () => {
+  const pushed = [];
+  const push = async (_t, _to, messages) => pushed.push(messages);
+  const noKv = await runPenaltyAlert(env, { kind: 'morning', now: MORNING, fetchResults: async () => oneRow, push });
+  assert.equal(noKv.sent, 'flex');
+  const broken = { async get() { throw new Error('KV down'); }, async put() { throw new Error('KV down'); } };
+  const err = await runPenaltyAlert({ ...env, BOOKING_KV: broken }, { kind: 'morning', now: MORNING, fetchResults: async () => oneRow, push });
+  assert.deepEqual([err.sent, pushed.length], ['flex', 2]);
 });
