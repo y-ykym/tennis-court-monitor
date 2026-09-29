@@ -126,3 +126,24 @@ test('月初のお知らせ: グループに手順つきのテキストを 1 通
   assert.match(pushed[0].text, /利用状況/, '10/1 に無料枠へ戻るので通数の確認も促す');
   assert.ok(pushed[0].text.length <= 5000);
 });
+
+test('月初のお知らせ: 同じ月に 2 回起動されても 1 通だけ(Cloudflare の二重起動よけ)。KV が壊れていれば送る', async () => {
+  const store = new Map();
+  const kv = { async get(k) { return store.has(k) ? store.get(k) : null; }, async put(k, v) { store.set(k, v); } };
+  const env = { LINE_CHANNEL_ACCESS_TOKEN: 't', LINE_GROUP_ID: 'C1', BOOKING_KV: kv };
+  const pushed = [];
+  const push = async (_t, to, text) => pushed.push({ to, text });
+  const oct1 = Date.parse('2026-10-01T00:00:00Z'); // 10/1 9:00 JST
+  const first = await sendMaintenanceReminder(env, { push, now: oct1 });
+  assert.deepEqual([first.sent, pushed.length, store.get('maintenance_reminder_sent')], [true, 1, '2026-10']);
+  // 25 秒後にもう一度起動 → 送らない
+  const second = await sendMaintenanceReminder(env, { push, now: oct1 + 25000 });
+  assert.deepEqual([second.sent, second.skipped, pushed.length], [false, 'duplicate_run', 1]);
+  // 翌月は送る
+  const nov1 = await sendMaintenanceReminder(env, { push, now: Date.parse('2026-11-01T00:00:00Z') });
+  assert.deepEqual([nov1.sent, pushed.length], [true, 2]);
+  // KV が読めない・書けないときは従来どおり送る
+  const broken = { async get() { throw new Error('KV down'); }, async put() { throw new Error('KV down'); } };
+  const err = await sendMaintenanceReminder({ ...env, BOOKING_KV: broken }, { push, now: oct1 });
+  assert.deepEqual([err.sent, pushed.length], [true, 3]);
+});
