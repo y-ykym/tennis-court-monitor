@@ -20,6 +20,15 @@
 //         朝に送った予約番号を KV の penalty_alert_sent に控え(1 日 1 回の書き込み)、23:35 は朝に無かった予約があるときだけ送る。
 //         朝のカードのボタンは 23:59 まで押せるので、同じ内容をもう一度送る必要はない。
 //
+//   二重起動: Cloudflare は同じ Cron を同じ分に 2 回起動することがある(2026-09-28 9:00 に実際に起きて 2 通届いた。
+//         UTC 0:00 = JST 9:00 は Cron を動かすデータセンターが切り替わる時刻で起きやすい、との報告がコミュニティにある)。
+//         対策として、予約一覧を取りに行く前に KV の penalty_alert_run に { date, kind, runId } を書く。
+//         既に今日・同じ種類の控えがあれば二重起動とみなして何もしない(1 段目)。
+//         2 回がほぼ同時で両方とも書いてしまったときは、一覧を取り終えた後(20 秒ほど後)にもう一度読み、
+//         自分の runId でなければ相手に任せて送らない(2 段目)。KV が読めない・書けないときは従来どおり送る
+//         (二重に届くより、ペナルティの予告が届かないほうが困る)。
+//         手元で `--test-scheduled` を同じ日に 2 回叩くと 2 回目は「起動済み」で止まる。試すときは KV の penalty_alert_run を消す。
+//
 //   手元で試す: cd worker && npx wrangler dev --test-scheduled
 //              curl "http://localhost:8787/__scheduled?cron=0+0+*+*+*"    (朝 9 時ぶん)
 //              curl "http://localhost:8787/__scheduled?cron=35+14+*+*+*"  (23:35 ぶん)
@@ -38,6 +47,9 @@ export const PENALTY_ALERT_CRONS = [MORNING_CRON, DEADLINE_CRON];
 export const DEFAULT_PENALTY_DAYS = 3;
 // その日に送った予約番号の控え(KV)。{ date: 'YYYY-MM-DD', ids: ['予約番号', ...] }
 export const KV_SENT_KEY = 'penalty_alert_sent';
+// 二重起動よけ(KV)。{ date: 'YYYY-MM-DD', kind: 'morning'|'deadline', runId, at }。1 時間で消える
+export const KV_RUN_KEY = 'penalty_alert_run';
+const RUN_LOCK_TTL_SEC = 3600;
 
 const JST_OFFSET_MS = 9 * 3600 * 1000;
 const DAY_MS = 86400000;
@@ -127,12 +139,25 @@ export async function runPenaltyAlert(env, { kind = 'morning', now = Date.now(),
   const tomorrow = jstDayIso(now + DAY_MS);
   const deadline = kind === 'deadline';
 
+  // 二重起動よけ 1 段目: 今日・同じ種類の起動が既に控えてあれば何もしない(予約サイトにも行かない)
+  const claim = await claimRun(env, { today, kind, now });
+  if (claim.duplicate) {
+    console.log(`[alert] ${kind}: 今日はもう起動済み(${asOfText(claim.duplicate.at ?? now)})→ Cloudflare の二重起動とみなして送信なし`);
+    return { rows: 0, failed: [], sent: null, skipped: 'duplicate_run' };
+  }
+
   let results;
   try {
     results = await fetchResults();
   } catch (e) {
     console.error(`[alert] 予約一覧の取得に失敗: ${e.message}`);
     results = null;
+  }
+
+  // 二重起動よけ 2 段目: 2 回がほぼ同時に起動して両方とも控えを書いたときは、後から書いたほうだけが送る
+  if (await lostRun(env, { today, kind, runId: claim.runId })) {
+    console.log(`[alert] ${kind}: 同時に起動したもう 1 つの実行が担当するため送信なし (${Date.now() - started}ms)`);
+    return { rows: 0, failed: [], sent: null, skipped: 'duplicate_run' };
   }
   if (!results || results.length === 0) {
     if (deadline) {
@@ -179,6 +204,32 @@ export async function runPenaltyAlert(env, { kind = 'morning', now = Date.now(),
   console.log(`[alert] ${kind}: 対象 ${rows.length} 件を ${sent} で送信${failed.length ? ` / 取得失敗 ${failed.length} 人` : ''} (${Date.now() - started}ms)`);
   await saveSentToday(env, today, [...(sentToday?.ids || []), ...rows.map((r) => r.reservation.id)]);
   return { rows: rows.length, failed, sent };
+}
+
+// 二重起動よけ 1 段目。今日・同じ種類の控えが既にあれば { duplicate } を、無ければ自分の runId で控えを書いて { runId } を返す。
+// KV が無い・読めない・書けないときは { runId: null }(チェックせず従来どおり送る)
+async function claimRun(env, { today, kind, now }) {
+  if (!env.BOOKING_KV) return { runId: null };
+  try {
+    const prev = JSON.parse((await env.BOOKING_KV.get(KV_RUN_KEY)) || 'null');
+    if (prev && prev.date === today && prev.kind === kind) return { runId: null, duplicate: prev };
+    const runId = crypto.randomUUID();
+    await env.BOOKING_KV.put(KV_RUN_KEY, JSON.stringify({ date: today, kind, runId, at: now }), { expirationTtl: RUN_LOCK_TTL_SEC });
+    return { runId };
+  } catch (e) {
+    console.error(`[alert] 二重起動よけの控えを読み書きできませんでした(チェックせずに続行): ${e.message}`);
+    return { runId: null };
+  }
+}
+// 二重起動よけ 2 段目。控えが今日・同じ種類で、runId が自分のものでなければ true(相手に任せる)。読めなければ false
+async function lostRun(env, { today, kind, runId }) {
+  if (!env.BOOKING_KV || !runId) return false;
+  try {
+    const cur = JSON.parse((await env.BOOKING_KV.get(KV_RUN_KEY)) || 'null');
+    return !!(cur && cur.date === today && cur.kind === kind && cur.runId && cur.runId !== runId);
+  } catch {
+    return false;
+  }
 }
 
 // 今日送った予約番号の控えを読む(無い・別の日・KV なし → null)
