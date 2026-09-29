@@ -36,9 +36,28 @@ export const MAINTENANCE_TEXT = [
   '無料枠は月 200 通。グループ宛なので 1 回の通知で 2 通消費します(「よやく」への返信は無料)。',
 ].join('\n');
 
-export async function sendMaintenanceReminder(env, { push = pushText } = {}) {
+// 二重起動よけ(KV)。Cloudflare は同じ Cron を同じ分に 2 回起動することがあり、1 日 0:00 UTC はまさに起きやすい時刻
+// (2026-09-28 9:00 にフェーズ4 の予告が 2 通届いた。penalty-alert.js と同じ考え方)。送った月 'YYYY-MM' を控え、同じ月なら送らない。
+// KV が無い・読めない・書けないときは従来どおり送る
+const KV_MAINT_KEY = 'maintenance_reminder_sent';
+const MAINT_TTL_SEC = 7 * 86400;
+
+export async function sendMaintenanceReminder(env, { push = pushText, now = Date.now() } = {}) {
+  const month = new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 7);
+  if (env.BOOKING_KV) {
+    try {
+      if ((await env.BOOKING_KV.get(KV_MAINT_KEY)) === month) {
+        console.log(`[monitor] 月初のお知らせは ${month} にもう送っています → Cloudflare の二重起動とみなして送信なし`);
+        return { sent: false, skipped: 'duplicate_run' };
+      }
+      await env.BOOKING_KV.put(KV_MAINT_KEY, month, { expirationTtl: MAINT_TTL_SEC });
+    } catch (e) {
+      console.error(`[monitor] 月初のお知らせの控えを読み書きできませんでした(チェックせずに送る): ${e.message}`);
+    }
+  }
   await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, MAINTENANCE_TEXT);
   console.log('[monitor] 月初のメンテのお知らせを LINE に送りました');
+  return { sent: true };
 }
 
 const KV_URL_KEY = 'booking_url'; // booking.js と同じキー
