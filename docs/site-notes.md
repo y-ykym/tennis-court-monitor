@@ -489,7 +489,7 @@ reserve.js をマウス移動・1文字ずつ入力・操作間の小休止を�
 | `datetimeForDisplay` | `9/22(火祝) 19:00-21:00` | **終了時刻はここからしか取れない**。`9:00` のように 1 桁で来るので `HH:MM` に 0 埋め(都と桁を揃えないと日付順がずれる) |
 | `place.name` | `亀戸中央公園テニスコート` | 行の 2 段目 |
 | `myInfo.isOrganizer` | `true`/`false` | `organizer` として保持(表示には使わない) |
-| `overCard` | `{ text: "キャンセル待ち", colorType: "tagOrange" }` / `null` | 本人の参加状態。マイページ「予定(主催・参加イベント一覧)」のステータス列はこの `text` をそのまま表示(公開 JS の一覧部品 `showStatusCol` → `event.overCard.text`。`colorType` は `tagOrange`(未確定。白太字で強調)/ `tagGreen`・`tagBlue`(確定)/ その他(グレー)。2026-10-02 確認)。未ログインの検索 API では全件 `null`。`tbStatus`/`tbStatusType` として保持し、未確定と中止などのときだけ「よやく」に出す |
+| `overCard` | `{ text: "キャンセル待ち", colorType: "tagGreen" }` / `null` | 本人の参加状態。マイページ「予定(主催・参加イベント一覧)」のステータス列はこの `text` をそのまま表示(公開 JS の一覧部品 `showStatusCol` → `event.overCard.text`。`colorType` はサイト側の色分けで `tagOrange`(白太字で強調)/ `tagGreen`・`tagBlue`(チップ)/ その他(グレー)。2026-10-02 に本人のデータで実測: **キャンセル待ち = `tagGreen`**、普通に参加している予定・自分が主催の予定 = `null`)。未ログインの検索 API では全件 `null`。`tbStatus`/`tbStatusType` として保持し、文言があれば「よやく」に出す。`myInfo` の実物は `{ isBookMarked, isEvaluated, isReviewRequesting, eventMemo, isOrganizer, isSubOrganizer, isForcedParticipated, isOrganizerIsFriend }`(参加状態は入っていない) |
 
 注意: 非公開の内部 API なので予告なく形が変わりうる。Worker は 1 件の形が崩れていてもその件だけ飛ばし、配列以外が返ったときだけ失敗扱いにする(都の予約の表示は壊さない)。
 利用規約は 2026-09-17 に本人が確認し、自動アクセスの禁止条項は無かった。
