@@ -1,0 +1,98 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>「よやく」カード: テニスベアの参加状態ラベルのパターン</title>
+<style>
+  body{margin:0;background:#fff;font-family:"Hiragino Sans","Noto Sans JP",-apple-system,sans-serif;color:#222}
+  .page{padding:24px 28px 32px;box-sizing:border-box}
+  h1{font-size:20px;margin:0 0 4px}
+  .lead{font-size:13px;color:#555;margin:0 0 16px;line-height:1.5;max-width:720px}
+  .panes{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+  .pane{flex:0 0 320px}
+  .pane h2{font-size:14px;margin:0 0 8px;color:#333}
+  .pane h2 small{font-weight:400;color:#777;font-size:12px;margin-left:8px}
+  .card{width:300px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.18);border:1px solid #e3e3e3}
+  .hd{background:#1F2A44;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+  .hd b{font-size:16px}.hd span{font-size:11px;color:#C7D2E5}
+  .bd{padding:2px 16px 14px}
+  .row{display:flex;align-items:flex-start;gap:10px;margin-top:12px}
+  .row + .row{border-top:1px solid #E5E7EB;padding-top:12px}
+  .tile{width:58px;flex:0 0 auto;border-radius:8px;text-align:center;padding:6px 0}
+  .tile b{display:block;font-size:17px;line-height:1.1}.tile small{font-size:10.5px}
+  .tile.sat{background:#E3EEFB;color:#1D4F91}.tile.sun{background:#FBE4E4;color:#9B2C2C}.tile.wd{background:#EEF0F3;color:#374151}.tile.past{background:#F3F4F6;color:#B0B5BD}
+  .mid{flex:1;min-width:0}
+  .ent{display:flex;align-items:center;gap:8px}
+  .ent + .ent{margin-top:12px}
+  .txt{flex:1;min-width:0}
+  .timeline{display:flex;align-items:center;gap:10px}
+  .time{font-size:15px;font-weight:700;color:#111827;line-height:1.25;white-space:nowrap}
+  .park{font-size:13px;color:#4B5563;margin-top:4px}
+  .ev{font-size:13px;font-weight:700;color:#111827;margin-top:4px}
+  .court{font-size:11px;color:#4B5563;margin-top:4px}
+  .rel{font-size:11px;font-weight:700;color:#DC2626;margin-left:6px}
+  .wx{font-size:11px;color:#4B5563;margin-top:4px}
+  .pill{flex:0 0 auto;font-size:10px;font-weight:700;padding:5px 8px;border-radius:12px;white-space:nowrap}
+  .pill.cancel{background:#FDECEC;color:#B91C1C}
+  .pill.st{background:#FFEDD5;color:#C2410C}
+  .pill.st.gray{background:#E5E7EB;color:#374151}
+  .pill.st.past{background:#F3F4F6;color:#B0B5BD}
+  .past .time,.past .ev,.past .court,.past .park,.past .wx{color:#B0B5BD}
+  .past .rel{color:#B0B5BD}
+  .ft{border-top:1px solid #E5E7EB;padding:9px 12px;display:flex;justify-content:space-between;color:#1F4E8C;font-size:13px}
+  .note{font-size:12px;color:#555;margin:10px 0 0;line-height:1.55;max-width:300px}
+  .note b{color:#222}
+  table{border-collapse:collapse;font-size:12.5px;margin:18px 0 0;max-width:760px}
+  th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;vertical-align:top}
+  th{background:#F3F4F6}
+  .tag{display:inline-block;font-size:10px;font-weight:700;padding:3px 7px;border-radius:10px;white-space:nowrap}
+</style></head><body><div class="page">
+<h1>「よやく」カード: テニスベアの参加状態ラベルのパターン</h1>
+<p class="lead">2026-10-02 にログイン済みの Chrome から API を呼んで集めた実物の文言と、サイトの JS から分かった種類。左は今の見え方(文言があれば全部オレンジ)、右は「中止」だけグレーにする案。普通に参加している予定・自分が主催の予定は API が状態を返さないので、どちらも何も付きません。</p>
+
+<table>
+<tr><th>文言(API の overCard.text)</th><th>サイトの色種別</th><th>どこで確認したか</th><th>「よやく」に出るか</th></tr>
+<tr><td><span class="tag" style="background:#FFEDD5;color:#C2410C">キャンセル待ち</span></td><td>tagGreen(緑のチップ)</td><td>今後の予定の実物(10/3 の練習会)</td><td><b>出る</b>。いちばん多いはず</td></tr>
+<tr><td><span class="tag" style="background:#E5E7EB;color:#374151">中止</span></td><td>tagDarkGray(濃いグレー)</td><td>履歴の実物(過去の 1 件)。主催者が中止にすると、開催日前でも付く</td><td><b>出る</b>(開催日前に中止になったとき)</td></tr>
+<tr><td><span class="tag" style="background:#F3F4F6;color:#6B7280">開催済み</span></td><td>bearSecondWhiteGrey(薄いグレー)</td><td>履歴の実物(9 件)</td><td><b>出ない</b>。「よやく」は今後の予定の API しか見ないため</td></tr>
+<tr><td><span class="tag" style="background:#FFEDD5;color:#C2410C">申込中 / 承認待ち(文言は未確認)</span></td><td>tagOrange(白太字で強調。JS に「申込中」用の判定がある)</td><td>サイトの JS のみ。主催者の承認が要るイベントに申し込んだときと推測。実データでは未遭遇</td><td><b>出る</b>(文言は API のまま)</td></tr>
+<tr><td>(なし = null)</td><td>—</td><td>普通に参加している予定(10/10)、自分が主催の予定(10/11)</td><td>何も付かない(今までどおり)</td></tr>
+</table>
+
+<div class="panes" style="margin-top:22px">
+
+<div class="pane"><h2>現在<small>文言があれば全部オレンジ</small></h2>
+<div class="card">
+ <div class="hd"><b>ゆうたそ</b><span>10/2 現在 ・ 5件</span></div>
+ <div class="bd">
+  <div class="row past"><div class="tile past"><b>10/2</b><small>木</small></div><div class="mid"><div class="ent"><div class="txt"><div class="timeline"><div class="time">9:00 - 11:00</div><span class="pill st past">キャンセル待ち</span></div><div class="ev">🐻 朝練</div><div class="court">猿江恩賜公園<span class="rel">終了</span></div></div></div></div></div>
+  <div class="row"><div class="tile sat"><b>10/3</b><small>土</small></div><div class="mid">
+    <div class="ent"><div class="txt"><div class="time">11:00 - 13:00</div><div class="park">大島小松川公園<span class="rel">明日</span></div><div class="wx">☀️ 22℃ &nbsp;☂ 0%</div></div><span class="pill cancel">キャンセル</span></div>
+    <div class="ent"><div class="txt"><div class="timeline"><div class="time">17:00 - 19:00</div><span class="pill st">キャンセル待ち</span></div><div class="ev">🐻 大島小松川公園 2時間 練習</div><div class="court">大島小松川公園Ａ<span class="rel">明日</span></div><div class="wx">☀️ 21℃ &nbsp;☂ 2%</div></div></div>
+  </div></div>
+  <div class="row"><div class="tile sun"><b>10/5</b><small>日</small></div><div class="mid"><div class="ent"><div class="txt"><div class="timeline"><div class="time">13:00 - 15:00</div><span class="pill st">中止</span></div><div class="ev">🐻 ダブルス練習会</div><div class="court">亀戸中央公園</div><div class="wx">🌧️ 19℃ &nbsp;☂ 80%</div></div></div></div></div>
+  <div class="row"><div class="tile sat"><b>10/10</b><small>土</small></div><div class="mid"><div class="ent"><div class="txt"><div class="timeline"><div class="time">14:00 - 17:00</div><span class="pill st">承認待ち</span></div><div class="ev">🐻 基礎練習会　荒川砂町庭球場(３時間)</div><div class="court">荒川・砂町庭球場</div><div class="wx">☀️ 24℃ &nbsp;☂ 12%</div></div></div></div></div>
+  <div class="row"><div class="tile sun"><b>10/11</b><small>日</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">17:00 - 19:00</div><div class="ev">🐻 2時間ひたすらラリー</div><div class="court">大島小松川公園Ａ</div><div class="wx">⛅ 23℃ &nbsp;☂ 10%</div></div></div></div></div>
+ </div>
+ <div class="ft"><span>予約サイトを開く</span><span>一覧を更新</span></div>
+</div>
+<p class="note"><b>いま本番で動いているもの</b>。「中止」も「承認待ち」もキャンセル待ちと同じオレンジ。10/11(自分の主催)には何も付かない。終了済みの行はラベルも薄いグレー。<br>※「承認待ち」の文言は推測。実際の文字は API が返したものがそのまま出ます。</p>
+</div>
+
+<div class="pane"><h2>案<small>「中止」だけ濃いグレー</small></h2>
+<div class="card">
+ <div class="hd"><b>ゆうたそ</b><span>10/2 現在 ・ 5件</span></div>
+ <div class="bd">
+  <div class="row past"><div class="tile past"><b>10/2</b><small>木</small></div><div class="mid"><div class="ent"><div class="txt"><div class="timeline"><div class="time">9:00 - 11:00</div><span class="pill st past">キャンセル待ち</span></div><div class="ev">🐻 朝練</div><div class="court">猿江恩賜公園<span class="rel">終了</span></div></div></div></div></div>
+  <div class="row"><div class="tile sat"><b>10/3</b><small>土</small></div><div class="mid">
+    <div class="ent"><div class="txt"><div class="time">11:00 - 13:00</div><div class="park">大島小松川公園<span class="rel">明日</span></div><div class="wx">☀️ 22℃ &nbsp;☂ 0%</div></div><span class="pill cancel">キャンセル</span></div>
+    <div class="ent"><div class="txt"><div class="timeline"><div class="time">17:00 - 19:00</div><span class="pill st">キャンセル待ち</span></div><div class="ev">🐻 大島小松川公園 2時間 練習</div><div class="court">大島小松川公園Ａ<span class="rel">明日</span></div><div class="wx">☀️ 21℃ &nbsp;☂ 2%</div></div></div>
+  </div></div>
+  <div class="row"><div class="tile sun"><b>10/5</b><small>日</small></div><div class="mid"><div class="ent"><div class="txt"><div class="timeline"><div class="time">13:00 - 15:00</div><span class="pill st gray">中止</span></div><div class="ev">🐻 ダブルス練習会</div><div class="court">亀戸中央公園</div><div class="wx">🌧️ 19℃ &nbsp;☂ 80%</div></div></div></div></div>
+  <div class="row"><div class="tile sat"><b>10/10</b><small>土</small></div><div class="mid"><div class="ent"><div class="txt"><div class="timeline"><div class="time">14:00 - 17:00</div><span class="pill st">承認待ち</span></div><div class="ev">🐻 基礎練習会　荒川砂町庭球場(３時間)</div><div class="court">荒川・砂町庭球場</div><div class="wx">☀️ 24℃ &nbsp;☂ 12%</div></div></div></div></div>
+  <div class="row"><div class="tile sun"><b>10/11</b><small>日</small></div><div class="mid"><div class="ent"><div class="txt"><div class="time">17:00 - 19:00</div><div class="ev">🐻 2時間ひたすらラリー</div><div class="court">大島小松川公園Ａ</div><div class="wx">⛅ 23℃ &nbsp;☂ 10%</div></div></div></div></div>
+ </div>
+ <div class="ft"><span>予約サイトを開く</span><span>一覧を更新</span></div>
+</div>
+<p class="note"><b>変わるところ</b>: 「中止」だけ濃いグレー(サイトの色分けと同じ。オレンジは「まだ参加できるか決まっていない」の意味に揃う)。<br><b>変わらないところ</b>: ラベルの位置(時間の右)、大きさ、キャンセル待ち・承認待ちのオレンジ、状態なしの行。</p>
+</div>
+
+</div>
+<p class="lead" style="margin-top:22px">10/5 の「中止」と 10/10 の「承認待ち」は見本のための作りもの(実データにはまだ無い)。文言の一覧はサーバー側で決まるため、ここに無い文字が返ってきたときもそのままラベルに出ます。</p>
+</div></body></html>
