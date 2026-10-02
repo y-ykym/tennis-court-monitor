@@ -210,7 +210,7 @@ const TB = [
   { source: 'tennisbear', id: '2', title: '朝練', date: '2026-09-08', start: '09:00', end: '11:00', facility: '', organizer: true },
 ];
 
-test('flex: テニスベアの参加状態は右端にオレンジのラベル(キャンセルピルと同じ形・押せない)。状態なし(普通の参加)は何も足さない。終了済みは薄いグレー', () => {
+test('flex: テニスベアの参加状態は時間の右にオレンジのラベル(キャンセルピルと同じ形・押せない)。状態なし(普通の参加)は何も足さない。終了済みは薄いグレー', () => {
   const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagGreen' };
   const joined = { ...TB[1], tbStatus: '', tbStatusType: '' };
   const msg = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [waiting, joined] } }], opts);
@@ -222,10 +222,21 @@ test('flex: テニスベアの参加状態は右端にオレンジのラベル(�
   assert.equal(st.contents[0].color, '#C2410C');
   assert.equal(st.action, undefined, '押せない(行全体の uri アクションだけ)');
   assert.equal(st.paddingAll, '6px');
-  // ラベルは 🐻 の行の右端(キャンセルピルと同じ位置)。行の箱 = [本文テキスト, ラベル]
-  const row = find(msg.contents, (n) => n.type === 'box' && n.layout === 'horizontal' && n.contents?.[1] === st)[0];
-  assert.ok(row && texts(row.contents[0]).join('').includes('🐻 ストローク多め練'));
-  assert.ok(!texts(row.contents[0]).join('').includes('キャンセル待ち'), '本文には重ねて出さない');
+  // ラベルは時間の右(時間の行 = [時間テキスト, ラベル])。イベント名以降は別のテキストで、幅を圧迫しない
+  const timeRow = find(msg.contents, (n) => n.type === 'box' && n.layout === 'horizontal' && n.contents?.[1] === st)[0];
+  assert.ok(timeRow);
+  assert.deepEqual(texts(timeRow.contents[0]), ['19:00 - 21:00']);
+  const column = find(msg.contents, (n) => n.type === 'box' && n.layout === 'vertical' && n.contents?.[0] === timeRow)[0];
+  assert.equal(column.flex, 1);
+  const restText = column.contents[1];
+  assert.equal(restText.type, 'text');
+  assert.ok(restText.wrap && restText.lineSpacing === '5px');
+  assert.equal(restText.contents[0].text, '🐻 ストローク多め練', '2 段目の先頭は改行なしで始まる');
+  assert.ok(texts(restText).join('').includes('\n亀戸中央公園テニスコート'));
+  assert.ok(!texts(column).join('').includes('キャンセル待ち') || texts(column).join('').indexOf('キャンセル待ち') < texts(column).join('').indexOf('🐻'), '本文には重ねて出さない');
+  // 状態の無い 🐻 の行は従来どおり 1 つのテキスト(時間 + 改行 + 🐻 イベント名)
+  const plain = find(msg.contents, (n) => n.type === 'text' && n.contents?.[0]?.text === '9:00 - 11:00')[0];
+  assert.ok(plain && plain.contents[1].text === '\n🐻 朝練');
   // 色種別が違っても同じ見え方(色で線引きしない)
   const callOff = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '中止', tbStatusType: 'textGray' }] } }], opts);
   assert.equal(pill(callOff.contents, '中止')[0].backgroundColor, '#FFEDD5');

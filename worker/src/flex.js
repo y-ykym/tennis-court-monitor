@@ -26,8 +26,9 @@
 //   │ │9/22│ 🐻 ストローク多め練              │  ← テニスベアの行: 🐻 + イベント名、その下にコート名。キャンセルボタンは付けない
 //   │ │ 火 │ 亀戸中央公園テニスコート         │     行をタップするとテニスベアのイベント詳細ページが開く(uri。2026-09-26)
 //   │ ┌────┐ 9:00 - 11:00                    │
-//   │ │9/27│ 🐻 朝練           (キャンセル待ち)│  ← 参加状態(キャンセル待ちなど)が API に入っているときだけ、右端にオレンジのラベル
-//   │ │ 日 │ 猿江恩賜公園テニスコート         │     (都の行の「キャンセル」ピルと同じ形・位置。2026-10-02。普通に参加・主催している予定は API が null なので何も出ない)
+//   │ ┌────┐ 9:00 - 11:00  (キャンセル待ち)   │  ← 参加状態(キャンセル待ちなど)が API に入っているときだけ、時間の右にオレンジのラベル
+//   │ │9/27│ 🐻 朝練                          │     (2026-10-02。右端に置くとイベント名の幅を圧迫して折り返すので、空いている時間の右に。
+//   │ │ 日 │ 猿江恩賜公園テニスコート         │      普通に参加・主催している予定は API が null なので何も出ない)
 //   テニスベアだけ失敗 → カード末尾に小さく「🐻 テニスベアの取得に失敗しました」。都だけ失敗 → 「繋がりませんでした」の下に予定を出す
 //
 // 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
@@ -188,6 +189,24 @@ function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
     }
   }
   spans.push(...weatherSpans(r, past));
+  // テニスベアだけの行で参加状態(キャンセル待ちなど)があるとき: 時間の行を分けて、その右にラベルを置く(2026-10-02)。
+  // 右端(キャンセルピルの位置)に置くとイベント名の幅を圧迫して時間まで折り返したため(実機で本人指摘)、空いている時間の右に。
+  // 2 段目以降は従来どおり 1 つのテキスト(先頭の改行は落とす)
+  const st = isTennisbear(r) ? tbStatusLabel(r) : '';
+  if (st) {
+    const [timeSpan, ...rest] = spans;
+    if (rest.length) rest[0] = { ...rest[0], text: rest[0].text.replace(/^\n/, '') };
+    return {
+      type: 'box',
+      layout: 'vertical',
+      flex: 1,
+      margin: 'md',
+      contents: [
+        { type: 'box', layout: 'horizontal', alignItems: 'center', contents: [{ type: 'text', flex: 0, contents: [timeSpan] }, statusPill(st, past)] },
+        ...(rest.length ? [{ type: 'text', wrap: true, lineSpacing: '5px', margin: '5px', contents: rest }] : []),
+      ],
+    };
+  }
   // lineSpacing: 段(時間 / 公園名 / 🐻 / 天気)が詰まって 1 つの塊に見えないよう行間を空ける
   // (フェーズ6 で天気の段が増え、実機で窮屈になったため。2026-09-18 本人指摘)
   return { type: 'text', flex: 1, margin: 'md', wrap: true, lineSpacing: '5px', contents: spans };
@@ -229,14 +248,14 @@ function cancelPill(r, data) {
   };
 }
 
-// 右端の参加状態ラベル(テニスベアの行。キャンセルピルと同じ形・位置で、押せない)。文言は API のまま(例「キャンセル待ち」)。
+// 参加状態ラベル(テニスベアの行。時間の右。キャンセルピルと同じ形で、押せない)。文言は API のまま(例「キャンセル待ち」)。
 // 終了済みの行は薄いグレー。見た目を揃えるためパディングと文字サイズはキャンセルピルと同じ
 function statusPill(label, past) {
   return {
     type: 'box',
     layout: 'vertical',
     flex: 0,
-    margin: 'sm',
+    margin: 'md',
     backgroundColor: past ? COLOR_STATUS_PAST_BG : COLOR_STATUS_BG,
     cornerRadius: 'xl',
     paddingAll: '6px',
@@ -251,9 +270,8 @@ function entry(r, today, nowHHMM) {
   const past = isPast(r, today, nowHHMM);
   const rel = past ? '終了' : r.date ? relativeLabel(r.date, today) : null;
   const contents = [detailText(r, { past, rel })];
-  // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)。代わりに参加状態(キャンセル待ちなど)があれば右端にラベル(2026-10-02)
+  // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)。参加状態(キャンセル待ちなど)のラベルは detailText が時間の右に置く
   if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
-  if (isTennisbear(r) && tbStatusLabel(r)) contents.push(statusPill(tbStatusLabel(r), past));
   // テニスベアの行は、行全体をタップするとイベント詳細ページが開く(2026-09-26。「いべんと」の行と同じ uri アクション)。
   // 終了済みの行も開ける(ページ自体は残っている)。ID が無い行(整形に失敗したもの)には付けない
   const action = isTennisbear(r) && r.id ? { action: { type: 'uri', label: '詳細', uri: EVENT_INFO_URL(r.id) } } : {};
