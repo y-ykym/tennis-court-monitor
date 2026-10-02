@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeEvent, normalizeEvents, normalizeTime, parseDisplayRange, fetchTennisbearEvents, TennisbearAuthError, tbStatusLabel, isPendingStatus } from '../src/tennisbear.js';
+import { normalizeEvent, normalizeEvents, normalizeTime, parseDisplayRange, fetchTennisbearEvents, TennisbearAuthError, tbStatusLabel } from '../src/tennisbear.js';
 
 // 2026-09-17 に実機で見た 1 件の形(要件定義書 §15.3)
 const RAW = {
@@ -39,25 +39,20 @@ test('tennisbear: 1 件を都の予約と同じ形に(0 埋めの HH:MM・終了
   assert.deepEqual([noPlace.lat, noPlace.lng], [null, null], '座標が無い施設でも落とさない(天気は出さない)');
 });
 
-test('tennisbear: 参加状態は overCard { text, colorType } から。確定(緑・青)は出さず、未確定(橙)と中止などはそのまま出す', () => {
-  // 2026-10-02 に公開 JS で確認: マイページのステータス列は overCard.text をそのまま表示している
-  const waiting = normalizeEvent({ ...RAW, overCard: { text: 'キャンセル待ち', colorType: 'tagOrange' } });
+test('tennisbear: 参加状態は overCard { text, colorType } から。文言があればそのまま出し、null(普通に参加・主催)なら何も出さない', () => {
+  // 2026-10-02 に本人のデータで実測: キャンセル待ちは { text: 'キャンセル待ち', colorType: 'tagGreen' }、普通の参加・主催は null
+  const waiting = normalizeEvent({ ...RAW, overCard: { text: 'キャンセル待ち', colorType: 'tagGreen' } });
   assert.equal(waiting.tbStatus, 'キャンセル待ち');
-  assert.equal(waiting.tbStatusType, 'tagOrange');
+  assert.equal(waiting.tbStatusType, 'tagGreen');
   assert.equal(tbStatusLabel(waiting), 'キャンセル待ち');
-  assert.equal(isPendingStatus(waiting), true);
-  // 確定した参加・主催(緑・青)はカードに出さない(普段どおりの予定にまで文字を足さない。主催の印は付けない決定 §15.2)
-  const joined = normalizeEvent({ ...RAW, overCard: { text: '参加', colorType: 'tagGreen' } });
-  assert.equal(joined.tbStatus, '参加', '値は保持する');
-  assert.equal(tbStatusLabel(joined), '');
-  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: '主催', colorType: 'tagBlue' } })), '');
-  // 色種別が未知・無しでも文言があれば出す(中止など)。強調はしない
-  const callOff = normalizeEvent({ ...RAW, overCard: { text: '中止', colorType: 'textGray' } });
-  assert.equal(tbStatusLabel(callOff), '中止');
-  assert.equal(isPendingStatus(callOff), false);
+  // 色種別が何でも・無くても、文言があれば出す(色で線引きしない)
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: '中止', colorType: 'textGray' } })), '中止');
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: '申込中', colorType: 'tagOrange' } })), '申込中');
   assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: ' 承認待ち ' } })), '承認待ち', '前後の空白は落とす');
-  // overCard が null / 形違いなら空(未ログインの検索 API や、形が変わったとき)
-  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: null })), '');
+  // overCard が null(普通に参加・自分が主催)/ 形違いなら空(未ログインの検索 API や、形が変わったときも)
+  const joined = normalizeEvent({ ...RAW, overCard: null, myInfo: { isOrganizer: false } });
+  assert.equal(tbStatusLabel(joined), '');
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: null, myInfo: { isOrganizer: true } })), '');
   assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: 123 } })), '');
   assert.equal(tbStatusLabel(normalizeEvent(RAW)), '');
   assert.equal(tbStatusLabel(undefined), '');

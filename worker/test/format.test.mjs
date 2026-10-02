@@ -136,9 +136,9 @@ test('mergeSameSlot: 1 つの都の予約に 2 件ぶら下げない。相手の
   assert.deepEqual(mergeSameSlot([], [SAME_TB]), [SAME_TB]);
 });
 
-test('format: テニスベアの参加状態(キャンセル待ちなど)はイベント名の後ろに [ ] で。確定(緑)は出さない', () => {
-  const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagOrange' };
-  const joined = { ...TB[1], tbStatus: '参加', tbStatusType: 'tagGreen' };
+test('format: テニスベアの参加状態(キャンセル待ちなど)はイベント名の後ろに [ ] で。状態なし(普通の参加)は従来どおり', () => {
+  const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagGreen' };
+  const joined = { ...TB[1], tbStatus: '', tbStatusType: '' };
   const text = formatReply([{ label: 'A', reservations: [], tennisbear: { events: [waiting, joined] } }], { today: '2026-09-02' });
   assert.equal(
     text,
