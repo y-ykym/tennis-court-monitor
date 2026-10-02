@@ -237,9 +237,14 @@ test('flex: テニスベアの参加状態は時間の右にオレンジのラ�
   // 状態の無い 🐻 の行は従来どおり 1 つのテキスト(時間 + 改行 + 🐻 イベント名)
   const plain = find(msg.contents, (n) => n.type === 'text' && n.contents?.[0]?.text === '9:00 - 11:00')[0];
   assert.ok(plain && plain.contents[1].text === '\n🐻 朝練');
-  // 色種別が違っても同じ見え方(色で線引きしない)
-  const callOff = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '中止', tbStatusType: 'textGray' }] } }], opts);
-  assert.equal(pill(callOff.contents, '中止')[0].backgroundColor, '#FFEDD5');
+  // 「中止」だけ濃いグレー(2026-10-02 本人決定。色種別 tagDarkGray でも文言「中止」でも)。それ以外の文言はオレンジ
+  const callOff = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '中止', tbStatusType: 'tagDarkGray' }] } }], opts);
+  assert.equal(pill(callOff.contents, '中止')[0].backgroundColor, '#E5E7EB');
+  assert.equal(pill(callOff.contents, '中止')[0].contents[0].color, '#374151');
+  const callOff2 = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '中止', tbStatusType: '' }] } }], opts);
+  assert.equal(pill(callOff2.contents, '中止')[0].backgroundColor, '#E5E7EB');
+  const applying = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '承認待ち', tbStatusType: 'tagOrange' }] } }], opts);
+  assert.equal(pill(applying.contents, '承認待ち')[0].backgroundColor, '#FFEDD5');
   // 終了済みの行は薄いグレーのラベル
   const past = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...waiting, date: '2026-09-02', start: '08:00', end: '10:00' }] } }], { today: '2026-09-02', nowHHMM: '12:00' });
   const pp = pill(past.contents, 'キャンセル待ち')[0];

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeEvent, normalizeEvents, normalizeTime, parseDisplayRange, fetchTennisbearEvents, TennisbearAuthError, tbStatusLabel } from '../src/tennisbear.js';
+import { normalizeEvent, normalizeEvents, normalizeTime, parseDisplayRange, fetchTennisbearEvents, TennisbearAuthError, tbStatusLabel, isCallOffStatus } from '../src/tennisbear.js';
 
 // 2026-09-17 に実機で見た 1 件の形(要件定義書 §15.3)
 const RAW = {
@@ -45,8 +45,14 @@ test('tennisbear: 参加状態は overCard { text, colorType } から。文言�
   assert.equal(waiting.tbStatus, 'キャンセル待ち');
   assert.equal(waiting.tbStatusType, 'tagGreen');
   assert.equal(tbStatusLabel(waiting), 'キャンセル待ち');
-  // 色種別が何でも・無くても、文言があれば出す(色で線引きしない)
-  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: '中止', colorType: 'textGray' } })), '中止');
+  // 色種別が何でも・無くても、文言があれば出す(色で線引きしない)。「中止」だけは isCallOffStatus でグレーにする(履歴の実測: tagDarkGray)
+  const callOff = normalizeEvent({ ...RAW, overCard: { text: '中止', colorType: 'tagDarkGray' } });
+  assert.equal(tbStatusLabel(callOff), '中止');
+  assert.equal(isCallOffStatus(callOff), true);
+  assert.equal(isCallOffStatus({ tbStatus: '中止', tbStatusType: '' }), true, '文言だけでも中止と判定');
+  assert.equal(isCallOffStatus({ tbStatus: 'x', tbStatusType: 'tagDarkGray' }), true, '色種別だけでも中止と判定');
+  assert.equal(isCallOffStatus(waiting), false);
+  assert.equal(isCallOffStatus(undefined), false);
   assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: '申込中', colorType: 'tagOrange' } })), '申込中');
   assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: ' 承認待ち ' } })), '承認待ち', '前後の空白は落とす');
   // overCard が null(普通に参加・自分が主催)/ 形違いなら空(未ログインの検索 API や、形が変わったときも)
