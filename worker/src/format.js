@@ -13,6 +13,7 @@
 //
 // フェーズ5(§15): 人に tennisbear が添えられていれば、その人の行にテニスベアの予定を日付順で混ぜる
 //   ・A  9/22(火) 19:00-21:00 🐻 ストローク多め練(亀戸中央公園テニスコート)
+//   参加状態が未確定などのとき(2026-10-02。tennisbear.js の tbStatusLabel)はイベント名の後ろに [キャンセル待ち] のように添える
 //   テニスベアだけ失敗 → その人の末尾に「・A  (🐻 テニスベアの取得に失敗)」。都だけ失敗 → 「(取得失敗)」の下にテニスベアの予定
 //   同じ 1 つの枠が都とテニスベアの両方に出るときは 1 行にまとめる(mergeSameSlot)
 //   ・A  9/22(火) 19:00-21:00 大島小松川公園 🐻 ストローク多め練
@@ -22,6 +23,7 @@
 // ============================================================
 
 import { courtByFacility, courtByTbCode } from './courts.js';
+import { tbStatusLabel } from './tennisbear.js';
 
 export const MSG_NO_RESERVATIONS = '予約はありません';
 export const MSG_FETCH_FAILED = '予約サイトに繋がりませんでした。少し待ってもう一度お試しください';
@@ -82,6 +84,9 @@ export function mergeSameSlot(site, tb) {
     if (hit) {
       hit.tbTitle = ev.title;
       hit.tbId = ev.id;
+      // 参加状態も添える(自分のコートで立てたイベントなら普通は主催 = 確定で、表示には出ない)
+      hit.tbStatus = ev.tbStatus || '';
+      hit.tbStatusType = ev.tbStatusType || '';
     } else {
       rest.push(ev);
     }
@@ -101,9 +106,12 @@ function reservationLine(label, r) {
   const date = r.date ? formatDate(r.date) : '日付不明';
   // 時刻は "9:00" のように1桁時は先頭に空白を足して桁を揃える(§11.2 の例と同じ見え方)
   const time = r.start && r.end ? `${formatTime(r.start).padStart(5)}-${formatTime(r.end)}` : r.start ? `${formatTime(r.start).padStart(5)}-` : '';
+  // 参加状態(キャンセル待ちなど)はイベント名の直後に [ ] で(2026-10-02)
+  const st = tbStatusLabel(r);
+  const status = st ? ` [${st}]` : '';
   const what =
-    isTennisbear(r) ? `🐻 ${r.title}${r.facility ? `(${r.facility})` : ''}`
-    : r.tbTitle ? `${r.facility} 🐻 ${r.tbTitle}`
+    isTennisbear(r) ? `🐻 ${r.title}${status}${r.facility ? `(${r.facility})` : ''}`
+    : r.tbTitle ? `${r.facility} 🐻 ${r.tbTitle}${status}`
     : r.facility;
   return `・${label}  ${date} ${time} ${what}${weatherText(r)}`.replace(/\s+$/, '');
 }

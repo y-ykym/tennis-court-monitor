@@ -59,6 +59,9 @@ const ev = (over = {}) => ({
   lat: 35.68,
   lng: 139.83,
   organizer: false,
+  // 参加状態(overCard)は検索 API(未ログイン)では null なので常に空(2026-10-02)
+  tbStatus: '',
+  tbStatusType: '',
   isFull: false,
   callOff: false,
   hostName: 'Kei',

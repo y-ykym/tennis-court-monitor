@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeEvent, normalizeEvents, normalizeTime, parseDisplayRange, fetchTennisbearEvents, TennisbearAuthError } from '../src/tennisbear.js';
+import { normalizeEvent, normalizeEvents, normalizeTime, parseDisplayRange, fetchTennisbearEvents, TennisbearAuthError, tbStatusLabel, isPendingStatus } from '../src/tennisbear.js';
 
 // 2026-09-17 に実機で見た 1 件の形(要件定義書 §15.3)
 const RAW = {
@@ -25,6 +25,8 @@ test('tennisbear: 1 件を都の予約と同じ形に(0 埋めの HH:MM・終了
     lat: 35.70064,
     lng: 139.83786,
     organizer: false,
+    tbStatus: '',
+    tbStatusType: '',
   });
   // 朝 9 時: 表示は "9:00" でも start/end は "09:00"(都の予約と桁を揃えないと日付順がずれる)
   const morning = normalizeEvent({ ...RAW, datetimeForDisplay: '9/27(日) 9:00-11:00', startDatetimeString: '2026-09-27T09:00:00.000+09:00', myInfo: { isOrganizer: true } });
@@ -35,6 +37,30 @@ test('tennisbear: 1 件を都の予約と同じ形に(0 埋めの HH:MM・終了
   const noPlace = normalizeEvent({ ...RAW, place: null });
   assert.equal(noPlace.placeCode, '');
   assert.deepEqual([noPlace.lat, noPlace.lng], [null, null], '座標が無い施設でも落とさない(天気は出さない)');
+});
+
+test('tennisbear: 参加状態は overCard { text, colorType } から。確定(緑・青)は出さず、未確定(橙)と中止などはそのまま出す', () => {
+  // 2026-10-02 に公開 JS で確認: マイページのステータス列は overCard.text をそのまま表示している
+  const waiting = normalizeEvent({ ...RAW, overCard: { text: 'キャンセル待ち', colorType: 'tagOrange' } });
+  assert.equal(waiting.tbStatus, 'キャンセル待ち');
+  assert.equal(waiting.tbStatusType, 'tagOrange');
+  assert.equal(tbStatusLabel(waiting), 'キャンセル待ち');
+  assert.equal(isPendingStatus(waiting), true);
+  // 確定した参加・主催(緑・青)はカードに出さない(普段どおりの予定にまで文字を足さない。主催の印は付けない決定 §15.2)
+  const joined = normalizeEvent({ ...RAW, overCard: { text: '参加', colorType: 'tagGreen' } });
+  assert.equal(joined.tbStatus, '参加', '値は保持する');
+  assert.equal(tbStatusLabel(joined), '');
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: '主催', colorType: 'tagBlue' } })), '');
+  // 色種別が未知・無しでも文言があれば出す(中止など)。強調はしない
+  const callOff = normalizeEvent({ ...RAW, overCard: { text: '中止', colorType: 'textGray' } });
+  assert.equal(tbStatusLabel(callOff), '中止');
+  assert.equal(isPendingStatus(callOff), false);
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: ' 承認待ち ' } })), '承認待ち', '前後の空白は落とす');
+  // overCard が null / 形違いなら空(未ログインの検索 API や、形が変わったとき)
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: null })), '');
+  assert.equal(tbStatusLabel(normalizeEvent({ ...RAW, overCard: { text: 123 } })), '');
+  assert.equal(tbStatusLabel(normalizeEvent(RAW)), '');
+  assert.equal(tbStatusLabel(undefined), '');
 });
 
 test('tennisbear: 時刻・表示文字列の解析(全角コロン・波ダッシュ・不正値)', () => {

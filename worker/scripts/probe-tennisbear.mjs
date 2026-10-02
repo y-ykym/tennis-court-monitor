@@ -9,7 +9,7 @@
 //   TB_EMAIL=<メールアドレス> node scripts/probe-tennisbear.mjs
 //   --flex を付けると、都の予約 0 件と合流したカードの JSON も出す(Flex Simulator に貼れる)
 // ============================================================
-import { fetchTennisbearEvents } from '../src/tennisbear.js';
+import { fetchTennisbearEvents, tbStatusLabel } from '../src/tennisbear.js';
 import { formatReply } from '../src/format.js';
 import { buildReservationFlex } from '../src/flex.js';
 
@@ -25,6 +25,14 @@ try {
   const events = await fetchTennisbearEvents({ email, password }, { log: (m) => console.log(`  ${m}`) });
   console.log(`\n取得件数: ${events.length} (${Date.now() - started}ms)`);
   console.log(JSON.stringify(events, null, 2));
+  // 参加状態(overCard)の内訳。「よやく」に出るのは tbStatusLabel が '' でないものだけ(tennisbear.js 参照)
+  const counts = new Map();
+  for (const ev of events) {
+    const key = `${ev.tbStatus || '(なし)'} / ${ev.tbStatusType || '(なし)'}${tbStatusLabel(ev) ? '' : '  ← カードには出さない'}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  console.log('\n--- 参加状態の内訳(文言 / 色種別) ---');
+  for (const [k, n] of counts) console.log(`  ${n}件  ${k}`);
   const people = [{ label: process.env.LABEL || 'A', reservations: [], tennisbear: { events } }];
   console.log('\n--- LINEに返信される形(テキスト版。都の予約は 0 件として) ---');
   console.log(formatReply(people));
