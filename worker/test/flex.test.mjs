@@ -210,6 +210,34 @@ const TB = [
   { source: 'tennisbear', id: '2', title: '朝練', date: '2026-09-08', start: '09:00', end: '11:00', facility: '', organizer: true },
 ];
 
+test('flex: テニスベアの参加状態はイベント名の右に小さく。未確定はオレンジ、中止などはグレー、確定(緑・青)は出さない、終了済みは薄いグレー', () => {
+  const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagOrange' };
+  const joined = { ...TB[1], tbStatus: '参加', tbStatusType: 'tagGreen' };
+  const msg = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [waiting, joined] } }], opts);
+  const spans = find(msg.contents, (n) => n.type === 'span');
+  const st = spans.find((s) => s.text === '  キャンセル待ち');
+  assert.ok(st, '文言が出る');
+  assert.equal(st.color, '#C2410C');
+  assert.equal(st.weight, 'bold');
+  assert.ok(!spans.some((s) => s.text.includes('参加')), '確定した参加は出さない');
+  // 文言はイベント名の直後(コート名より前)
+  const all = texts(msg.contents).join('');
+  assert.ok(all.indexOf('🐻 ストローク多め練') < all.indexOf('  キャンセル待ち') && all.indexOf('  キャンセル待ち') < all.indexOf('\n亀戸中央公園テニスコート'));
+  // 中止などはグレー(強調しない)
+  const callOff = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '中止', tbStatusType: 'textGray' }] } }], opts);
+  assert.equal(find(callOff.contents, (n) => n.type === 'span' && n.text === '  中止')[0].color, '#9CA3AF');
+  // 終了済みの行は他の文字と同じ薄いグレー
+  const past = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...waiting, date: '2026-09-02', start: '08:00', end: '10:00' }] } }], { today: '2026-09-02', nowHHMM: '12:00' });
+  assert.equal(find(past.contents, (n) => n.type === 'span' && n.text === '  キャンセル待ち')[0].color, '#B0B5BD');
+  // 都の予約とまとまった行(tbTitle)でも 🐻 イベント名の右に出る
+  const site = [{ id: '2026000009', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園', status: '支払済' }];
+  const ev = { source: 'tennisbear', id: '1621297', title: 'ストローク多め練', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園Ａ', placeCode: '0100010020', tbStatus: '承認待ち', tbStatusType: 'tagOrange' };
+  const merged = buildReservationFlex([{ label: 'A', reservations: site, tennisbear: { events: [ev] } }], opts);
+  const mt = texts(merged.contents).join('');
+  assert.ok(mt.indexOf('\n🐻 ストローク多め練') < mt.indexOf('  承認待ち'), 'まとまった行でも状態が出る');
+  assert.ok(!texts(msg.contents).join('').includes('承認待ち'));
+});
+
 test('flex(§15): テニスベアの行は 🐻 イベント名 + コート名、都の行と日付順に混ざり、キャンセルボタンは付かない', () => {
   const site = A.map((r) => ({ ...r, cancelData: DATA }));
   const msg = buildReservationFlex([{ label: 'ゆうたそ', reservations: site, tennisbear: { events: TB } }], opts);

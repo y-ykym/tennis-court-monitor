@@ -136,6 +136,22 @@ test('mergeSameSlot: 1 つの都の予約に 2 件ぶら下げない。相手の
   assert.deepEqual(mergeSameSlot([], [SAME_TB]), [SAME_TB]);
 });
 
+test('format: テニスベアの参加状態(キャンセル待ちなど)はイベント名の後ろに [ ] で。確定(緑)は出さない', () => {
+  const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagOrange' };
+  const joined = { ...TB[1], tbStatus: '参加', tbStatusType: 'tagGreen' };
+  const text = formatReply([{ label: 'A', reservations: [], tennisbear: { events: [waiting, joined] } }], { today: '2026-09-02' });
+  assert.equal(
+    text,
+    ['📅 予約一覧(9/2 現在)', '・A  9/8(火)  9:00-11:00 🐻 朝練', '・A  9/22(火) 19:00-21:00 🐻 ストローク多め練 [キャンセル待ち](亀戸中央公園テニスコート)'].join('\n')
+  );
+  // 都の予約とまとまった行にも状態を引き継ぐ
+  const rows = mergedRows({ label: 'A', reservations: [SAME_SITE], tennisbear: { events: [{ ...SAME_TB, tbStatus: '承認待ち', tbStatusType: 'tagOrange' }] } });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].tbStatus, '承認待ち');
+  const merged = formatReply([{ label: 'A', reservations: [SAME_SITE], tennisbear: { events: [{ ...SAME_TB, tbStatus: '承認待ち', tbStatusType: 'tagOrange' }] } }], { today: '2026-09-18' });
+  assert.equal(merged, ['📅 予約一覧(9/18 現在)', '・A  9/22(火) 19:00-21:00 大島小松川公園 🐻 ストローク多め練 [承認待ち]'].join('\n'));
+});
+
 test('mergedRows / format: まとまった行は 1 件と数え、公園名のうしろに 🐻 イベント名を出す', () => {
   const p = { label: 'A', reservations: [SAME_SITE], tennisbear: { events: [SAME_TB] } };
   assert.equal(mergedRows(p).length, 1);
