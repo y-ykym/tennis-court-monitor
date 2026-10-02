@@ -129,6 +129,10 @@ export function normalizeEvent(ev) {
   };
 }
 
+// 「中止」の状態か(主催者がイベントを中止にしたとき。API の実測: { text: "中止", colorType: "tagDarkGray" })。
+// カードではオレンジ(= まだ参加できるか決まっていない)ではなくグレーで出す(2026-10-02 本人決定)。色種別か文言のどちらかで判定
+export const isCallOffStatus = (r) => r?.tbStatusType === 'tagDarkGray' || r?.tbStatus === '中止';
+
 // 「よやく」の行に出す参加状態の文言。overCard の文言があればそのまま(普通に参加・主催している予定は null で来るので何も出ない)。
 // 当初は色種別(colorType)で出す・出さないを分けたが、実測でキャンセル待ちが tagGreen だったため線引きをやめた(2026-10-02)
 export function tbStatusLabel(r) {

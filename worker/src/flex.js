@@ -43,7 +43,7 @@
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
 import { POP_ALERT } from './weather.js';
-import { EVENT_INFO_URL, tbStatusLabel } from './tennisbear.js';
+import { EVENT_INFO_URL, tbStatusLabel, isCallOffStatus } from './tennisbear.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
@@ -82,8 +82,10 @@ const COLOR_WARN_BG = '#FFF7E6'; // ペナルティ警告
 const COLOR_WARN_FG = '#8A4B00';
 const COLOR_PANEL_BG = '#F8FAFC';
 const COLOR_RAIN = '#DC2626'; // 降水確率が高いときの数字(フェーズ6)
-const COLOR_STATUS_BG = '#FFEDD5'; // テニスベアの参加状態ラベル(キャンセル待ちなど。2026-10-02)。オレンジ
+const COLOR_STATUS_BG = '#FFEDD5'; // テニスベアの参加状態ラベル(キャンセル待ち・承認待ちなど「まだ決まっていない」。2026-10-02)。オレンジ
 const COLOR_STATUS_FG = '#C2410C';
+const COLOR_CALLOFF_BG = '#E5E7EB'; // 「中止」のラベル(濃いグレー。サイトの色分けと同じ。2026-10-02 本人決定)
+const COLOR_CALLOFF_FG = '#374151';
 const COLOR_STATUS_PAST_BG = '#F3F4F6'; // 終了済みの行の参加状態ラベル(薄いグレー)
 
 function toUtcDate(iso) {
@@ -174,7 +176,7 @@ function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
   // (テニスベアだけの行は entry() が右端にラベル statusPill を置く)
   const statusSpan = () => {
     const st = tbStatusLabel(r);
-    if (st) spans.push(span(`  ${st}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_STATUS_FG }));
+    if (st) spans.push(span(`  ${st}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : isCallOffStatus(r) ? COLOR_CALLOFF_FG : COLOR_STATUS_FG }));
   };
   if (isTennisbear(r)) {
     spans.push(span(`\n🐻 ${r.title || 'イベント'}`, { size: 'sm', weight: 'bold', color: main }));
@@ -202,7 +204,7 @@ function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
       flex: 1,
       margin: 'md',
       contents: [
-        { type: 'box', layout: 'horizontal', alignItems: 'center', contents: [{ type: 'text', flex: 0, contents: [timeSpan] }, statusPill(st, past)] },
+        { type: 'box', layout: 'horizontal', alignItems: 'center', contents: [{ type: 'text', flex: 0, contents: [timeSpan] }, statusPill(r, st, past)] },
         ...(rest.length ? [{ type: 'text', wrap: true, lineSpacing: '5px', margin: '5px', contents: rest }] : []),
       ],
     };
@@ -249,17 +251,19 @@ function cancelPill(r, data) {
 }
 
 // 参加状態ラベル(テニスベアの行。時間の右。キャンセルピルと同じ形で、押せない)。文言は API のまま(例「キャンセル待ち」)。
-// 終了済みの行は薄いグレー。見た目を揃えるためパディングと文字サイズはキャンセルピルと同じ
-function statusPill(label, past) {
+// オレンジ = キャンセル待ち・承認待ちなど「まだ参加できるか決まっていない」、濃いグレー = 中止、終了済みの行は薄いグレー。
+// 見た目を揃えるためパディングと文字サイズはキャンセルピルと同じ
+function statusPill(r, label, past) {
+  const [bg, fg] = past ? [COLOR_STATUS_PAST_BG, COLOR_PAST] : isCallOffStatus(r) ? [COLOR_CALLOFF_BG, COLOR_CALLOFF_FG] : [COLOR_STATUS_BG, COLOR_STATUS_FG];
   return {
     type: 'box',
     layout: 'vertical',
     flex: 0,
     margin: 'md',
-    backgroundColor: past ? COLOR_STATUS_PAST_BG : COLOR_STATUS_BG,
+    backgroundColor: bg,
     cornerRadius: 'xl',
     paddingAll: '6px',
-    contents: [text(label, { size: 'xxs', weight: 'bold', color: past ? COLOR_PAST : COLOR_STATUS_FG })],
+    contents: [text(label, { size: 'xxs', weight: 'bold', color: fg })],
   };
 }
 
