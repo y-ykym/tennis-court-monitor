@@ -26,8 +26,8 @@
 //   │ │9/22│ 🐻 ストローク多め練              │  ← テニスベアの行: 🐻 + イベント名、その下にコート名。キャンセルボタンは付けない
 //   │ │ 火 │ 亀戸中央公園テニスコート         │     行をタップするとテニスベアのイベント詳細ページが開く(uri。2026-09-26)
 //   │ ┌────┐ 9:00 - 11:00                    │
-//   │ │9/27│ 🐻 朝練  キャンセル待ち          │  ← 参加状態が未確定(キャンセル待ち・申込中など)や中止のときだけ、イベント名の右に
-//   │ │ 日 │ 猿江恩賜公園テニスコート         │     小さく文言を添える(2026-10-02。未確定はオレンジ、それ以外はグレー。確定した参加・主催は何も出さない)
+//   │ │9/27│ 🐻 朝練  キャンセル待ち          │  ← 参加状態(キャンセル待ちなど)が API に入っているときだけ、イベント名の右に小さくオレンジで添える
+//   │ │ 日 │ 猿江恩賜公園テニスコート         │     (2026-10-02。普通に参加・主催している予定は API が null を返すので何も出ない)
 //   テニスベアだけ失敗 → カード末尾に小さく「🐻 テニスベアの取得に失敗しました」。都だけ失敗 → 「繋がりませんでした」の下に予定を出す
 //
 // 左の日付タイルは 土=青 / 日祝=赤 / 平日=グレー / 終了=薄グレー。時間は太字(md)、公園名は小さめ、
@@ -42,7 +42,7 @@
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
 import { POP_ALERT } from './weather.js';
-import { EVENT_INFO_URL, tbStatusLabel, isPendingStatus } from './tennisbear.js';
+import { EVENT_INFO_URL, tbStatusLabel } from './tennisbear.js';
 
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
@@ -81,7 +81,7 @@ const COLOR_WARN_BG = '#FFF7E6'; // ペナルティ警告
 const COLOR_WARN_FG = '#8A4B00';
 const COLOR_PANEL_BG = '#F8FAFC';
 const COLOR_RAIN = '#DC2626'; // 降水確率が高いときの数字(フェーズ6)
-const COLOR_STATUS_PENDING = '#C2410C'; // テニスベアの未確定の参加状態(キャンセル待ちなど。2026-10-02)
+const COLOR_STATUS = '#C2410C'; // テニスベアの参加状態(キャンセル待ちなど。2026-10-02)
 
 function toUtcDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -167,12 +167,10 @@ function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
   const relSpan = () => {
     if (rel) spans.push(span(`  ${rel}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON }));
   };
-  // テニスベアの参加状態(キャンセル待ちなど。出す条件は tennisbear.js の tbStatusLabel)。イベント名の右に小さく
+  // テニスベアの参加状態(キャンセル待ちなど。tennisbear.js の tbStatusLabel)。イベント名の右に小さくオレンジ、終了済みは薄いグレー
   const statusSpan = () => {
     const st = tbStatusLabel(r);
-    if (!st) return;
-    const color = past ? COLOR_PAST : isPendingStatus(r) ? COLOR_STATUS_PENDING : COLOR_MUTED;
-    spans.push(span(`  ${st}`, { size: 'xs', weight: 'bold', color }));
+    if (st) spans.push(span(`  ${st}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_STATUS }));
   };
   if (isTennisbear(r)) {
     spans.push(span(`\n🐻 ${r.title || 'イベント'}`, { size: 'sm', weight: 'bold', color: main }));

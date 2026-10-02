@@ -210,22 +210,22 @@ const TB = [
   { source: 'tennisbear', id: '2', title: '朝練', date: '2026-09-08', start: '09:00', end: '11:00', facility: '', organizer: true },
 ];
 
-test('flex: テニスベアの参加状態はイベント名の右に小さく。未確定はオレンジ、中止などはグレー、確定(緑・青)は出さない、終了済みは薄いグレー', () => {
-  const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagOrange' };
-  const joined = { ...TB[1], tbStatus: '参加', tbStatusType: 'tagGreen' };
+test('flex: テニスベアの参加状態はイベント名の右に小さくオレンジ太字。状態なし(普通の参加)は何も足さない。終了済みは薄いグレー', () => {
+  const waiting = { ...TB[0], tbStatus: 'キャンセル待ち', tbStatusType: 'tagGreen' };
+  const joined = { ...TB[1], tbStatus: '', tbStatusType: '' };
   const msg = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [waiting, joined] } }], opts);
   const spans = find(msg.contents, (n) => n.type === 'span');
   const st = spans.find((s) => s.text === '  キャンセル待ち');
   assert.ok(st, '文言が出る');
   assert.equal(st.color, '#C2410C');
   assert.equal(st.weight, 'bold');
-  assert.ok(!spans.some((s) => s.text.includes('参加')), '確定した参加は出さない');
+  assert.equal(spans.filter((s) => s.weight === 'bold' && s.size === 'xs' && s.color === '#C2410C').length, 1, '状態の span は 1 つだけ(朝練には付かない)');
   // 文言はイベント名の直後(コート名より前)
   const all = texts(msg.contents).join('');
   assert.ok(all.indexOf('🐻 ストローク多め練') < all.indexOf('  キャンセル待ち') && all.indexOf('  キャンセル待ち') < all.indexOf('\n亀戸中央公園テニスコート'));
-  // 中止などはグレー(強調しない)
+  // 色種別が違っても同じ見え方(色で線引きしない)
   const callOff = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...TB[0], tbStatus: '中止', tbStatusType: 'textGray' }] } }], opts);
-  assert.equal(find(callOff.contents, (n) => n.type === 'span' && n.text === '  中止')[0].color, '#9CA3AF');
+  assert.equal(find(callOff.contents, (n) => n.type === 'span' && n.text === '  中止')[0].color, '#C2410C');
   // 終了済みの行は他の文字と同じ薄いグレー
   const past = buildReservationFlex([{ label: 'A', reservations: [], tennisbear: { events: [{ ...waiting, date: '2026-09-02', start: '08:00', end: '10:00' }] } }], { today: '2026-09-02', nowHHMM: '12:00' });
   assert.equal(find(past.contents, (n) => n.type === 'span' && n.text === '  キャンセル待ち')[0].color, '#B0B5BD');
