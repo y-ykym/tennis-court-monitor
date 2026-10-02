@@ -14,11 +14,18 @@
 //     placeCode: string,        // テニスベアの施設 ID(place.code)。都の予約と同じ枠かの突き合わせに使う(courts.js)
 //     lat, lng: number|null,    // コートの緯度経度(place.lat/lng)。台帳に無いコート(都営以外)の天気に使う
 //     organizer: boolean,       // 主催かどうか(myInfo.isOrganizer)。表示には使わないが保持
+//     tbStatus: string,         // 参加状態の文言(overCard.text。例 "キャンセル待ち")。マイページ「予定(主催・参加イベント一覧)」の
+//                               //   ステータス列と同じもの。無ければ ''(2026-10-02 追加)
+//     tbStatusType: string,     // その色種別(overCard.colorType。tagOrange = 申込中・キャンセル待ちなど未確定 / tagGreen・tagBlue = 確定)。無ければ ''
 //   }
 //
 // 通信の流れ(2026-09-17 に実機で調査。JSON API なので HTML 解析も Shift_JIS も不要):
 //   1. POST /api/v3/auth/login/email   { email, password } → { user, token: { accessToken } }
 //   2. GET  /api/v3/events/me/future   Authorization: Bearer <accessToken> → イベントの配列
+//
+// 参加状態(2026-10-02 に公開 JS で確認): 1 件の overCard { text, colorType } が、サイトのマイページで
+//   「ステータス」列に出る文字そのもの(サイト側は text をそのまま表示し、colorType で色を変えている)。
+//   未ログインの検索 API では全件 null なので、見ている本人の参加状態を表す項目。文言の一覧は API 側で決まる
 //
 // 方針:
 //   - 「よやく」の返信は都の取得と並行で走らせ、こちらが遅れても都の予約だけは必ず返す(上限は呼び出し側で 12 秒程度)
@@ -115,8 +122,27 @@ export function normalizeEvent(ev) {
     lat: Number.isFinite(ev.place?.lat) ? ev.place.lat : null,
     lng: Number.isFinite(ev.place?.lng) ? ev.place.lng : null,
     organizer: ev.myInfo?.isOrganizer === true,
+    tbStatus: typeof ev.overCard?.text === 'string' ? ev.overCard.text.trim() : '',
+    tbStatusType: typeof ev.overCard?.colorType === 'string' ? ev.overCard.colorType : '',
   };
 }
+
+// 確定した参加状態の色種別(サイトでは緑・青の控えめな表示)。これらは「よやく」のカードに出さない:
+// 普段どおり参加できる予定にまで文字を足すとカードが騒がしくなり、主催の印は付けない決定(§15.2)とも合うため。
+// それ以外(tagOrange = キャンセル待ち・申込中・承認待ちなど未確定 / その他 = 中止など)は文言をそのまま出す。
+// 実機で出てきた文言を見て変えたくなったらここを直す
+const SETTLED_STATUS_TYPES = new Set(['tagGreen', 'tagBlue']);
+
+// 「よやく」の行に出す参加状態の文言。出さないときは ''
+export function tbStatusLabel(r) {
+  const s = r?.tbStatus;
+  if (typeof s !== 'string' || !s) return '';
+  if (SETTLED_STATUS_TYPES.has(r.tbStatusType)) return '';
+  return s;
+}
+
+// 未確定(申込中・キャンセル待ちなど)の状態か。カードで文字を強調する判定に使う
+export const isPendingStatus = (r) => r?.tbStatusType === 'tagOrange';
 
 // 配列 → 正規化済みの配列(形が崩れた件は飛ばす)。API が配列以外を返したら例外
 export function normalizeEvents(payload) {
