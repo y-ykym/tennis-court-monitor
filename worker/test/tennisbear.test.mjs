@@ -25,6 +25,7 @@ test('tennisbear: 1 件を都の予約と同じ形に(0 埋めの HH:MM・終了
     lat: 35.70064,
     lng: 139.83786,
     organizer: false,
+    organizerName: '',
     tbStatus: '',
     tbStatusType: '',
   });

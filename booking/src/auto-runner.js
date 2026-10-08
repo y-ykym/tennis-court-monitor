@@ -104,7 +104,8 @@ export function createAutoRunner({
   scrape, // async () => Slot[]
   queue, // booking-queue.js
   state, // auto-state.js
-  worker, // { heartbeat(payload) → Promise<{ dates, slots }>, addExcludedSlots(slots) → Promise, tennisbear?(person) → Promise<{ configured, events }> }
+  worker, // { heartbeat(payload) → Promise<{ dates, slots }>, addExcludedSlots(slots) → Promise, tennisbear?(person) → Promise<{ configured, events }>,
+  //         calendarSync?(person) → void(フェーズ11。予約成立の直後に Worker へ同期を頼む。結果は待たない) }
   book, // async (candidate, { credentials, beforeApply }) → reserve() の結果
   credentialsFor, // (person) → { userId, password, label } | null
   notify = async () => {}, // (flexMessage, what) → LINE に push(server の lineQueue.send)
@@ -372,6 +373,14 @@ export function createAutoRunner({
       const start = startHHMM(c.startHour);
       const end = startHHMM(Number(c.startHour) + 2);
       state.addOwn({ key, person: c.person, id: result.reservationNo || '', date: c.date, start, end, park: c.park, facility: park?.name || c.facility });
+      // フェーズ11: その人の Google カレンダーの同期を Worker に頼む(待たない。配線が無ければ何もしない)
+      if (typeof worker.calendarSync === 'function') {
+        try {
+          worker.calendarSync(c.person);
+        } catch (e) {
+          log(`カレンダー同期の依頼に失敗(毎時の同期で載ります): ${e.message}`);
+        }
+      }
       let cancelData = null;
       if (isFreeCancelLastDay(c.date, today) && result.reservationNo && signingSecret) {
         try {

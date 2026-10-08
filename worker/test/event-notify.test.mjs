@@ -59,6 +59,7 @@ const ev = (over = {}) => ({
   lat: 35.68,
   lng: 139.83,
   organizer: false,
+  organizerName: 'Kei', // 2026-10-08 フェーズ11 で normalizeEvent に追加(organizer.name)
   // 参加状態(overCard)は検索 API(未ログイン)では null なので常に空(2026-10-02)
   tbStatus: '',
   tbStatusType: '',
@@ -164,8 +165,8 @@ test('events: 一覧の 1 件を整形(tennisbear.js と同じ形 + 満員・中
   assert.deepEqual(normalizeSearchItem(raw({ organizer: { id: 2, name: ' たかさん ', imageUrl: 'http://example.com/a.png' } })).hostName, 'たかさん');
   assert.equal(normalizeSearchItem(raw({ organizer: { id: 2, name: 'x', imageUrl: 'http://example.com/a.png' } })).hostIcon, '');
   assert.equal(normalizeSearchItem(raw({ organizer: { id: 2, name: 'x', imageUrl: `https://e.com/${'a'.repeat(2000)}` } })).hostIcon, '');
-  assert.deepEqual(normalizeSearchItem(raw({ organizer: null })), ev({ hostName: '', hostIcon: '' }));
-  assert.deepEqual(normalizeSearchItem(raw({ organizer: { name: 5, imageUrl: 5 } })), ev({ hostName: '', hostIcon: '' }));
+  assert.deepEqual(normalizeSearchItem(raw({ organizer: null })), ev({ hostName: '', hostIcon: '', organizerName: '' }));
+  assert.deepEqual(normalizeSearchItem(raw({ organizer: { name: 5, imageUrl: 5 } })), ev({ hostName: '', hostIcon: '', organizerName: '' }));
   // 団体(circle)はカードに載せないので整形にも持たない(2026-09-27 本人判断)
   assert.equal('hostCircle' in normalizeSearchItem(raw({ circle: { id: 19532, name: '荒川エイト' } })), false);
 });

@@ -14,6 +14,7 @@
 //     placeCode: string,        // テニスベアの施設 ID(place.code)。都の予約と同じ枠かの突き合わせに使う(courts.js)
 //     lat, lng: number|null,    // コートの緯度経度(place.lat/lng)。台帳に無いコート(都営以外)の天気に使う
 //     organizer: boolean,       // 主催かどうか(myInfo.isOrganizer)。表示には使わないが保持
+//     organizerName: string,    // 主催者の名前(organizer.name。無ければ '')。フェーズ11 のカレンダーの説明欄に使う(2026-10-08 追加)
 //     tbStatus: string,         // 参加状態の文言(overCard.text。例 "キャンセル待ち")。マイページ「予定(主催・参加イベント一覧)」の
 //                               //   ステータス列と同じもの。無ければ ''(2026-10-02 追加)
 //     tbStatusType: string,     // その色種別(overCard.colorType。実測: キャンセル待ち = tagGreen)。表示には使わないが保持。無ければ ''
@@ -124,6 +125,8 @@ export function normalizeEvent(ev) {
     lat: Number.isFinite(ev.place?.lat) ? ev.place.lat : null,
     lng: Number.isFinite(ev.place?.lng) ? ev.place.lng : null,
     organizer: ev.myInfo?.isOrganizer === true,
+    // 主催者の名前(organizer.name。検索 API では全件に入る。me/future に無ければ '')。フェーズ11 のカレンダーの説明欄に使う
+    organizerName: typeof ev.organizer?.name === 'string' ? ev.organizer.name.trim() : '',
     tbStatus: typeof ev.overCard?.text === 'string' ? ev.overCard.text.trim() : '',
     tbStatusType: typeof ev.overCard?.colorType === 'string' ? ev.overCard.colorType : '',
   };

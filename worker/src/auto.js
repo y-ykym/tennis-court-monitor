@@ -317,7 +317,8 @@ export async function fetchAllPlans({ fetchResults, fetchTb } = {}) {
 
 // このモジュールが扱うパス(/auto/*)なら Response、それ以外は null
 //   fetchEvents: /auto/tennisbear のテニスベア取得(テストで差し替え)。fetchResults / fetchTb: /auto/plans の A・B の予定の取得(index.js が渡す)
-export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEvents, fetchResults, fetchTb } = {}) {
+//   runSync: /auto/calendar-sync(フェーズ11。Pi が予約成立の直後に呼ぶ・手動の確認にも使う)の同期関数(index.js が渡す。{ persons, dryRun, reason } を受ける)
+export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEvents, fetchResults, fetchTb, runSync } = {}) {
   const url = new URL(request.url);
   const p = url.pathname;
   if (!p.startsWith('/auto/')) return null;
@@ -356,6 +357,16 @@ export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEve
   }
   if (p === '/auto/plans' && request.method === 'GET') {
     return Response.json(await fetchAllPlans({ fetchResults, fetchTb }));
+  }
+  if (p === '/auto/calendar-sync' && request.method === 'POST') {
+    if (typeof runSync !== 'function') return new Response('not implemented', { status: 501 });
+    if (json.person !== undefined && json.person !== 'A' && json.person !== 'B') return new Response('bad request', { status: 400 });
+    try {
+      return Response.json(await runSync({ persons: json.person ? [json.person] : null, dryRun: json.dryRun === true, reason: typeof json.reason === 'string' ? json.reason.slice(0, 20) : 'manual' }));
+    } catch (e) {
+      console.error(`[gcal] /auto/calendar-sync に失敗: ${e.message}`);
+      return Response.json({ error: 'カレンダーの同期に失敗しました' }, { status: 502 });
+    }
   }
   if (p === '/auto/tennisbear' && request.method === 'POST') {
     if (json.person !== 'A' && json.person !== 'B') return new Response('bad request', { status: 400 });
