@@ -23,7 +23,7 @@ import { autoStatus } from './auto.js';
 // 月初(1 日 9:00 JST = 0:00 UTC)に届く手動メンテのお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける
 export const MAINTENANCE_CRON = '0 0 1 * *';
 export const MAINTENANCE_TEXT = [
-  '🛠 月初のお知らせ: 自宅の予約サーバー(pi)のメンテ',
+  '🛠 月初のお知らせ: 自宅の予約サーバー(Pi)のメンテ',
   'OS・カーネル・Docker は毎朝自動で更新されていますが、予約サイトを開くブラウザ(Chromium)だけは手動で入れ直す必要があります(数か月に 1 回で十分)。',
   '',
   'Mac から:',

@@ -1,6 +1,6 @@
 # 自宅サーバー(Raspberry Pi 5)で予約支援サーバーを動かす
 
-自宅回線(自宅のホームルーター)から予約サイトへ出ると reCAPTCHA v3 で通り、「予約」までサーバーが自動で押せます。
+自宅回線(モバイル回線のホームルーター)から予約サイトへ出ると reCAPTCHA v3 で通り、「予約」までサーバーが自動で押せます。
 このディレクトリの `docker-compose.yml` で、サーバー本体・Cloudflare Tunnel・URL 登録の3つをまとめて起こします。
 
 ```
@@ -46,7 +46,7 @@ Imager v2.0 系はステップ形式のウィザード。順に:
 | 画面 | 入力 |
 |---|---|
 | Device / OS / Storage | Raspberry Pi 5 / **Raspberry Pi OS Lite (64-bit)**(「OS (other)」の中) / SDHC Card(32GB) |
-| Hostname | `pi` |
+| Hostname | 任意(Mac の `~/.ssh/config` に `Host pi` として HostName・User を控え、以下は `ssh pi` で入る) |
 | Localisation | Capital city `Tokyo`(Time zone が `Asia/Tokyo` になる)、Keyboard `jp` |
 | User | 任意 / パスワード(非常用。必ずメモ) |
 | Wi-Fi | 有線 LAN なので空欄で Next |
@@ -75,7 +75,7 @@ echo 'PasswordAuthentication no' | sudo tee /etc/ssh/sshd_config.d/10-no-passwor
 sudo sshd -t && sudo systemctl restart ssh
 ```
 
-Raspberry Pi Connect は Imager で Sign in しておけば初回起動で紐づく(`rpi-connect status` で `Signed in: yes`)。connect.raspberrypi.com の Devices に `pi` が出る。
+Raspberry Pi Connect は Imager で Sign in しておけば初回起動で紐づく(`rpi-connect status` で `Signed in: yes`)。connect.raspberrypi.com の Devices に Pi のホスト名が出る。
 
 ## §2 組み立てと初回起動(ケース無し)
 

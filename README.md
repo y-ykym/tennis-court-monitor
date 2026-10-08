@@ -417,11 +417,11 @@ npx wrangler tail --format pretty
 - 通知側の設定: GitHub Secrets に `BOOKING_SIGNING_SECRET` と `BOOKING_BASE_URL=https://<WorkerのURL>`(どちらも登録済み。
   両方あるときだけ通知カードに予約ボタンが付く)、`LABEL_A` / `LABEL_B`(予約者の呼び名。設定した人の分だけ「<呼び名>で予約」が出る。
   どちらも無ければボタン無し)。ボタン付きは1通 12 枠まで、多いときは最大 5 通に分けて送る。通知と同時に `/warmup` を叩く
-- 状態(2026-09-13): **稼働中**。自宅の Raspberry Pi 5(ホスト名 `pi`、NVMe 起動)で Docker 3 サービスが常時動作。
+- 状態(2026-09-13): **稼働中**。自宅の Raspberry Pi 5(NVMe 起動)で Docker 3 サービスが常時動作。
   実枠で 3 回成立(最速 40 秒・完全自動)。**現在の状態・運用・残 TODO は `docs/引き継ぎ_フェーズ2運用.md`**。
   同日に追加した仕組み: Pi の生存監視(毎時、LINE に ⚠️/✅)、OS・Docker の自動更新(毎朝 4:00、必要なら 4:30 再起動)、
   月初のメンテのお知らせ、結果カードの持ち越し再送、「予約」後に一覧で成立を確かめる判定、Tunnel の見張り役。
-  自宅回線(自宅のホームルーター)は夜に切れやすく、その間のボタンは「繋がりません」になる(1〜2 分後に押し直す。2026-09-26 に回線が安定する予定)
+  自宅回線(モバイル回線のホームルーター)は夜に切れやすく、その間のボタンは「繋がりません」になる(1〜2 分後に押し直す。2026-09-26 に回線が安定する予定)
 - 検証に使った Cloud Run と GitHub Actions からの予約は **2026-09-07 に撤去済み**: GCP プロジェクト `tennis-booking-xxxxxxxx` を削除(30 日以内なら `gcloud projects undelete` で復元可)、
   `booking/deploy.sh`・`.github/workflows/reserve.yml`・`booking/scripts/notify-result.mjs` を削除、GitHub Secrets の `SITE_USER_A` / `SITE_PASS_A` / `LABEL_A`(Actions 専用)を削除。
   2026-09-13 に GCS 保存(`profile-store.js`・`@google-cloud/storage`)と Node HTTP 版の高速経路(`site-http.js`)、ブラウザ向けの待機画面・予約者選択画面も削除

@@ -45,7 +45,7 @@ EOS
 fi
 
 step "1/7 パッケージの更新と必要ツール(毎回実行。既に最新なら何も変わらない)"
-# 自宅回線(自宅のホームルーター)は一瞬切れることがあるので、apt のダウンロードは自動で再試行させる
+# 自宅回線(モバイル回線のホームルーター)は一瞬切れることがあるので、apt のダウンロードは自動で再試行させる
 echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y
@@ -92,7 +92,9 @@ fi
 chmod +x "$PC_DIR"/*.sh 2>/dev/null || true
 
 step "6/7 Tunnel の見張り(systemd timer。quick tunnel が自力で戻れないときに再起動する)"
-sudo install -m 644 "$PC_DIR/systemd/tunnel-watchdog.service" "$PC_DIR/systemd/tunnel-watchdog.timer" /etc/systemd/system/
+# service の __USER__ は実行ユーザーに置き換えて設置する(ユーザー名を repo に書かないため)
+sed "s/__USER__/$USER/g" "$PC_DIR/systemd/tunnel-watchdog.service" | sudo tee /etc/systemd/system/tunnel-watchdog.service >/dev/null
+sudo install -m 644 "$PC_DIR/systemd/tunnel-watchdog.timer" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now tunnel-watchdog.timer
 echo "tunnel-watchdog.timer: $(systemctl is-active tunnel-watchdog.timer)(ログは journalctl -u tunnel-watchdog)"

@@ -23,7 +23,7 @@
 - 予約者: `SITE_USER_A`(呼び名 `LABEL_A`)と `SITE_USER_B`(`LABEL_B`)。値は GitHub Secrets / Worker Secrets / Pi の `.env`
 - ペナルティ: 利用日 ≤ 今日(JST)+3 日 の予約は取り消すとペナルティ(`worker/src/cancel-token.js` の `penaltyApplies`)。**利用日が今日から 4 日以上先なら、その日の 23:59 まで無料で取り消せる**
 - 署名鍵 `BOOKING_SIGNING_SECRET` は 3 か所(Actions / Worker / Pi)で同じ値。新しい通信経路の認証はこれを流用する
-- 自宅回線(自宅のホームルーター)は夜に不安定。2026-09-26 に安定する予定。Pi の生存監視(毎時、LINE に ⚠️/✅)は Worker Cron で稼働中
+- 自宅回線(モバイル回線のホームルーター)は夜に不安定。2026-09-26 に安定する予定。Pi の生存監視(毎時、LINE に ⚠️/✅)は Worker Cron で稼働中
 
 ## 2. 要件(本人と確定済み)
 

@@ -6,7 +6,7 @@ const slot = { park: '1050', date: '2026-09-30', startHour: 13, people: 2 };
 const bytes = (m) => Buffer.byteLength(JSON.stringify(m.contents), 'utf8');
 
 test('確認依頼カード: 開く URL がボタンに入り、予約者・期限が本文にある', () => {
-  const url = 'https://<WorkerのURL>/vnc?token=abc.def';
+  const url = 'https://example.workers.dev/vnc?token=abc.def';
   const m = buildChallengeFlex({ slot, facility: '亀戸中央公園', label: 'ゆう', url, minutes: 8 });
   assert.equal(m.type, 'flex');
   assert.equal(m.contents.footer.contents[0].action.uri, url);

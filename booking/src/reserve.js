@@ -62,7 +62,7 @@ const PURPOSE_VALUE = '1000_1030';
 // ログイン済み画面にだけある「ログアウト」リンク(ドロップダウン内で非表示のこともあるので attached で判定)
 const LOGOUT_SELECTOR = '[href*="gRsvWTransUserAttestationEndAction"], [onclick*="gRsvWTransUserAttestationEndAction"]';
 // 1ステップの待ち時間上限。環境変数 STEP_TIMEOUT_MS で延ばせる
-// (自宅回線(自宅のホームルーター)は夜間に遅延が数百 ms〜1 秒に跳ね、サイトも重くなるため 30 秒では足りないことがある。
+// (自宅回線(モバイル回線のホームルーター)は夜間に遅延が数百 ms〜1 秒に跳ね、サイトも重くなるため 30 秒では足りないことがある。
 //  サイトのセッションは約 10 分なので、60〜90 秒に延ばしても全体は収まる)
 const STEP_TIMEOUT = Number(process.env.STEP_TIMEOUT_MS) || 30000;
 // 画面遷移は DOM ができた時点で次へ進む(既定の load 待ちだと外部スクリプト(reCAPTCHA・チャットボット)の
