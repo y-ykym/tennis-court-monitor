@@ -7,7 +7,7 @@
 set -u
 cd "$(dirname "$0")"
 WORKER_URL=$(grep -E '^WORKER_URL=' .env 2>/dev/null | cut -d= -f2- || true)
-WORKER_URL=${WORKER_URL:-https://<WorkerのURL>}
+if [ -z "$WORKER_URL" ]; then echo "WORKER_URL が .env に無い(Worker の確認は飛ばす)"; fi
 hr() { printf '\n\033[1;36m-- %s\033[0m\n' "$*"; }
 
 hr "起動ディスクと空き容量"

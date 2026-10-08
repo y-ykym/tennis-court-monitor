@@ -1,4 +1,4 @@
-// Raspberry Pi(pi)の自動更新方針(2026-09-13 決定)。pi-init.sh §7 が /etc/apt/apt.conf.d/ に置く。
+// Raspberry Piの自動更新方針(2026-09-13 決定)。pi-init.sh §7 が /etc/apt/apt.conf.d/ に置く。
 // 「OS・カーネル・Docker を毎朝 4 時に自動で更新し、再起動が必要なら 4:30 に再起動する」。
 //
 //   入れる: Debian(通常・updates・security)、Raspberry Pi のカーネル/ファームウェア(archive.raspberrypi.com)、Docker(download.docker.com)

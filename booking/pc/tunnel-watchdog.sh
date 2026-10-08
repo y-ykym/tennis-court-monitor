@@ -2,7 +2,7 @@
 # ============================================================
 # Cloudflare Tunnel(quick tunnel)の見張り。systemd timer から 1 分ごとに呼ばれる。
 #
-# 背景: 自宅回線(自宅のホームルーター)の瞬断が長引くと、cloudflared は
+# 背景: 自宅回線(モバイル回線のホームルーター)の瞬断が長引くと、cloudflared は
 #   "Unauthorized: Tunnel not found" を返し続けて自力では復帰しない(2026-09-12 に実際に起きた)。
 #   quick tunnel は Cloudflare 側で忘れられると再発行が必要で、それにはプロセスの再起動しかない。
 #
