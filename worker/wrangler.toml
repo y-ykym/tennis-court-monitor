@@ -36,7 +36,7 @@ CANCEL_ENABLED = "1"
 #   "dry" = やることをログ(と /auto/calendar-sync の結果)に出すだけでカレンダーに触らない(初回の確認用。Pi の booking/pc/calendar-sync.sh --dry で見る)
 #   "off" = 何もしない(カレンダーの予定は残る)
 # 書き先・鍵は Secrets(GCAL_CLIENT_EMAIL / GCAL_PRIVATE_KEY / GCAL_CALENDAR_ID_A / GCAL_CALENDAR_ID_B)
-CALENDAR_SYNC = "dry"
+CALENDAR_SYNC = "on"
 
 # cron は UTC で書く(JST = UTC+9)。同じ時刻に複数の cron が当たっても、それぞれ別々に呼ばれる
 # (例: 毎月 1 日の 0:00 UTC は 3 本とも発火する)。どれが呼ばれたかは src/index.js の scheduled() が event.cron で振り分ける。
