@@ -16,6 +16,7 @@
 //     いったん載っていた予定がその状態になったら次の同期で消える
 //   - 今日(JST)以降だけ。過去の予定は触らない
 //   - タイトル「🎾 公園名」「🐻 イベント名」。場所欄は公園名・会場名。説明欄に予約番号・コート種類 / 主催者・URL
+//   - 色は黄色(colorId '5' = Google の「バナナ」。本人決定 2026-10-08)。色が違う予定は次の同期で直す
 //   - 予定の目印: extendedProperties.private { tennisBot: '1', tennisBotKey: 'site:<予約番号>' | 'tb:<イベントID>' }。
 //     目印の無い予定(手で作ったもの)には触らない
 //   - 取得に失敗した元(都 / テニスベア)の予定は、その回は削除しない(誤削除よけ)。追加・更新はする
@@ -38,6 +39,8 @@ export const ALERT_AFTER_MS = 6 * 60 * 60 * 1000;
 export const MSG_CALENDAR_ALERT =
   '⚠️ Google カレンダーへの同期が 6 時間以上失敗しています(認証または権限のエラー)。サービスアカウントの共有設定(「予定の変更」)と Worker の GCAL_* の Secrets を確認してください。直るまでこの知らせは繰り返しません';
 export const DESCRIPTION_FOOTER = '自動登録: テニス予約ボット(手で消しても次の同期で戻ります。消すなら LINE の「よやく」からキャンセル)';
+// 予定の色。Google の予定の色は 1〜11 の番号で、'5' が黄色(「バナナ」)。カレンダー自体の色とは別
+export const EVENT_COLOR_ID = '5';
 
 const JST_MS = 9 * 60 * 60 * 1000;
 export const jstTodayIso = (now = Date.now()) => new Date(now + JST_MS).toISOString().slice(0, 10);
@@ -124,6 +127,7 @@ export function eventBody(w) {
     description: w.description || '',
     start: { dateTime: toJstIso(w.startMs), timeZone: 'Asia/Tokyo' },
     end: { dateTime: toJstIso(w.endMs), timeZone: 'Asia/Tokyo' },
+    colorId: EVENT_COLOR_ID,
     extendedProperties: { private: { [BOT_MARK_KEY]: BOT_MARK_VALUE, [BOT_ID_KEY]: w.key } },
   };
 }
@@ -133,6 +137,7 @@ const sameEvent = (w, e) =>
   (e.summary || '') === w.summary &&
   (e.location || '') === (w.location || '') &&
   (e.description || '') === (w.description || '') &&
+  (e.colorId || '') === EVENT_COLOR_ID &&
   Date.parse(e.start?.dateTime || '') === w.startMs &&
   Date.parse(e.end?.dateTime || '') === w.endMs;
 
