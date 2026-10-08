@@ -98,6 +98,7 @@ test('calendar-sync: 都の予約 → 予定(今日以降・予約番号あり�
   assert.equal(body.end.dateTime, '2026-10-10T21:00:00+09:00');
   assert.equal(body.start.timeZone, 'Asia/Tokyo');
   assert.deepEqual(body.extendedProperties.private, { tennisBot: '1', tennisBotKey: 'site:2026100001' });
+  assert.equal(body.colorId, '5', '予定の色は黄色(バナナ)');
   // 今日の予約は対象(時刻が過ぎていても。過去の日だけ外す)
   assert.equal(wantedFromSite([{ ...SITE[0], date: '2026-10-08', start: '09:00' }], { now: NOW }).length, 1);
 });
@@ -123,6 +124,9 @@ test('calendar-sync: 差分 = 無いものは追加・違うものは更新・�
   const d = diffEvents(wanted, [same, changed, gone, goneTb, manual, dup]);
   assert.deepEqual(d.inserts.map((w) => w.key), ['tb:1621300']);
   assert.deepEqual(d.updates.map((u) => [u.id, u.w.key]), [['g2', 'tb:1621297']]);
+  // 色が付いていない(黄色にする前に作った)予定は更新に回る
+  const { colorId: _omit, ...uncolored } = { id: 'g7', ...eventBody(wanted[0]) };
+  assert.deepEqual(diffEvents([wanted[0]], [uncolored]).updates.map((u) => u.id), ['g7']);
   assert.deepEqual(d.deletes.map((x) => [x.id, x.reason]), [['g6', 'duplicate'], ['g3', 'gone'], ['g4', 'gone']]);
   // 都が取れなかった回: site: は消さない(tb: は消す)
   const d2 = diffEvents(wanted, [same, changed, gone, goneTb, manual], { allowDelete: { site: false, tb: true } });
