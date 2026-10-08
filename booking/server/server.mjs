@@ -55,7 +55,7 @@ import { createAutoState } from '../src/auto-state.js';
 import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 
 const require = createRequire(import.meta.url);
-const { sendHeartbeat, addExcludedSlots, fetchTennisbearPlans } = require('../../lib/auto-client.js');
+const { sendHeartbeat, addExcludedSlots, fetchTennisbearPlans, triggerCalendarSync } = require('../../lib/auto-client.js');
 const { AUTO_BOOKING } = require('../../lib/config.js');
 const { slotKey } = require('../../lib/auto-rules.js');
 // 従来の空き通知カード(予約ボタン付き)。予約直前に対象外になった枠を Pi から通知するのに使う。
@@ -208,6 +208,8 @@ async function runReserve(s, extra = {}) {
   s.result = result;
   s.message = result.message;
   log(`予約フロー終了: ${result.status} ${result.message}`);
+  // フェーズ11: 成立したら Worker にその人の Google カレンダーの同期を頼む(結果は待たない。自動予約は auto-runner が同じものを呼ぶ)
+  if (s.kind === 'manual' && result.status === 'success') requestCalendarSync(payload.person, 'booked');
   // 手動の結果は LINE にも送る(ボタンを押した本人以外にも分かるように)。自動予約のカードは auto-runner が送る
   if (s.kind === 'manual' && LINE.token && LINE.to && result.status !== 'dry_run') {
     await lineQueue.send(buildResultFlex({ slot, ...result }, s.label), '結果カード');
@@ -226,6 +228,17 @@ const AUTO_MODE = (() => {
   return 'off';
 })();
 const WORKER_URL = (process.env.WORKER_URL || process.env.BOOKING_PUBLIC_URL || '').replace(/\/$/, '');
+// フェーズ11: 予約が成立した直後に Worker へ「その人の Google カレンダーを同期して」と頼む(fire-and-forget。失敗してもログだけ。
+// Worker は毎時 0 分にも同じ同期をするので、ここが落ちても最大 1 時間遅れて載る)
+function requestCalendarSync(person, reason) {
+  if (!WORKER_URL || !SECRET || (person !== 'A' && person !== 'B')) return;
+  triggerCalendarSync(WORKER_URL, SECRET, person, { reason })
+    .then((r) => {
+      const st = r?.[person];
+      log(`[gcal] ${person} のカレンダー同期: ${r?.skipped ? `skipped(${r.skipped})` : st?.error ? `失敗 ${st.error}` : `追加 ${st?.inserted ?? '-'} / 更新 ${st?.updated ?? '-'} / 削除 ${st?.deleted ?? '-'}`}`);
+    })
+    .catch((e) => log(`[gcal] ${person} のカレンダー同期を頼めませんでした(毎時の同期で載ります): ${e.message}`));
+}
 let autoRunner = null;
 if (AUTO_MODE !== 'off') {
   if (!WORKER_URL || !SECRET) {
@@ -242,6 +255,7 @@ if (AUTO_MODE !== 'off') {
         heartbeat: (payload) => sendHeartbeat(WORKER_URL, SECRET, payload),
         addExcludedSlots: (slots) => addExcludedSlots(WORKER_URL, SECRET, slots),
         tennisbear: (person) => fetchTennisbearPlans(WORKER_URL, SECRET, person),
+        calendarSync: (person) => requestCalendarSync(person, 'auto-booked'),
       },
       credentialsFor: (person) => {
         const c = credentialsFor(person);

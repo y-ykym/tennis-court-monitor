@@ -10,3 +10,7 @@ booking/.debug/
 booking/debug-out/
 booking/server/public/
 booking/pc/.env
+# フェーズ11: Google サービスアカウントの JSON 鍵(repo には置かない。Worker Secrets に登録する)
+shared-calendar-*.json
+*gserviceaccount*.json
+*service-account*.json

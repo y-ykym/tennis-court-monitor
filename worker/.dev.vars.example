@@ -25,6 +25,17 @@ TB_PASS_A=
 TB_EMAIL_B=
 TB_PASS_B=
 
+# --- フェーズ11 Google カレンダー同期(サービスアカウント。要件定義書 §21) ---
+# GCAL_CLIENT_EMAIL: JSON 鍵の client_email。GCAL_PRIVATE_KEY: JSON 鍵の private_key(改行は "\n" のままでも実際の改行でも可)。
+# GCAL_CALENDAR_ID_A / _B: それぞれの Gmail アドレス(= メインカレンダーの ID)。B が未登録なら A だけ同期する。
+# サービスアカウントのメールを、各自のカレンダーの「設定と共有」に「予定の変更」で追加しておくこと
+GCAL_CLIENT_EMAIL=
+GCAL_PRIVATE_KEY=
+GCAL_CALENDAR_ID_A=
+GCAL_CALENDAR_ID_B=
+# 同期のモード("on" / "dry" = ログだけでカレンダーに触らない / "off"。本番は wrangler.toml の [vars])
+CALENDAR_SYNC=on
+
 # --- フェーズ2 / 1.6 で使う署名鍵(通知側 GitHub Secrets の BOOKING_SIGNING_SECRET と同じ値) ---
 # 「予約」ボタンの URL と、「キャンセル」ボタンの postback data の署名に使う
 BOOKING_SIGNING_SECRET=

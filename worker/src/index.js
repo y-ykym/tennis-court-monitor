@@ -25,6 +25,9 @@
 //   フェーズ10(src/event-notify.js): Cron(月・木 20:00 JST)→ テニスベアの新着イベント(近くの 6 コート・土日祝・初中級)を
 //                          日付ごとのカードで push。A・B の予定(都の予約 + テニスベアの参加予定)と重なる・隣接するものは除く。
 //                          「いべんと」→ 同じ条件の全イベントを同じカードで reply
+//   フェーズ11(src/calendar-sync.js): 毎時 0 分の Cron で、A・B の予定(都の予約 + テニスベアの確定参加)を各自の Google カレンダーへ同期
+//                          (追加・更新・削除。目印の無い予定には触らない)。Pi からの POST /auto/calendar-sync(予約成立の直後)と、
+//                          キャンセル完了直後の 1 件削除(removeCalendarEvent)も。認証はサービスアカウント(src/gcal.js)
 //   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠)。その「解除」「日を追加」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
@@ -38,8 +41,11 @@
 //   TB_EMAIL_A / TB_PASS_A                 A のテニスベアのメールアドレス・パスワード(フェーズ5。未登録なら黙って飛ばす)
 //   TB_EMAIL_B / TB_PASS_B                 B の同上
 //   BOOKING_SIGNING_SECRET     「予約」ボタン(フェーズ2)・「キャンセル」ボタン(フェーズ1.6)・利用者カードの画像URL(フェーズ7)の署名鍵。KV BOOKING_KV も必要(wrangler.toml)
+//   GCAL_CLIENT_EMAIL / GCAL_PRIVATE_KEY   Google サービスアカウントのメールと秘密鍵(フェーズ11。未登録なら同期しない)
+//   GCAL_CALENDAR_ID_A / GCAL_CALENDAR_ID_B 書き先のカレンダー ID(= 各自の Gmail アドレス。B が未登録なら A だけ)
 // 設定(wrangler.toml [vars]):
 //   CANCEL_ENABLED             "1" のときキャンセルボタンを出し、postback を受け付ける
+//   CALENDAR_SYNC              "off" のときフェーズ11 の同期を止める(既定 on)
 //
 // 方針:
 //   - LINE には即座に 200 を返す(署名不一致だけ 401)。取得と返信は ctx.waitUntil() で応答後に続ける。
@@ -71,6 +77,7 @@ import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } f
 import { CONTACT_COMMAND_TEXT, buildContactReply, MSG_CONTACT_FAILED } from './contacts.js';
 import { HELP_COMMAND_TEXT, buildHelpReply, MSG_HELP_FAILED } from './help.js';
 import { EVENT_COMMAND_TEXT, EVENT_NOTIFY_CRON, buildEventReply, runEventNotify, MSG_EVENT_FAILED } from './event-notify.js';
+import { runCalendarSync, removeCalendarEvent, siteKey } from './calendar-sync.js';
 import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANCEL_DECLINED, MSG_CANCEL_DISABLED, MSG_AUTO_UNAVAILABLE } from './messages.js';
 
 // 予約サイトからの取得全体の上限(waitUntil の30秒枠に返信の時間を残す)
@@ -122,6 +129,13 @@ export default {
     const auto = await handleAuto(request, env, ctx, {
       fetchResults: () => fetchAllReservations(env, { budgetMs: PLANS_FETCH_BUDGET_MS, retryUntilMs: PLANS_RETRY_UNTIL_MS, requestTimeoutMs: PLANS_REQUEST_TIMEOUT_MS }),
       fetchTb: () => fetchAllTennisbear(env),
+      // フェーズ11 /auto/calendar-sync(Pi が予約成立の直後に呼ぶ)。同期する人の分だけ都・テニスベアに取りに行く(slots)
+      runSync: (opts) =>
+        runCalendarSync(env, {
+          ...opts,
+          fetchResults: (slots) => fetchAllReservations(env, { budgetMs: PLANS_FETCH_BUDGET_MS, retryUntilMs: PLANS_RETRY_UNTIL_MS, requestTimeoutMs: PLANS_REQUEST_TIMEOUT_MS, slots }),
+          fetchTb: (slots) => fetchAllTennisbear(env, { budgetMs: 30000, slots }),
+        }),
     });
     if (auto) return auto;
 
@@ -164,6 +178,14 @@ export default {
       return;
     }
     ctx.waitUntil(runMonitor(env).catch((e) => console.error(`[monitor] 失敗: ${e.message}`)));
+    // フェーズ11: 毎時 0 分に A・B の予定を各自の Google カレンダーへ同期(都の予約 + テニスベアの確定参加。src/calendar-sync.js)
+    ctx.waitUntil(
+      runCalendarSync(env, {
+        reason: 'cron',
+        fetchResults: (slots) => fetchAllReservations(env, { budgetMs: CRON_FETCH_BUDGET_MS, retryUntilMs: CRON_RETRY_UNTIL_MS, requestTimeoutMs: CRON_REQUEST_TIMEOUT_MS, slots }),
+        fetchTb: (slots) => fetchAllTennisbear(env, { budgetMs: 30000, slots }),
+      }).catch((e) => console.error(`[gcal] 失敗: ${e.message}`))
+    );
   },
 };
 
@@ -386,11 +408,12 @@ export async function attachCancelData(env, results, { today = jstTodayIso(), no
 // A・B の予約一覧を並行取得する。全体で budgetMs(既定 FETCH_BUDGET_MS)を超えたら打ち切り、
 // 開始から retryUntilMs(既定 RETRY_UNTIL_MS)を過ぎたら再試行しない。Cron からは両方とも長めに渡す。
 // 戻り値: [{ slot, label, reservations } | { slot, label, error }](利用者が未設定なら空配列)
-export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, retryUntilMs = RETRY_UNTIL_MS, deferLogout, requestTimeoutMs } = {}) {
+//   slots: ['A'] のように渡すとその人だけ取る(フェーズ11 の直後の同期用。省略なら全員)
+export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, retryUntilMs = RETRY_UNTIL_MS, deferLogout, requestTimeoutMs, slots } = {}) {
   const started = Date.now();
-  const people = configuredPeople(env);
+  const people = configuredPeople(env).filter((p) => !Array.isArray(slots) || slots.includes(p.slot));
   if (people.length === 0) {
-    console.error('SITE_USER_A / SITE_PASS_A が未設定です');
+    if (!Array.isArray(slots)) console.error('SITE_USER_A / SITE_PASS_A が未設定です');
     return [];
   }
 
@@ -425,8 +448,8 @@ export async function fetchAllReservations(env, { budgetMs = FETCH_BUDGET_MS, re
 
 // テニスベアの今後の予定を A・B ぶん並行取得する(フェーズ5)。全体で budgetMs を超えたら打ち切る。
 // 戻り値: [{ slot, events } | { slot, error }](未登録の人は含めない)。例外は投げず、失敗はその人の error に入れる
-export async function fetchAllTennisbear(env, { budgetMs = TB_BUDGET_MS, fetchEvents = fetchTennisbearEvents } = {}) {
-  const people = configuredTennisbear(env);
+export async function fetchAllTennisbear(env, { budgetMs = TB_BUDGET_MS, fetchEvents = fetchTennisbearEvents, slots } = {}) {
+  const people = configuredTennisbear(env).filter((p) => !Array.isArray(slots) || slots.includes(p.slot));
   if (people.length === 0) return [];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), budgetMs);
@@ -525,6 +548,8 @@ async function handlePostback(env, replyToken, data, params) {
     if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
     else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
     console.log(`[cancel] 返信しました (${Date.now() - started}ms)`);
+    // フェーズ11: 取消できた予約は Google カレンダーからも消す(返信のあと。失敗しても次の毎時の同期で消える)
+    if (reply.calendarRemove) logouts.push(() => removeCalendarEvent(env, reply.calendarRemove.slot, reply.calendarRemove.key));
   } catch (e) {
     console.error(`[cancel] 処理に失敗 (${Date.now() - started}ms): ${e.message}`);
   }
@@ -629,5 +654,7 @@ export async function buildPostbackReply(env, data, { deferLogout, now = Date.no
     text: ok
       ? `キャンセルしました: ${person.label} ${token.date} ${token.start}-${token.end} ${token.facility}`
       : 'キャンセルできませんでした。予約サイトで状態を確認してください',
+    // フェーズ11: 返信のあとにカレンダーから消す 1 件(handlePostback が使う)
+    ...(ok && token.id ? { calendarRemove: { slot: person.slot, key: siteKey(token.id) } } : {}),
   };
 }
