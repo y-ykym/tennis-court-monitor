@@ -50,7 +50,7 @@
 // ============================================================
 import { chromium } from 'playwright';
 import { inPageFlow, submitApplyForm, fetchReservationListInPage } from './site-inpage.js';
-import { parseReservations, findReservation } from './reservation-list.js';
+import { parseReservations, findReservation, isReservationListPage, pageIdOf } from './reservation-list.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -173,7 +173,13 @@ export async function reserve(slot, credentials, options = {}) {
   let reservationsBefore = null;
   const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...(reservationsBefore ? { reservationsBefore } : {}), ...extra });
   // 予約一覧 HTML を解析して控え、beforeApply に見せる。中止の指示があれば ReserveError で抜ける(予約は送らない)
+  // 本物の一覧画面でなければ(障害時のお知らせページ・セッション切れのホーム等)件数も手放し判定も信用できないので、ここで中止する
+  // (2026-10-08 08:03 に「0 件」を信じて自動予約した 4 枠を除外枠に誤登録した)
   const inspectList = async (html) => {
+    if (!isReservationListPage(html)) {
+      const title = String(html || '').match(/<title>([\s\S]*?)<\/title>/)?.[1]?.replace(/\s+/g, ' ').trim();
+      throw new ReserveError('error', `サイトの一時エラー: 予約一覧の画面が想定外です (${pageIdOf(html) || title || '不明'})。件数の確認ができないため見送りました`);
+    }
     reservationsBefore = parseReservations(html);
     log(`予約一覧(予約前): ${reservationsBefore.length} 件`);
     const stop = beforeApply ? await beforeApply({ reservations: reservationsBefore }) : null;

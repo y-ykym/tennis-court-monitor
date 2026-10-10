@@ -36,6 +36,19 @@ function parseTimeRange(text) {
   return [`${m[1].padStart(2, '0')}:${m[2]}`, `${m[3].padStart(2, '0')}:${m[4]}`];
 }
 
+// 応答 HTML の画面 ID(先頭付近の <!-- prwha1000.jsp --> コメント)。無ければ null
+export function pageIdOf(html) {
+  return String(html || '').slice(0, 2000).match(/<!-- (\w+\.jsp) -->/)?.[1] ?? null;
+}
+
+// その HTML が本物の「予約の確認・取消画面」(prwha1000)か。
+// 都のサイトは未ログインやセッション切れでもホーム(pawab2000)を 200 で返し、障害時は「施設予約システムからのお知らせ」ページを返す。
+// どちらも parseReservations にかけると「予約 0 件」になり、2026-10-08 08:03 にそれを信じて自動予約した 4 枠を
+// 「サイトで手放した」と誤判定した(除外枠に誤登録)。一覧として扱う前に必ずこれで確かめる(Worker 側 site.js と同じ判定)
+export function isReservationListPage(html) {
+  return pageIdOf(html) === 'prwha1000.jsp' || String(html || '').includes('id="rsvacceptlist"');
+}
+
 // 各行の詳細モーダル(id="rsvDetailN")内の「項目名 → 値」の表を読む
 export function parseReservations(html) {
   const reservations = [];
