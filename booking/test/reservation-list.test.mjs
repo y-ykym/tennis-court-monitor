@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseReservations, findReservation } from '../src/reservation-list.js';
+import { parseReservations, findReservation, isReservationListPage, pageIdOf } from '../src/reservation-list.js';
 
 // Worker 側と同じ画面(prwha1000)の見本。個人情報はダミー化済み
 const fixture = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../worker/test/fixtures/reservation-list.html'), 'utf8');
@@ -25,4 +25,17 @@ test('一覧を解析して、日付・開始時刻・公園で該当の予約�
 
 test('該当行の無い HTML は空配列', () => {
   assert.deepEqual(parseReservations('<html><body>予約はありません</body></html>'), []);
+});
+
+test('本物の一覧画面(prwha1000)だけを一覧として認める。障害時のお知らせページやホームは認めない', () => {
+  assert.equal(isReservationListPage(fixture), true, '見本(prwha1000 のコメント付き)');
+  assert.equal(isReservationListPage('<html><body><div id="rsvacceptlist"></div></body></html>'), true, 'コメントが無くても一覧の表の id があれば認める');
+  const notice = '<html><head><title>施設予約システムからのお知らせ</title></head><body>現在、ご指定のページはアクセスできません。</body></html>';
+  assert.equal(isReservationListPage(notice), false, '障害時のお知らせページ(2026-10-10 に Pi が実際に受け取ったもの)');
+  assert.equal(isReservationListPage('<html lang="ja"><!-- pawab2000.jsp --><head></head><body>ホーム</body></html>'), false, '未ログインで返るホーム');
+  assert.equal(isReservationListPage(''), false);
+  assert.equal(isReservationListPage(null), false);
+  assert.equal(pageIdOf(fixture), 'prwha1000.jsp');
+  assert.equal(pageIdOf(notice), null);
+  assert.equal(parseReservations(notice).length, 0, 'お知らせページは解析すると 0 件になる(だから事前の判定が要る)');
 });
