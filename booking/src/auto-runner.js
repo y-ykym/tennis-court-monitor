@@ -116,6 +116,7 @@ export function createAutoRunner({
   now = Date.now,
   pollMs = AUTO_BOOKING.POLL_INTERVAL_MS,
   forgetFile = null,
+  eventLog = null, // auto-events.js の { append(obj) }。枠の出現・消滅・試行の記録(照会間隔の調整用)。無ければ記録しない
 }) {
   const interval = Math.max(Number(pollMs) || AUTO_BOOKING.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
   const active = mode === 'on';
@@ -145,6 +146,19 @@ export function createAutoRunner({
   };
 
   const describe = (s) => `${s.date} ${s.time || `${startHHMM(s.startHour)}-`} ${s.facility || parkOf(s.park)?.name || s.park}`;
+  const event = (type, data) => {
+    if (!eventLog) return;
+    try {
+      eventLog.append({ at: now(), type, ...data });
+    } catch {
+      /* 記録の失敗で予約を止めない */
+    }
+  };
+  // 試行状態の更新と記録(running は記録しない)
+  const attempt = (c, status, message) => {
+    state.markAttempt(c.key, status);
+    if (status !== 'running') event('result', { key: c.key, status, person: c.person, message: message || undefined });
+  };
 
   async function heartbeat(extra = {}) {
     const payload = { active: bookingEnabled(), mode: effectiveMode(), at: now(), queued: queue.waiting().length, running: queue.isBusy(), lastCycle, ...extra };
@@ -191,6 +205,7 @@ export function createAutoRunner({
         const backoff = backoffIntervalMs(consecutiveFailures, 0);
         log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます(メンテナンスか長い障害の可能性)` : ''}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
+        event('poll_failed', { consecutive: consecutiveFailures, message: e.message });
         await heartbeat();
         return { skipped: 'scrape_failed', consecutiveFailures };
       }
@@ -207,7 +222,21 @@ export function createAutoRunner({
       }
       const newSlots = state.needsBaseline() ? [] : targets.filter((s) => !known.has(slotKey(s)));
       const baseline = state.needsBaseline();
+      // 記録: 消えた枠(前回まで見えていて今回無い)と、新しく出た枠
+      if (!baseline) {
+        const nowKeys = new Set(keys);
+        for (const k of known) {
+          if (nowKeys.has(k)) continue;
+          const info = state.seenInfo(k);
+          const minutes = info ? Math.round((started - info.at) / 60000) : null;
+          event('gone', { key: k, facility: info?.facility, date: info?.date, time: info?.time, firstSeenAt: info?.at ?? null, sinceBaseline: info?.baseline ?? null, attempt: state.attemptStatus(k) });
+          if (info) log(`枠が消えた: ${info.date} ${info.time} ${info.facility}(見えてから ${minutes} 分${info.baseline ? '以上' : ''}${state.attemptStatus(k) ? `、この枠の試行: ${state.attemptStatus(k)}` : '、試行なし'})`);
+        }
+        const intervalMs = pollIntervalAt(started, interval);
+        for (const s of newSlots) event('appeared', { key: slotKey(s), facility: s.facility, date: s.date, time: s.time, intervalMs });
+      }
       state.setKnown(keys);
+      state.setSeen(targets.map((s) => ({ key: slotKey(s), at: started, facility: s.facility, date: s.date, time: s.time, baseline })));
       state.prune(today);
       lastCycle = { at: started, ms: now() - started, error: null, newSlots: newSlots.length };
       await heartbeat();
@@ -224,24 +253,36 @@ export function createAutoRunner({
 
       const ex = usableExclusions();
       if (!ex) {
-        for (const s of newSlots) log(`  見送り: ${describe(s)} (Worker から除外一覧が取れていないため)`);
+        for (const s of newSlots) {
+          log(`  見送り: ${describe(s)} (Worker から除外一覧が取れていないため)`);
+          event('skipped', { key: slotKey(s), kind: 'no_exclusions', reason: 'Worker から除外一覧が取れていない' });
+        }
         return { newSlots: newSlots.length, planned: 0, reason: 'no_exclusions' };
       }
       const { byDate, skipped } = planAutoBooking(newSlots, { now: started, exclusions: ex });
-      for (const s of skipped) log(`  見送り: ${describe(s.slot)} (${s.reason}${s.kind === 'penalty' || s.kind === 'deadline' ? '。通知は Actions が行う' : s.kind === 'excluded_date' || s.kind === 'excluded_slot' ? '。通知もしない' : ''})`);
+      for (const s of skipped) {
+        log(`  見送り: ${describe(s.slot)} (${s.reason}${s.kind === 'penalty' || s.kind === 'deadline' ? '。通知は Actions が行う' : s.kind === 'excluded_date' || s.kind === 'excluded_slot' ? '。通知もしない' : ''})`);
+        event('skipped', { key: slotKey(s.slot), kind: s.kind, reason: s.reason });
+      }
 
       let planned = 0;
       for (const [date, cands] of byDate) {
         const person = cands[0].person;
         const creds = credentialsFor(person);
         if (!creds) {
-          for (const c of cands) log(`  見送り: ${describe(c)} (予約者 ${person} の利用者情報が未設定)`);
+          for (const c of cands) {
+            log(`  見送り: ${describe(c)} (予約者 ${person} の利用者情報が未設定)`);
+            event('skipped', { key: c.key, kind: 'no_credentials', reason: `予約者 ${person} の利用者情報が未設定` });
+          }
           continue;
         }
         const failedAt = authFailedAt.get(person);
         if (failedAt != null && now() - failedAt < AUTH_PAUSE_MS) {
           const left = Math.ceil((AUTH_PAUSE_MS - (now() - failedAt)) / 60000);
-          for (const c of cands) log(`  見送り: ${describe(c)} (予約者 ${person} はログインが拒否されたため ${left} 分間は自動予約を止めている。利用者番号・パスワード・カード有効期限を確認)`);
+          for (const c of cands) {
+            log(`  見送り: ${describe(c)} (予約者 ${person} はログインが拒否されたため ${left} 分間は自動予約を止めている。利用者番号・パスワード・カード有効期限を確認)`);
+            event('skipped', { key: c.key, kind: 'auth_paused', reason: `予約者 ${person} のログイン拒否で停止中` });
+          }
           continue;
         }
         for (const c of cands) {
@@ -253,6 +294,7 @@ export function createAutoRunner({
           if (!bookingEnabled()) {
             log(`  [${mode === 'on' ? 'LINE で停止中' : 'dry-run'}] 予約するはず: ${describe(c)} 予約者=${creds.label}(${person})`);
             state.markAttempt(c.key, 'dry_run');
+            event('dry_run', { key: c.key, person });
             continue;
           }
           const r = queue.submit({ id: c.key, kind: 'auto', meta: c, run: () => runCandidate(c, creds) });
@@ -261,6 +303,7 @@ export function createAutoRunner({
             continue;
           }
           state.markAttempt(c.key, 'queued');
+          event('queued', { key: c.key, person });
           planned++;
           log(`  行列へ: ${describe(c)} 予約者=${creds.label}(${person}) [${r.status}]`);
         }
@@ -281,7 +324,7 @@ export function createAutoRunner({
     // 行列で待っている間に「じどうおふ」が来ていたら予約しない(カードも送らない。Actions が従来どおり通知する)
     if (!bookingEnabled()) {
       log(`見送り(実行直前): ${describe(c)} (LINE で自動予約が停止中)`);
-      state.markAttempt(key, 'dry_run');
+      attempt(c, 'dry_run', 'LINE で自動予約が停止中');
       state.save();
       return { status: 'skipped', message: 'LINE で自動予約が停止中' };
     }
@@ -290,7 +333,7 @@ export function createAutoRunner({
     const today = jstTodayIso(t);
     const again = classifySlot(c, { now: t, exclusions: usableExclusions() || exclusions || { dates: [], slots: [] } });
     if (again.kind !== 'auto') {
-      state.markAttempt(key, `skipped_${again.kind}`);
+      attempt(c, `skipped_${again.kind}`, again.reason);
       state.save();
       if (again.kind === 'excluded_slot' || again.kind === 'excluded_date') {
         log(`見送り(予約直前の再判定): ${describe(c)} (${again.reason}。通知もしない)`);
@@ -311,7 +354,7 @@ export function createAutoRunner({
     const remaining = remainingFor(c.date);
     if (remaining != null && remaining <= 0) {
       log(`見送り: ${describe(c)} (${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため。ログインせず)`);
-      state.markAttempt(key, 'capped');
+      attempt(c, 'capped', `${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため`);
       state.save();
       return { status: 'capped' };
     }
@@ -319,14 +362,14 @@ export function createAutoRunner({
     const tb = await tennisbearPlansFor(c.person);
     if (!tb) {
       log(`見送り: ${describe(c)} (テニスベアの予定が取れず、隣の時間帯に別の場所の予定が無いか判定できないため。ログインせず)`);
-      state.markAttempt(key, 'skipped_tennisbear');
+      attempt(c, 'skipped_tennisbear', 'テニスベアの予定が取れないため');
       state.save();
       return { status: 'skipped', message: 'テニスベアの予定が取れないため' };
     }
     const tbConflict = findPlaceConflict(c, tb.events);
     if (tbConflict) {
       log(`見送り: ${describe(c)} (${tbConflict.reason}。ログインせず)`);
-      state.markAttempt(key, 'conflict');
+      attempt(c, 'conflict', tbConflict.reason);
       state.save();
       return { status: 'conflict', message: tbConflict.reason };
     }
@@ -359,14 +402,14 @@ export function createAutoRunner({
       authFailedAt.set(c.person, now());
       log(`予約者 ${c.person} のログインが拒否されたため、${Math.round(AUTH_PAUSE_MS / 3600000)} 時間は ${c.person} の自動予約を止めます`);
       if (!first) {
-        state.markAttempt(key, result.status);
+        attempt(c, result.status, result.message);
         state.save();
         return result;
       }
     } else if (ok) {
       authFailedAt.delete(c.person);
     }
-    state.markAttempt(key, result.status);
+    attempt(c, result.status, result.message);
     log(`自動予約 結果: ${result.status} ${describe(c)} ${result.message || ''}`.trim());
 
     if (ok) {

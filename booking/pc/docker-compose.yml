@@ -41,6 +41,8 @@ services:
       # 想定外の応答(メンテナンス画面など)の最新 1 件だけを上書きで残す(メンテ中に何が返るかの実物を記録するため。2026-09-27)
       SCRAPE_LAST_FAILURE_FILE: /var/lib/booking/last-scrape-failure.html
       AUTO_STATE_FILE: /var/lib/booking/auto-state.json
+      # 枠の出現・消滅・試行の記録(JSONL。コンテナを作り直しても残る。./auto-stats.sh で集計。2026-10-11)
+      AUTO_EVENTS_FILE: /var/lib/booking/auto-events.jsonl
       SCREEN_W: '600'
       SCREEN_H: '1000'
     volumes:

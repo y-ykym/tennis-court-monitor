@@ -77,7 +77,7 @@ else:
         print(f"  {jst(v.get('at') or 0)}  {v.get('status',''):9}  {date} {start}  公園{park}")
 PY
 
-hr "この 24 時間のログ(照会の定期行を除いた振り分け。※コンテナ再作成でログは消える)"
+hr "この 24 時間のログ(照会の定期行を除いた振り分け。※コンテナ再作成でログは消える。長期の集計は ./auto-stats.sh)"
 docker compose logs --since 24h --no-log-prefix booking 2>/dev/null | grep '\[auto\]' | grep -v '照会: 監視対象\|除外一覧を更新' | tail -30
 echo "  fetch failed: $(docker compose logs --since 24h booking 2>/dev/null | grep -c 'fetch failed') 件 / 24h(回線不調の目安)"
 echo "  直近の照会 3 行:"

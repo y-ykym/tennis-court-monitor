@@ -3,6 +3,7 @@
 //
 //   known     : 前回の照会で見えていた監視対象の枠キー(差分 = 「新しく出た空き」の検出用)
 //   attempted : 枠キー → { status, at }。同じ枠を二重に試さない(queued/running/success は再投入しない)
+//   seen      : 枠キー → { at, facility, date, time, baseline }。いま見えている枠が初めて見えた時刻(消えたときの記録用。2026-10-11)
 //   own       : 自分(この Pi)が自動予約した枠 [{ key, person, id, date, start, end, park, facility, at }]。
 //               次に予約一覧を見たときに消えていたら「サイトで手放した」とみなして除外枠に登録する
 //   updatedAt : 最後に保存した時刻。これが古い(staleMs 超)状態で起動したら「初回起動」と同じ扱い
@@ -15,19 +16,22 @@ const DEFAULT_STALE_MS = 10 * 60 * 1000;
 const ATTEMPT_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
 
 export function createAutoState({ file, now = Date.now, staleMs = DEFAULT_STALE_MS } = {}) {
-  let data = { known: [], attempted: {}, own: [], updatedAt: null };
+  let data = { known: [], attempted: {}, own: [], seen: {}, updatedAt: null };
   let loadedFresh = false;
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (parsed && typeof parsed === 'object') {
-      data = { known: [], attempted: {}, own: [], updatedAt: null, ...parsed };
+      data = { known: [], attempted: {}, own: [], seen: {}, updatedAt: null, ...parsed };
       loadedFresh = typeof data.updatedAt === 'number' && now() - data.updatedAt <= staleMs;
     }
   } catch {
     /* 初回、または壊れている → まっさら */
   }
   // 古い状態(長時間止まっていた)は既知の枠を捨てて、次の照会で「いま見えている空き」を既知として取り直す
-  if (!loadedFresh) data.known = [];
+  if (!loadedFresh) {
+    data.known = [];
+    data.seen = {};
+  }
   let baselineDone = loadedFresh;
 
   function save() {
@@ -46,6 +50,13 @@ export function createAutoState({ file, now = Date.now, staleMs = DEFAULT_STALE_
       data.known = [...new Set(keys)];
       baselineDone = true;
     },
+    // いま見えている枠の情報を入れ替える。既に見えていた枠は最初の記録(初めて見えた時刻)を保つ。無くなった枠の分は落とす
+    setSeen(entries) {
+      const next = {};
+      for (const e of entries) next[e.key] = data.seen[e.key] || e;
+      data.seen = next;
+    },
+    seenInfo: (key) => data.seen[key] || null,
     attemptStatus: (key) => data.attempted[key]?.status ?? null,
     markAttempt(key, status) {
       data.attempted[key] = { status, at: now() };

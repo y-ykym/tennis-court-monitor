@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS } from '../src/auto-runner.js';
+import { createEventLog, readEvents } from '../src/auto-events.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { verifyCancelToken } from '../src/cancel-token.js';
@@ -19,7 +20,7 @@ const slot = (facility, date, time, count = 1) => ({ facility, date, time, count
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ar-')), 'auto-state.json');
 const flush = () => new Promise((r) => setTimeout(r, 20));
 
-function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] }, book, reservations = {}, creds = { A: true, B: true }, heartbeatFails = false, start = T0, workerOverride = null } = {}) {
+function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] }, book, reservations = {}, creds = { A: true, B: true }, heartbeatFails = false, start = T0, workerOverride = null, eventsFile = null } = {}) {
   let t = start;
   const logs = [];
   const notified = [];
@@ -40,7 +41,10 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
   });
   const runner = createAutoRunner({
     mode,
-    scrape: async () => current,
+    scrape: async () => {
+      if (current instanceof Error) throw current;
+      return current;
+    },
     queue,
     state,
     worker: workerRef,
@@ -59,6 +63,7 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
     signingSecret: SECRET,
     log: (m) => logs.push(m),
     now: () => t,
+    eventLog: eventsFile ? createEventLog({ file: eventsFile }) : null,
   });
   return {
     runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards, workerRef,
@@ -808,4 +813,49 @@ test('隣接(都の予約): 予約直前の一覧に、隣の時間帯の別の�
   } finally {
     AUTO_BOOKING.MAX_PER_DAY = saved;
   }
+});
+
+test('記録(auto-events): 出現・行列へ・結果・消滅・照会失敗が 1 行ずつ残る。消滅には初めて見えた時刻と試行状態が付く', async () => {
+  const eventsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev-')), 'auto-events.jsonl');
+  const h = harness({ eventsFile });
+  await h.runner.tick(); // 初回(既知の登録。記録なし)
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')]);
+  await h.runner.tick();
+  await flush();
+  h.advance(120_000);
+  h.setSlots([]); // 消えた(自分が取った)
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots(new Error('fetch failed')); // 照会失敗
+  await h.runner.tick();
+  const ev = readEvents(eventsFile);
+  const types = ev.map((e) => e.type);
+  assert.deepEqual(types.slice(0, 3), ['appeared', 'queued', 'result']);
+  assert.equal(ev[0].key, '1040|2026-09-25|19:00');
+  assert.equal(ev[0].intervalMs, 60_000, '出現時刻(JST 9:00)の照会間隔');
+  assert.equal(ev[1].person, 'B');
+  assert.equal(ev[2].status, 'success');
+  const gone = ev.find((e) => e.type === 'gone');
+  assert.ok(gone, '消滅の記録');
+  assert.equal(gone.key, '1040|2026-09-25|19:00');
+  assert.equal(gone.firstSeenAt, T0 + 60_000);
+  assert.equal(gone.attempt, 'success');
+  assert.equal(gone.facility, '猿江恩賜公園');
+  assert.ok(h.logs.some((l) => l.includes('枠が消えた: 2026-09-25 19:00-21:00 猿江恩賜公園(見えてから 2 分、この枠の試行: success)')));
+  assert.equal(ev.at(-1).type, 'poll_failed');
+  assert.equal(ev.at(-1).consecutive, 1);
+});
+
+test('記録(auto-events): 記録ファイルが無くても動く。見送りは kind 付きで残る', async () => {
+  const eventsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev-')), 'auto-events.jsonl');
+  const h = harness({ eventsFile, exclusions: { dates: ['2026-09-30'], slots: [] } });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-30', '19:00-21:00')]);
+  await h.runner.tick();
+  const ev = readEvents(eventsFile);
+  assert.deepEqual(ev.map((e) => e.type), ['appeared', 'skipped']);
+  assert.equal(ev[1].kind, 'excluded_date');
+  assert.deepEqual(readEvents('/nonexistent/auto-events.jsonl'), []);
 });

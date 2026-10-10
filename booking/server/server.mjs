@@ -52,6 +52,7 @@ import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
 import { createBookingQueue } from '../src/booking-queue.js';
 import { createAutoState } from '../src/auto-state.js';
+import { createEventLog } from '../src/auto-events.js';
 import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 
 const require = createRequire(import.meta.url);
@@ -246,8 +247,11 @@ if (AUTO_MODE !== 'off') {
   } else {
     const stateFile = process.env.AUTO_STATE_FILE || '/var/lib/booking/auto-state.json';
     const state = createAutoState({ file: stateFile });
+    // 枠の出現・消滅・試行の記録(照会間隔の調整用。pc/auto-stats.sh で集計。'' で記録しない)
+    const eventsFile = process.env.AUTO_EVENTS_FILE ?? '/var/lib/booking/auto-events.jsonl';
     autoRunner = createAutoRunner({
       mode: AUTO_MODE,
+      eventLog: eventsFile ? createEventLog({ file: eventsFile, log }) : null,
       scrape: createScraper(),
       queue,
       state,
