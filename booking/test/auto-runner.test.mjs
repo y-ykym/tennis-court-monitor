@@ -448,9 +448,9 @@ test('毎周期 1 行の要約ログが出る', async () => {
   assert.ok(h.logs.some((l) => /照会: 監視対象 1 件\(全体 1 件\)、新規 0 件、所要 \d+ 秒/.test(l)));
 });
 
-test('照会間隔(JST): 9〜15 時・22〜24 時は 1 分、1〜7 時は 3 分、それ以外は 2 分(2026-10-02)', () => {
-  assert.equal(pollIntervalAt(jst('2026-09-15', '00:00'), 60_000), 120_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '00:59'), 60_000), 120_000);
+test('照会間隔(JST): 9〜15 時・18〜翌 1 時は 1 分、1〜7 時は 3 分、7〜9 時・15〜18 時は 2 分(2026-10-11)', () => {
+  assert.equal(pollIntervalAt(jst('2026-09-15', '00:00'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '00:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '01:00'), 60_000), 180_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '04:30'), 60_000), 180_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '06:59'), 60_000), 180_000);
@@ -459,8 +459,9 @@ test('照会間隔(JST): 9〜15 時・22〜24 時は 1 分、1〜7 時は 3 分�
   assert.equal(pollIntervalAt(jst('2026-09-15', '09:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '14:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '15:00'), 60_000), 120_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '20:59'), 60_000), 120_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '21:59'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '17:59'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '18:00'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '21:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '22:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '23:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, []), 60_000, '設定が無ければ常に同じ');
