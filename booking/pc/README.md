@@ -215,7 +215,7 @@ docker compose ps                                                      # 3 サ�
   **手動で残るのは予約サイトを開くブラウザ(Chromium)の更新だけ**(Docker イメージの中にあり apt では更新されない)。
   Chromium の版は Dockerfile の `mcr.microsoft.com/playwright:vX.Y.Z` と booking/package.json の `playwright` で**固定**されているので、
   `docker compose build --pull` を繰り返しても新しくならない(2026-10-13 に判明。それまで月初のお知らせでこの手順を案内していた)。
-  更新は数か月に 1 回、リポジトリ側で両方の版を上げて(`npm install playwright@<版>` → テスト)push し、Pi で予約が動いていない時間(毎時 0 分は避ける)に:
+  更新は定期には行わない(古い版でも開くのは都の予約サイトだけで、上げると手順が壊れる危険のほうが大きいため。2026-10-13 本人決定)。予約サイトで動かなくなったときなどに、リポジトリ側で両方の版を上げて(`npm install playwright@<版>` → テスト)push し、Pi で予約が動いていない時間(毎時 0 分は避ける)に:
   ```bash
   cd ~/tennis-court-monitor/booking/pc && git pull --ff-only && docker compose build booking && docker compose up -d
   ./pi-check.sh
