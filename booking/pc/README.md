@@ -212,15 +212,18 @@ docker compose ps                                                      # 3 サ�
 - **OS の更新(方針 2026-09-13。予約中断のリスクは受け入れる判断)**: **毎朝 4:00(±10 分)に OS・カーネル・Docker をすべて自動更新**し、
   再起動が必要なら **4:30 に自動再起動**する(`unattended-upgrades`。設定は `apt/` と `systemd/apt-daily-upgrade-override.conf`、pi-init.sh §7 が置く)。
   Docker の更新ではコンテナが 20〜30 秒再起動する。監視(毎時)があるので、更新で朝から止まっていても 1 時間以内に LINE で分かる。
-  **手動で残るのは予約サイトを開くブラウザ(Chromium)の更新だけ**(Docker イメージの中にあり apt では更新されない)。月初に LINE でお知らせが届くので、
-  数か月に 1 回、予約が動いていない時間(毎時 0 分は避ける)に:
+  **手動で残るのは予約サイトを開くブラウザ(Chromium)の更新だけ**(Docker イメージの中にあり apt では更新されない)。
+  Chromium の版は Dockerfile の `mcr.microsoft.com/playwright:vX.Y.Z` と booking/package.json の `playwright` で**固定**されているので、
+  `docker compose build --pull` を繰り返しても新しくならない(2026-10-13 に判明。それまで月初のお知らせでこの手順を案内していた)。
+  更新は数か月に 1 回、リポジトリ側で両方の版を上げて(`npm install playwright@<版>` → テスト)push し、Pi で予約が動いていない時間(毎時 0 分は避ける)に:
   ```bash
-  cd ~/tennis-court-monitor/booking/pc && git pull && docker compose build --pull booking && docker compose up -d
+  cd ~/tennis-court-monitor/booking/pc && git pull --ff-only && docker compose build booking && docker compose up -d
   ./pi-check.sh
   ./auto-check.sh   # 2〜3 分たってから(作り直し直後は「起動直後」と出る)。「✔ 動いている」が出れば完了
   ```
   pi-check.sh はサーバーの土台(ディスク・コンテナ・Tunnel・Worker 登録)だけを見る。作り直した booking コンテナの中で
-  自動予約の照会が回り直したかは auto-check.sh でしか分からない(2026-10-01 の月次で気づいた)
+  自動予約の照会が回り直したかは auto-check.sh でしか分からない(2026-10-01 の月次で気づいた)。
+  毎月 1 日 9:00 には LINE に点検のお知らせ(先月の LINE 通数と `./auto-check.sh`)が届く
   自動更新の様子: `./pi-check.sh` の「OS の更新」欄 / `sudo unattended-upgrade --dry-run --debug`(何が対象か) / `less /var/log/unattended-upgrades/unattended-upgrades.log`
 - **状態確認**: `docker compose ps` / `docker compose logs -f booking` / `./pi-check.sh`
 - **止める**: `docker compose down`(Worker の登録は 5 分で消え、ボタンは「繋がりません」を案内)
