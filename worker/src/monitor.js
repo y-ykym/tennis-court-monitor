@@ -22,7 +22,7 @@ import { autoStatus } from './auto.js';
 
 // 月初(1 日 9:00 JST = 0:00 UTC)に届く点検のお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける。
 // 2026-10-13 に「Chromium の手動更新」の手順をやめて点検だけにした: Pi のブラウザは Dockerfile の playwright:v1.62.1 で版が固定され、
-// `docker compose build --pull` を毎月しても同じ版が入り直すだけだったため。ブラウザの更新は数か月に 1 回、リポジトリで Playwright の版を上げて行う。
+// `docker compose build --pull` を毎月しても同じ版が入り直すだけだったため。ブラウザの更新は定期には行わず、予約が動かなくなったときなどに本人が頼んだら Playwright の版を上げる(2026-10-13 本人決定。お知らせからも案内を外した)。
 // 1 日の朝は今月の通数がほぼ 0 なので、見てもらうのは「先月」の通数
 export const MAINTENANCE_CRON = '0 0 1 * *';
 export const MAINTENANCE_TEXT = [
@@ -34,8 +34,6 @@ export const MAINTENANCE_TEXT = [
   'ssh pi',
   'cd ~/tennis-court-monitor/booking/pc && ./auto-check.sh',
   '「✔ 動いている」が出れば OK',
-  '',
-  '(ブラウザの更新は数か月に 1 回、Claude に「Playwright を上げて」と頼む)',
 ].join('\n');
 
 // 二重起動よけ(KV)。Cloudflare は同じ Cron を同じ分に 2 回起動することがあり、1 日 0:00 UTC はまさに起きやすい時刻
