@@ -20,23 +20,22 @@
 import { pushText } from './line.js';
 import { autoStatus } from './auto.js';
 
-// 月初(1 日 9:00 JST = 0:00 UTC)に届く手動メンテのお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける
+// 月初(1 日 9:00 JST = 0:00 UTC)に届く点検のお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける。
+// 2026-10-13 に「Chromium の手動更新」の手順をやめて点検だけにした: Pi のブラウザは Dockerfile の playwright:v1.62.1 で版が固定され、
+// `docker compose build --pull` を毎月しても同じ版が入り直すだけだったため。ブラウザの更新は数か月に 1 回、リポジトリで Playwright の版を上げて行う。
+// 1 日の朝は今月の通数がほぼ 0 なので、見てもらうのは「先月」の通数
 export const MAINTENANCE_CRON = '0 0 1 * *';
 export const MAINTENANCE_TEXT = [
-  '🛠 月初のお知らせ: 自宅の予約サーバー(Pi)のメンテ',
-  'OS・カーネル・Docker は毎朝自動で更新されていますが、予約サイトを開くブラウザ(Chromium)だけは手動で入れ直す必要があります(数か月に 1 回で十分)。',
+  '🛠 月初のお知らせ: 予約ボットの点検',
+  '① 先月の LINE の通数を確認(LINE Official Account Manager →「利用状況」)',
+  '無料枠は月 200 通。グループ宛なので通知 1 回で 2 通(「よやく」の返信は無料)',
   '',
-  'Mac から:',
+  '② 自宅の Wi-Fi で Mac から Pi を点検:',
   'ssh pi',
-  'cd ~/tennis-court-monitor/booking/pc && git pull && docker compose build --pull booking && docker compose up -d && ./pi-check.sh',
+  'cd ~/tennis-court-monitor/booking/pc && ./auto-check.sh',
+  '「✔ 動いている」が出れば OK',
   '',
-  '2〜3 分たったら自動予約も点検(「✔ 動いている」が出れば完了):',
-  './auto-check.sh',
-  '',
-  '毎時 0 分前後は避けてください(監視と重なって「繋がりません」が誤って届きます)。',
-  '',
-  '📊 ついでに今月の LINE の通数も見ておいてください(LINE Official Account Manager →「利用状況」)。',
-  '無料枠は月 200 通。グループ宛なので 1 回の通知で 2 通消費します(「よやく」への返信は無料)。',
+  '(ブラウザの更新は数か月に 1 回、Claude に「Playwright を上げて」と頼む)',
 ].join('\n');
 
 // 二重起動よけ(KV)。Cloudflare は同じ Cron を同じ分に 2 回起動することがあり、1 日 0:00 UTC はまさに起きやすい時刻

@@ -103,7 +103,7 @@ worker/                      フェーズ1.5 予約確認ボット + 1.6 予約�
   src/format.js              テキスト整形(0件・失敗時の文言)。都とテニスベアの行を日付順に混ぜる mergedRows もここ
   src/flex.js                予約一覧(人ごとのカルーセル。🐻 テニスベアの行も)・キャンセル確認・結果・フェーズ4 予告アラートのFlex Message。30KB/50KB制限に収まるよう行数を自動調整
   src/booking.js             フェーズ2 予約支援の玄関(予約ボタンの postback → 自宅サーバーの /book を叩く。noVNC の中継、URL 登録)
-  src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初のメンテのお知らせ。自動予約の照会ループが止まったときの ⚠️ も
+  src/monitor.js             Cron: 毎時の Pi 生存監視(LINE に ⚠️/✅)と月初の点検のお知らせ。自動予約の照会ループが止まったときの ⚠️ も
   src/auto.js                フェーズ3: 除外日・除外枠・Pi の最終チェックを KV に持つ。/auto/state /auto/heartbeat /auto/exclusions /auto/tennisbear /auto/plans(署名付き API)、
                              「せってい」コマンドと「解除」「日を追加」の postback、キャンセル成功時の除外枠の記録。/auto/plans は Actions の空き通知の絞り込み用(2026-09-27)
   src/auto-flex.js           「せってい」への返信カード(設定メニュー。2026-09-25 に「じどう」から改名・ON/OFF ボタンを追加)

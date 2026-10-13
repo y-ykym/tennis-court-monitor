@@ -116,13 +116,15 @@ test('probe: 登録なし → down、/warmup 200 → ok、一時エラー後に 
   }
 });
 
-test('月初のお知らせ: グループに手順つきのテキストを 1 通', async () => {
+test('月初のお知らせ: グループに点検の案内を 1 通', async () => {
   const pushed = [];
   await sendMaintenanceReminder({ LINE_CHANNEL_ACCESS_TOKEN: 't', LINE_GROUP_ID: 'C1' }, { push: async (_t, to, text) => pushed.push({ to, text }) });
   assert.equal(pushed.length, 1);
   assert.equal(pushed[0].to, 'C1');
   assert.equal(pushed[0].text, MAINTENANCE_TEXT);
-  assert.match(pushed[0].text, /docker compose build --pull booking/);
+  assert.match(pushed[0].text, /先月の LINE の通数/);
+  assert.match(pushed[0].text, /\.\/auto-check\.sh/);
+  assert.doesNotMatch(pushed[0].text, /build --pull/);
   assert.match(pushed[0].text, /利用状況/, '10/1 に無料枠へ戻るので通数の確認も促す');
   assert.ok(pushed[0].text.length <= 5000);
 });
