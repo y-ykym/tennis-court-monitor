@@ -273,7 +273,12 @@ function statusPill(r, label, past) {
 function entry(r, today, nowHHMM) {
   const past = isPast(r, today, nowHHMM);
   const rel = past ? '終了' : r.date ? relativeLabel(r.date, today) : null;
-  const contents = [detailText(r, { past, rel })];
+  const detail = detailText(r, { past, rel });
+  // 都の予約とまとめた行(自分のコートで立てた主催イベントなど。tbId)も詳細ページを開く(2026-10-13。それまでは
+  // テニスベアだけの行にしか付けておらず、主催イベントの行をタップしても何も起きなかった)。
+  // 右端のキャンセルピルと取り合わないよう、行全体ではなく文字の部分にだけ付ける
+  if (!isTennisbear(r) && r.tbId) detail.action = { type: 'uri', label: '詳細', uri: EVENT_INFO_URL(r.tbId) };
+  const contents = [detail];
   // テニスベアの行にはキャンセルボタンを付けない(表示のみ。§15.2)。参加状態(キャンセル待ちなど)のラベルは detailText が時間の右に置く
   if (!past && !isTennisbear(r) && r.cancelData && r.date && r.start) contents.push(cancelPill(r, r.cancelData));
   // テニスベアの行は、行全体をタップするとイベント詳細ページが開く(2026-09-26。「いべんと」の行と同じ uri アクション)。

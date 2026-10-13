@@ -406,4 +406,8 @@ test('flex: 同じ枠を都で予約しテニスベアでも募集している�
   assert.ok(t.includes('\n大島小松川公園'), '土台は都の行(公園名は都の表記)');
   assert.ok(t.includes('\n🐻 ストローク多め練'), 'テニスベアのイベント名も残す');
   assert.equal(pills(msg).length, 1, '都の予約なのでキャンセルボタンは付く');
+  // 2026-10-13: まとめた行(主催イベント)もタップで詳細ページを開く。キャンセルピルと取り合わないよう文字の部分にだけ付ける
+  const links = find(msg.contents, (n) => n.action?.type === 'uri' && n.type === 'text' && texts(n).some((x) => x.includes('🐻')));
+  assert.deepEqual(links.map((n) => n.action.uri), ['https://www.tennisbear.net/event/1621297/info']);
+  assert.equal(find(msg.contents, (n) => n.action?.type === 'uri' && n.type === 'box' && n.layout === 'horizontal').length, 0, '行全体には付けない');
 });
