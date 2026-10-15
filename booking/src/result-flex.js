@@ -70,7 +70,8 @@ function row(k, v) {
 }
 
 // 予約結果。成功: 緑ヘッダー + 予約番号を大きく + 取消の案内。失敗: 赤ヘッダー + 理由 + 手動で続けるリンク
-export function buildResultFlex(r, label = '', { auto = false, cancelData = null } = {}) {
+//   penalty: 利用日がペナルティ期間(今日+3 日以内。「せってい」で「ペナルティ期間でも予約する日」に選んだ日の自動予約)なら、取消にペナルティが付く旨を出す(2026-10-15)
+export function buildResultFlex(r, label = '', { auto = false, cancelData = null, penalty = false } = {}) {
   const ok = r.status === 'success';
   // 見出しと小見出しで「自動予約」と「LINE のボタン(手動)」を見分けられるようにする(2026-09-25。それまでは手動側も「自動で予約しました」と出て紛らわしかった)
   //   自動予約: 🤖 + 「自動予約」。手動: 🎾/⚠️ + 「(ボタン)」と、押したボタンの名前
@@ -87,6 +88,16 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
       cornerRadius: 'md',
       paddingAll: '10px',
       contents: [{ type: 'text', text: '⚠ ペナルティなしで取り消せるのは今日 23:59 まで(利用日が 4 日後のため。明日からは取消にペナルティ 1 点が付きます)', size: 'xs', color: '#8A4B00', wrap: true }],
+    });
+  } else if (ok && penalty) {
+    rows.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'md',
+      backgroundColor: '#FFF7E6',
+      cornerRadius: 'md',
+      paddingAll: '10px',
+      contents: [{ type: 'text', text: '⚠ この予約を取り消すとペナルティ 1 点が付きます(利用日が 3 日以内のため。「せってい」で「ペナルティ期間でも予約する日」に選んだ日です)', size: 'xs', color: '#8A4B00', wrap: true }],
     });
   }
   if (ok) {
@@ -106,7 +117,9 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
         type: 'text',
         text: cancelData
           ? '取り消すときは下の「キャンセル」(今日中)。明日以降は「予約一覧を見る」→ その行の「キャンセル」(ペナルティ付き)。'
-          : '取り消すときは「予約一覧を見る」→ その行の「キャンセル」。利用日の4日前までならペナルティは付きません。',
+          : penalty
+            ? '取り消すときは「予約一覧を見る」→ その行の「キャンセル」(ペナルティ付き)。'
+            : '取り消すときは「予約一覧を見る」→ その行の「キャンセル」。利用日の4日前までならペナルティは付きません。',
         size: 'xs',
         color: '#777777',
         wrap: true,

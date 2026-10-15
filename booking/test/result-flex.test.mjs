@@ -55,3 +55,13 @@ test('結果カード(自動予約): 見出しに「自動予約」。cancelData
   const manualNg = buildResultFlex({ slot, status: 'taken', message: '満員', facility: '亀戸中央公園' }, 'ゆう');
   assert.equal(manualNg.contents.header.contents[0].text, '⚠️ 予約できませんでした(ボタン)');
 });
+
+test('結果カード(自動予約・ペナルティ期間の日): 取消にペナルティが付く旨の警告。キャンセルボタンは付けない', () => {
+  const m = buildResultFlex({ slot, status: 'success', reservationNo: '1', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう', { auto: true, penalty: true });
+  const text = JSON.stringify(m.contents);
+  assert.match(text, /取り消すとペナルティ 1 点が付きます/);
+  assert.match(text, /「キャンセル」\(ペナルティ付き\)/);
+  assert.equal(text.includes('ペナルティなしで取り消せるのは今日'), false);
+  assert.equal(text.includes('"type":"postback"'), false);
+  assert.ok(bytes(m) < 10000);
+});

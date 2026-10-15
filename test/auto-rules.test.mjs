@@ -263,3 +263,36 @@ test('空き通知の絞り込み(2026-09-27): A・B の予定と時間が重な
     return require('../lib/auto-rules.js').findPlaceConflict(s, p).reason;
   }
 });
+
+test('ペナルティ期間でも予約する日(2026-10-15): allowDates の日はペナルティ期間でも auto。除外枠・除外日はその日でも優先。掃除で過ぎた日は落ちる', () => {
+  const ex = { dates: ['2026-09-16'], slots: [{ park: '1040', date: '2026-09-17', start: '19:00' }], allowDates: ['2026-09-16', '2026-09-17'] };
+  // 9/17(+3 日)は allowDates にあるので対象。reason でペナルティ期間だと分かる
+  const c = classifySlot(slot('猿江恩賜公園', '2026-09-17', '09:00-11:00'), { today: TODAY, exclusions: ex });
+  assert.equal(c.kind, 'auto');
+  assert.match(c.reason, /ペナルティ期間/);
+  // 同じ日でも除外枠は除外枠
+  assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-17', '19:00-21:00'), { today: TODAY, exclusions: ex }).kind, 'excluded_slot');
+  // 除外日と両方に入っていたら除外日が勝つ(Worker 側で両立しないようにしているが、安全側)
+  assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-16', '19:00-21:00'), { today: TODAY, exclusions: ex }).kind, 'excluded_date');
+  // allowDates に無い日は従来どおり penalty
+  assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-15', '19:00-21:00'), { today: TODAY, exclusions: ex }).kind, 'penalty');
+  // allowDates が無い古い形の一覧でも動く
+  assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-17', '09:00-11:00'), { today: TODAY, exclusions: { dates: [], slots: [] } }).kind, 'penalty');
+
+  // 計画: 予約者も付く(9/17 は木曜 → B)
+  const { byDate, skipped } = planAutoBooking([slot('猿江恩賜公園', '2026-09-17', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-17', '09:00-11:00')], { now: Date.parse('2026-09-14T01:00:00Z'), exclusions: ex });
+  assert.deepEqual([...byDate.keys()], ['2026-09-17']);
+  assert.equal(byDate.get('2026-09-17')[0].person, 'B');
+  assert.deepEqual(skipped.map((s) => s.kind), ['excluded_slot']);
+
+  // 通知の振り分け: Pi が生きていれば「予約する日」の枠は通知しない(Pi が予約する)。Pi が死んでいれば通知
+  const state = { alive: true, active: true, dates: [], slots: [], allowDates: ['2026-09-17'] };
+  const slots = [slot('猿江恩賜公園', '2026-09-17', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-16', '19:00-21:00')];
+  assert.deepEqual(splitForNotification(slots, { today: TODAY, autoState: state }).notify.map((s) => s.date), ['2026-09-16']);
+  assert.deepEqual(splitForNotification(slots, { today: TODAY, autoState: { ...state, alive: false } }).notify.map((s) => s.date), ['2026-09-17', '2026-09-16']);
+
+  // 掃除: 過ぎた日は落ち、重複は 1 つに
+  const pruned = pruneExclusions({ dates: [], slots: [], allowDates: ['2026-09-13', '2026-09-15', '2026-09-15'] }, Date.parse('2026-09-14T01:00:00Z'));
+  assert.deepEqual(pruned.allowDates, ['2026-09-15']);
+  assert.deepEqual(pruneExclusions({ dates: [], slots: [] }, Date.parse('2026-09-14T01:00:00Z')).allowDates, []);
+});

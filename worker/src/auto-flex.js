@@ -21,6 +21,11 @@
 //   │  9/27(土)                         [解除] │
 //   │ 除外枠  手放した枠。空きが出ても取り直さない  │
 //   │  9/27(土) 13:00 大島小松川公園(キャンセル済み) [解除] │
+//   │ ペナルティ期間でも予約する日                  │  ← 2026-10-15 追加。今日〜今日+3 日の 4 行だけ並ぶ
+//   │  9/25(木) 今日                    [予約する] │
+//   │  9/26(金)              [対象] [解除] │  ← 選んだ日は緑のバッジ
+//   │  9/27(土)                        [予約する] │
+//   │  9/28(日)                        [予約する] │
 //   ├──────────────────────────────────┤
 //   │ 📅 除外日を追加(日付ピッカー)   ↻ 更新    │
 //   └──────────────────────────────────┘
@@ -154,9 +159,22 @@ const heading = (title, desc) => ({
 });
 const row = (label, pillBox) => ({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' }), pillBox] });
 const reasonText = (r) => (r === 'released' ? 'サイトで取消' : 'キャンセル済み');
+// 「ペナルティ期間でも予約する日」の 1 行。選ばれている日は緑の「対象」バッジ + 「解除」、それ以外は「予約する」
+function penaltyDayRow(d, today) {
+  const label = `${fmtDate(d.date)}${d.date === today ? ' 今日' : ''}`;
+  const contents = [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' })];
+  if (d.allowed) {
+    contents.push({ ...badge(true), margin: 'md', contents: [text('対象', { size: 'xs', weight: 'bold', color: '#FFFFFF' })] });
+    contents.push(pill('解除', { type: 'postback', label: '解除', data: d.data, displayText: `${fmtDate(d.date)} はペナルティ期間なので自動予約しない` }));
+  } else {
+    contents.push(pill('予約する', { type: 'postback', label: '予約する', data: d.data, displayText: `${fmtDate(d.date)} はペナルティ期間でも自動予約する` }));
+  }
+  return { type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents };
+}
 
-// model = { status, dates: [{ date, removeData }], slots: [{ date, start, facility, reason, removeData }], addData, today, maxDate, note }
-export function buildAutoSettingsFlex({ status, dates, slots, addData, today, maxDate, note = null }) {
+// model = { status, dates: [{ date, removeData }], slots: [{ date, start, facility, reason, removeData }],
+//           penaltyDays: [{ date, allowed, data }](今日〜今日+3 日。allowed なら data は解除、そうでなければ追加の postback), addData, today, maxDate, note }
+export function buildAutoSettingsFlex({ status, dates, slots, penaltyDays = [], addData, today, maxDate, note = null }) {
   const body = [];
   if (note) {
     body.push({ type: 'box', layout: 'vertical', margin: 'md', backgroundColor: COLOR_NOTE_BG, cornerRadius: 'md', paddingAll: '10px', contents: [text(note, { size: 'sm', color: COLOR_NOTE_FG, wrap: true })] });
@@ -181,12 +199,18 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(text('除外日・除外枠は日が過ぎると自動で消えます。切り替えは 1〜3 分で Pi に届きます。', { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xl' }));
+  // ペナルティ期間でも予約する日(2026-10-15)。候補はペナルティ期間の日だけ(今日〜今日+3 日)なので、日付ピッカーではなく一覧から選ぶ
+  if (penaltyDays.length) {
+    body.push(heading('ペナルティ期間でも予約する日', '今日から 3 日先までは、取り消すとペナルティが付くので普段は自動予約しません。それでも取りたい日は「予約する」'));
+    penaltyDays.forEach((d) => body.push(penaltyDayRow(d, today)));
+  }
+
+  body.push(text('除外日・除外枠・予約する日は日が過ぎると自動で消えます。切り替えは 1〜3 分で Pi に届きます。', { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xl' }));
 
   const [, tm, td] = today.split('-').map(Number);
   return {
     type: 'flex',
-    altText: autoSettingsText({ status, dates, slots, today }).slice(0, 400),
+    altText: autoSettingsText({ status, dates, slots, penaltyDays, today }).slice(0, 400),
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -222,12 +246,14 @@ export function buildAutoSettingsFlex({ status, dates, slots, addData, today, ma
 }
 
 // テキスト版(Flex が 400 で弾かれたときの再送と altText)。ボタンが無いので合言葉を添える
-export function autoSettingsText({ status, dates, slots, today }) {
+export function autoSettingsText({ status, dates, slots, penaltyDays = [], today }) {
   const auto = autoSwitchView(status);
   const notify = notifySwitchView(status);
   const lines = [`⚙️ 設定(${fmtDate(today)})`, `自動予約: ${auto.on ? 'ON' : 'OFF'} / ${auto.detail}`, `空き通知カード: ${notify.on ? 'ON' : 'OFF'} / ${notify.detail}`];
   lines.push(`除外日: ${dates.length ? dates.map((d) => fmtDate(d.date)).join('、') : 'なし'}`);
   lines.push(`除外枠: ${slots.length ? slots.map((s) => `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`).join('、') : 'なし'}`);
+  const allowed = penaltyDays.filter((d) => d.allowed);
+  lines.push(`ペナルティ期間でも予約する日: ${allowed.length ? allowed.map((d) => fmtDate(d.date)).join('、') : 'なし'}`);
   lines.push(`切り替えは「${AUTO_ON_TEXT}」「${AUTO_OFF_TEXT}」「${NOTIFY_ON_TEXT}」「${NOTIFY_OFF_TEXT}」`);
   return lines.join('\n');
 }
