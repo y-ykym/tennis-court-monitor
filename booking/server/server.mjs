@@ -418,7 +418,9 @@ const server = http.createServer((req, res) => {
         consecutiveFailures: autoRunner?.consecutiveFailures() ?? null,
         // 直近の照会で見えていた監視対象の空き(実枠テストで枠を選ぶときに見る)
         targets: autoRunner ? autoRunner.lastTargets().map((s) => ({ key: slotKey(s), ...s })) : null,
-        exclusions: autoRunner?.exclusions() ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, at: autoRunner.exclusions().at } : null,
+        exclusions: autoRunner?.exclusions()
+          ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, allowDates: (autoRunner.exclusions().allowDates || []).length, at: autoRunner.exclusions().at }
+          : null,
         queue: { running: queue.current() ? { kind: queue.current().kind, id: queue.current().id } : null, waiting: queue.waiting().map((j) => ({ kind: j.kind, id: j.id })) },
       }),
       'application/json'

@@ -2,7 +2,11 @@
 // フェーズ3 自動予約の Worker 側(状態の置き場・API・「せってい」コマンドの postback)
 //
 //   KV(BOOKING_KV):
-//     auto_exclusions  { dates: ['YYYY-MM-DD'], slots: [{ park, date, start, end, facility, reason, at }] }  除外日・除外枠(A/B 共通)
+//     auto_exclusions  { dates: ['YYYY-MM-DD'], slots: [{ park, date, start, end, facility, reason, at }], allowDates: ['YYYY-MM-DD'] }
+//                      除外日・除外枠・ペナルティ期間でも予約する日(いずれも A/B 共通)。
+//                      allowDates は 2026-10-15 追加: 普段はペナルティ期間(利用日 ≤ 今日+3 日)の枠を自動予約しないが、本人が「せってい」で
+//                      選んだ日だけは対象にする(取消にペナルティが付くことを承知のうえ)。選べるのは今日〜今日+PENALTY_DAYS。過ぎた日は読むときに落とす。
+//                      除外日と同じ日は両立しないので、片方に入れたらもう片方からは外す
 //   Pi の生存・モードは KV に書かない(2026-09-16 変更)。1 分ごとに書くと KV 無料枠(書き込み 1 日 1,000 回)を URL 登録と合わせて超え、
 //   Worker がエラーを返して Pi が除外一覧を取れなくなった。代わりに、必要なときだけ登録済みの URL(トンネル)越しに Pi の /auto/status を聞く
 //
@@ -24,13 +28,15 @@
 //
 //   LINE:
 //     「せってい」→ 設定メニューのカード(自動予約・空き通知カードの ON/OFF ボタン、除外日・除外枠の一覧と「解除」、
-//       フッターに「除外日を追加」= 日付ピッカー)。auto-flex.js。2026-09-25 まで合言葉は「じどう」
+//       ペナルティ期間の日(今日〜今日+3 日)の一覧と「予約する」「解除」、フッターに「除外日を追加」= 日付ピッカー)。auto-flex.js。2026-09-25 まで合言葉は「じどう」
 //     「じどうおふ」/「じどうおん」→ 自動予約の一時停止 / 再開(カードの「OFF にする」「ON にする」もこの合言葉を送る。KV auto_switch。Pi は heartbeat の応答で受け取り、次の照会から従う。
 //       停止中は Pi が mode='paused' を申告し、Actions は従来どおり全部通知する。Pi 側の .env が dry-run/off のときは LINE から ON にはできない)
 //     「つうちおふ」/「つうちおん」→ 空き通知カードを止める / 戻す(カードのボタンも同じ。KV notify_switch)。Actions は /auto/state の notifyEnabled、
 //       Pi は heartbeat の応答の notifyEnabled で受け取る。自動予約の結果カード・フェーズ4 の予告・「よやく」の返信は止めない
 //     postback 'x|a|-|<exp>.<sig>'(日を追加。params.date に選んだ日)/ 'x|d|YYYYMMDD|<exp>.<sig>'(除外日を解除)/
-//              'x|s|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(除外枠を解除)。署名は cancel-token.js と同じ HMAC 先頭 16 バイト
+//              'x|s|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(除外枠を解除)/
+//              'x|p|YYYYMMDD|<exp>.<sig>'(ペナルティ期間のその日を予約する日にする)/ 'x|q|YYYYMMDD|<exp>.<sig>'(その解除)。
+//              署名は cancel-token.js と同じ HMAC 先頭 16 バイト
 //     キャンセル成功時(index.js)→ addExcludedSlots() で除外枠に(LINE の返信より先に KV へ書く)
 //
 //   枠キーは lib/auto-rules.js と同じ "<公園コード>|<YYYY-MM-DD>|<HH:MM>"。過ぎた除外日・開始時刻を過ぎた除外枠は読むときに落とす
@@ -64,6 +70,9 @@ const TENNISBEAR_BUDGET_MS = 8000;
 const SETTINGS_BUTTON_TTL_SEC = 60 * 60;
 // 除外日に指定できる範囲(今日から)
 export const MAX_DAYS_AHEAD = 35;
+// ペナルティ日数(サイトの penaltyday)。lib/config.js の AUTO_BOOKING.PENALTY_DAYS・penalty-alert.js の DEFAULT_PENALTY_DAYS と同じ値。
+// 「ペナルティ期間でも予約する日」に選べるのは 今日〜今日+この日数(= 自動予約が普段は見送る日)
+export const PENALTY_DAYS = 3;
 const SIG_BYTES = 16;
 
 const enc = new TextEncoder();
@@ -95,6 +104,12 @@ function addDaysIso(iso, days) {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
+// ペナルティ期間の日(今日〜今日+PENALTY_DAYS)を順に。「せってい」の一覧と postback の検証に使う
+export function penaltyPeriodDates(todayIso) {
+  const out = [];
+  for (let i = 0; i <= PENALTY_DAYS; i++) out.push(addDaysIso(todayIso, i));
+  return out;
+}
 
 // ---- 枠キー(lib/auto-rules.js と同じ形式) ----
 export function parkCodeOf(facilityOrCode) {
@@ -119,6 +134,8 @@ function normalizeSlot(s, now) {
 export function pruneExclusions(ex, now = Date.now()) {
   const today = jstTodayIso(now);
   const dates = [...new Set((ex?.dates || []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= today))].sort();
+  // ペナルティ期間でも予約する日。過ぎた日は落とす(今日より先には増えないので上限の掃除は要らない: 日が進むと期間は縮む一方)
+  const allowDates = [...new Set((ex?.allowDates || []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= today))].sort();
   const seen = new Set();
   const slots = (ex?.slots || []).filter((s) => {
     if (!s?.date || !s?.start || jstDateTimeMs(s.date, s.start) <= now) return false;
@@ -128,7 +145,7 @@ export function pruneExclusions(ex, now = Date.now()) {
     return true;
   });
   slots.sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`));
-  return { dates, slots };
+  return { dates, slots, allowDates };
 }
 export async function loadExclusions(env, now = Date.now()) {
   let raw = null;
@@ -137,7 +154,7 @@ export async function loadExclusions(env, now = Date.now()) {
   } catch {
     raw = null;
   }
-  return pruneExclusions(raw || { dates: [], slots: [] }, now);
+  return pruneExclusions(raw || { dates: [], slots: [], allowDates: [] }, now);
 }
 async function saveExclusions(env, ex, now = Date.now()) {
   const pruned = pruneExclusions(ex, now);
@@ -164,6 +181,19 @@ export async function addExcludedSlots(env, slots, now = Date.now()) {
 export async function addExcludedDate(env, dateIso, now = Date.now()) {
   const ex = await loadExclusions(env, now);
   if (!ex.dates.includes(dateIso)) ex.dates.push(dateIso);
+  ex.allowDates = ex.allowDates.filter((d) => d !== dateIso); // 除外日と「予約する日」は両立しない
+  return saveExclusions(env, ex, now);
+}
+// ペナルティ期間でも予約する日を追加・解除(2026-10-15)。追加したら除外日からは外す
+export async function addAllowedDate(env, dateIso, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  if (!ex.allowDates.includes(dateIso)) ex.allowDates.push(dateIso);
+  ex.dates = ex.dates.filter((d) => d !== dateIso);
+  return saveExclusions(env, ex, now);
+}
+export async function removeAllowedDate(env, dateIso, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  ex.allowDates = ex.allowDates.filter((d) => d !== dateIso);
   return saveExclusions(env, ex, now);
 }
 export async function removeExcludedDate(env, dateIso, now = Date.now()) {
@@ -381,9 +411,10 @@ export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEve
 }
 
 // ---- 「せってい」カードの postback data(短い署名付き) ----
+const POSTBACK_KINDS = ['a', 'd', 's', 'p', 'q']; // a 除外日を追加 / d 除外日を解除 / s 除外枠を解除 / p ペナルティ期間の日を予約する日に / q その解除
 export async function signAutoData(secret, kind, value, exp) {
   if (!secret) throw new Error('署名鍵が未設定です');
-  if (!['a', 'd', 's'].includes(kind)) throw new Error('kind が不正です');
+  if (!POSTBACK_KINDS.includes(kind)) throw new Error('kind が不正です');
   const v = String(value || '-');
   if (/[|.]/.test(v)) throw new Error('値に使えない文字');
   const body = `x|${kind}|${v}|${exp}`;
@@ -398,7 +429,7 @@ export async function verifyAutoData(secret, data, now = Date.now()) {
   const expected = b64u((await hmac(secret, body)).slice(0, SIG_BYTES));
   if (!safeEqual(expected, data.slice(dot + 1))) return null;
   const f = body.split('|');
-  if (f.length !== 4 || !['a', 'd', 's'].includes(f[1]) || !/^\d+$/.test(f[3])) return null;
+  if (f.length !== 4 || !POSTBACK_KINDS.includes(f[1]) || !/^\d+$/.test(f[3])) return null;
   return { kind: f[1], value: f[2], exp: Number(f[3]), expired: Number(f[3]) * 1000 < now };
 }
 
@@ -444,12 +475,19 @@ export async function buildAutoSettingsReply(env, { now = Date.now(), note = nul
     slots.push({ ...s, removeData: await signAutoData(secret, 's', `${s.park}_${s.date.replace(/-/g, '')}_${s.start.replace(':', '')}`, exp) });
   }
   const addData = await signAutoData(secret, 'a', '-', exp);
-  const model = { status, dates, slots, addData, today, maxDate: addDaysIso(today, MAX_DAYS_AHEAD), note };
+  // ペナルティ期間の日(今日〜今日+3 日)。選ばれている日は「解除」(q)、それ以外は「予約する」(p)のボタンを付ける
+  const penaltyDays = [];
+  for (const d of penaltyPeriodDates(today)) {
+    const allowed = ex.allowDates.includes(d);
+    penaltyDays.push({ date: d, allowed, data: await signAutoData(secret, allowed ? 'q' : 'p', d.replace(/-/g, ''), exp) });
+  }
+  const model = { status, dates, slots, penaltyDays, addData, today, maxDate: addDaysIso(today, MAX_DAYS_AHEAD), note };
   return { flex: buildAutoSettingsFlex(model), text: autoSettingsText(model) };
 }
 
 export const MSG_AUTO_EXPIRED = '時間切れです。「せってい」からやり直してください';
 export const MSG_AUTO_BAD_DATE = 'その日は指定できません(今日から 35 日先まで)。「せってい」からやり直してください';
+export const MSG_AUTO_BAD_PENALTY_DATE = `その日はもうペナルティ期間ではありません(選べるのは今日から ${PENALTY_DAYS} 日先まで)。「せってい」からやり直してください`;
 
 // 「せってい」カードのボタン(postback)を処理する。戻り値 { flex, text } | { text } | null(無視)
 export async function handleAutoPostback(env, data, params, { now = Date.now() } = {}) {
@@ -476,6 +514,19 @@ export async function handleAutoPostback(env, data, params, { now = Date.now() }
     await removeExcludedDate(env, iso, now);
     note = `${fmt(iso)} の除外を解除しました(この日も自動予約の対象になります)`;
     console.log(`[auto] 除外日を解除: ${iso}`);
+  } else if (t.kind === 'p' || t.kind === 'q') {
+    const iso = `${t.value.slice(0, 4)}-${t.value.slice(4, 6)}-${t.value.slice(6, 8)}`;
+    // 古いカードから押して、その日がもうペナルティ期間でない(過ぎた・今日+4 日以上先にはならないので実質「過ぎた」)ときは受け付けない
+    if (!penaltyPeriodDates(today).includes(iso)) return { text: MSG_AUTO_BAD_PENALTY_DATE };
+    if (t.kind === 'p') {
+      await addAllowedDate(env, iso, now);
+      note = `${fmt(iso)} はペナルティ期間でも自動予約します(空きが出れば予約します。取り消すとペナルティ 1 点が付きます)`;
+      console.log(`[auto] ペナルティ期間でも予約する日を追加: ${iso}`);
+    } else {
+      await removeAllowedDate(env, iso, now);
+      note = `${fmt(iso)} の指定を解除しました(ペナルティ期間なので自動予約せず、空きは通知カードで届きます)`;
+      console.log(`[auto] ペナルティ期間でも予約する日を解除: ${iso}`);
+    }
   } else {
     const [park, ymd, hhmm] = t.value.split('_');
     const key = `${park}|${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}|${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}`;
