@@ -85,6 +85,7 @@ echo "  fetch failed: $(docker compose logs --since 24h booking 2>/dev/null | gr
 echo "  直近の照会 3 行:"
 docker compose logs --since 24h --no-log-prefix booking 2>/dev/null | grep '\[auto\] 照会:' | tail -3 | sed 's/^/    /'
 echo "  ※ コンテナを作り直す前のログは /var/lib/booking/logs/server-YYYY-MM-DD.log(7 日分)。例: docker compose exec booking sh -c 'grep -E \"予約|高速経路|warm\" /var/lib/booking/logs/server-\$(date +%F).log | tail -40'"
+echo "  ※ 失敗時の画面(スクショ・HTML)は /var/lib/booking/debug-out(7 日分。個人情報を含むので Pi の外に出さない): $(docker compose exec -T booking sh -c 'ls /var/lib/booking/debug-out 2>/dev/null | tail -3 | tr "\n" " "')"
 
 hr "Worker から見た登録(registered が true なら外から Pi に届く)"
 curl -s -m 15 "$WORKER_URL/booking/status" || echo "応答なし"

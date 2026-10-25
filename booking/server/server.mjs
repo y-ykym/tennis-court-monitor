@@ -26,6 +26,7 @@
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
 //   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
 //   LOG_DIR                 サーバーのログを日付ごとに残す場所(例 /var/lib/booking/logs。無ければ docker logs だけ)
+//   DEBUG_DIR               失敗時のスクリーンショットと HTML の置き場(既定 /tmp/debug-out。volume に置くと作り直しても残る。7 日で削除)
 //   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード(既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う)
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
@@ -89,6 +90,21 @@ const PROFILE_DIR = '/tmp/profile';
 const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
 // ブラウザを先に起こしておく(起動 + トップページの読み込み 約 5〜7 秒を予約の前に済ませる。8 分おきにトップを読み直してセッションを保つ)
 const BROWSER_WARM = process.env.BROWSER_WARM !== '0';
+// 失敗時の画面(スクリーンショット・HTML)の保存先。volume に置けばコンテナを作り直しても残る(10/25 に「予約」送信後の応答を見られなかったため)。
+// 7 日より古いものは起動時に消す
+const DEBUG_DIR = process.env.DEBUG_DIR || '/tmp/debug-out';
+function pruneDebugDir() {
+  try {
+    if (!fs.existsSync(DEBUG_DIR)) return;
+    const cutoff = Date.now() - 7 * 86400 * 1000;
+    for (const f of fs.readdirSync(DEBUG_DIR)) {
+      const p = path.join(DEBUG_DIR, f);
+      if (fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, { force: true });
+    }
+  } catch (e) {
+    log(`失敗時の画面の置き場を掃除できませんでした(無視): ${e.message}`);
+  }
+}
 // 先に起こしたブラウザで、ログイン画面(鍵 loginJKey)と、最も出やすい公園の検索を前もって済ませておく(各 3〜5.5 秒の短縮。2026-10-25)
 const WARM_PRESEARCH_PARK = (process.env.WARM_PRESEARCH_PARK ?? '1040').trim() || null;
 // 結果を LINE に push する(両方あるとき)
@@ -223,7 +239,7 @@ async function runReserve(s, extra = {}) {
   const browserOptions = {
     ...launchOptions(),
     onChallenge: handoff,
-    debugDir: '/tmp/debug-out',
+    debugDir: DEBUG_DIR, // 失敗時のスクリーンショットと HTML(個人情報を含む。Pi の外に出さない)
     log: (m) => log(`  ${m}`),
     ...extra,
   };
@@ -240,13 +256,24 @@ async function runReserve(s, extra = {}) {
     // 試行の記録(auto-events の result)に載せる診断: 経路・先起こしの有無・所要・やり直しの理由(10/25 に遅い試行の原因が追えなかったため)
     result.diag = { ...(result.diag || {}), path: useFast ? 'fast' : 'ui', warm: !!warm1, elapsedMs: result.elapsedMs };
     if (useFast && result.status === 'error') {
-      log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
-      s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
       const firstError = result.message;
       const firstMs = result.elapsedMs;
-      const warm2 = await acquireWarmBrowser();
-      result = await reserve(slot, credentials, { ...browserOptions, warm: warm2 });
-      result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
+      if (result.diag?.applySent) {
+        // 「予約」を押した後の error(完了画面にならず、一覧にも無い)= 最後の送信で先を越されたか、サイトの一時エラー。
+        // UI 操作でやり直すと 90 秒以上と通信 15 回を使う(2026-10-25 23:11 の実例)ので、高速経路でもう一度だけ試す
+        // (埋まっていれば週データの確認で 30 秒ほどで taken、空いていればそのまま予約)
+        log(`  「予約」を押した後に error のため、高速経路でもう一度: ${result.message}`);
+        s.message = 'もう一度確かめています(高速経路)…';
+        const warm2 = await acquireWarmBrowser();
+        result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true, warm: warm2 });
+        result.diag = { ...(result.diag || {}), path: 'fast2', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
+      } else {
+        log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
+        s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
+        const warm2 = await acquireWarmBrowser();
+        result = await reserve(slot, credentials, { ...browserOptions, warm: warm2 });
+        result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
+      }
     }
   } catch (e) {
     result = { status: 'error', message: e.message };
@@ -557,6 +584,7 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
+pruneDebugDir();
 if (warmer) {
   warmer.start();
   log('[warm] ブラウザを先に起こしておきます(BROWSER_WARM=0 でやめられる)');
