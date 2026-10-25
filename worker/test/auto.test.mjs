@@ -422,8 +422,9 @@ test('対象に追加した枠(2026-10-25): 日時ピッカー(b)→ 公園を�
   assert.ok(t0.includes('対象に追加した枠'));
   assert.ok(!t0.some((s) => s.includes('ペナルティ期間でも予約する日')), '日単位の旧機能は消えている');
   const pickers = actions(r0.flex.contents).filter((a) => a.type === 'datetimepicker');
-  assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['➕ 対象枠を追加', 'datetime'], ['📅 除外日を追加', 'date']], '対象枠の行が先(1 行まるごと)');
-  const add = pickers[0];
+  assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['＋ 追加', 'date'], ['＋ 追加', 'datetime']], '除外日・対象に追加した枠の見出しの右に「＋ 追加」');
+  const add = pickers[1];
+  assert.equal(actions(r0.flex.contents).filter((a) => a.type === 'message' && a.label.includes('更新')).length, 1, 'フッターは「更新」だけ');
   assert.ok(add.data.length <= 300);
   assert.equal((await verifyAutoData(SECRET, add.data, NOW)).kind, 'b');
   assert.match(r0.text, /対象に追加した枠: なし/);
@@ -445,7 +446,8 @@ test('対象に追加した枠(2026-10-25): 日時ピッカー(b)→ 公園を�
   assert.ok(texts(r2.flex.contents).some((s) => s.includes('9/16(水) 13:00〜15:00 亀戸中央公園 を対象に追加しました') && s.includes('ペナルティ 1 点')));
   const ex2 = await loadExclusions(env, NOW);
   assert.deepEqual(ex2.allowSlots.map((s) => [slotKeyOf(s), s.end, s.facility]), [['1050|2026-09-16|13:00', '15:00', '亀戸中央公園']]);
-  assert.ok(texts(r2.flex.contents).some((s) => s.includes('9/16(水) 13:00 亀戸中央公園') && s.includes('⚠ペナルティ期間')));
+  assert.ok(texts(r2.flex.contents).some((s) => s === '9/16(水) 13:00 亀戸中央公園'));
+  assert.ok(texts(r2.flex.contents).includes('⚠ 取消にペナルティ'), 'ペナルティ期間の枠は 2 行目に小さく ⚠');
   const undo = actions(r2.flex.contents).filter((a) => a.type === 'postback' && a.label === '解除');
   assert.equal(undo.length, 1, '除外日・除外枠は無いので「解除」はこの 1 つ');
   assert.equal((await verifyAutoData(SECRET, undo[0].data, NOW)).kind, 'u');
