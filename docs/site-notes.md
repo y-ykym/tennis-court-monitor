@@ -59,10 +59,10 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
     `checkTextValue`(予約ボタン)・`showConfirm`・`jQuery` はサイトの JS が要る。CSS 3 本と jquery-barcode を止めれば同時接続が空き約 3 秒の短縮見込み
   - 反映: `reserve.js` の `launchBrowserForReserve` が phase('top' / 'confirm' / 'ui')で止めるものを切り替える。
     ブラウザを先に起こしてトップまで開いておく `src/browser-warmer.js`(8 分おきに読み直し)も同日に追加
-  - JS・CSS の応答ヘッダは `Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0` + `Pragma: no-cache` + 1994 年の `Expires`
-    (ETag は `W/"<サイズ>-<更新時刻>"`)。ブラウザは毎回取り直す。そこで `src/static-cache.js` が JS(/web/js/*.js)の控えを持ち、
-    `reserve.js` の route が差し込む(無ければ `route.fetch()` で取って控える)。24 時間で裏で取り直し(If-None-Match)。
-    CSS は高速経路で読まないので控えない(本人決定)。控えの置き場は Pi の `/var/lib/booking/static-cache`(`STATIC_CACHE=0` で停止)
+  - JS・CSS の応答ヘッダは `Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0`(ETag は `W/"<サイズ>-<更新時刻>"`)で、
+    ブラウザは毎回取り直す。**JS 8 本を手元に控えて差し込む案は実装して計測したが不採用(本人判断、2026-10-25)**:
+    確認画面の表示が 9.5 → 7.0 秒(JS は同時に読まれるので 1 本ずつの遅さは積み上がらない)しか縮まず、
+    サイトが JS を更新した日に古い JS で動く故障の種が増えるため。再提案しない(commit 8c9ff003b を revert)
 - 反映: 予約一覧は枠選択の後に取る(先に取られていた回は取らない)。ログアウトは応答待ちだけ(3〜4 秒)。週 JSON は従来どおり取る
 
 ---
