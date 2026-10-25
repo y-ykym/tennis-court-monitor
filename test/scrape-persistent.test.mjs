@@ -102,12 +102,22 @@ test('空の応答(JSON でない)はそのセッションを捨てて新しい�
   assert.equal(site.calls.week, 5);
 });
 
-test('行の無い JSON(セッション未認識)も作り直しの対象', async () => {
+test('行の無い JSON(空の応答)は、まず同じセッションで 1 回取り直す(通ればセッションは作り直さない)', async () => {
   let n = 0;
   const site = fakeSite({ week: () => (n++ === 0 ? JSON.stringify({ result: [] }) : undefined) });
+  const logs = [];
+  const { scrape } = make(site, { log: (m) => logs.push(m) });
+  assert.equal((await scrape()).length, 4);
+  assert.equal(scrape.stats().created, 4, '作り直していない');
+  assert.equal(site.calls.week, 5, '週の取り直し 1 回だけ');
+  assert.ok(logs.some((m) => /同じセッションで取り直して成功/.test(m)));
+});
+
+test('同じセッションで取り直しても空なら(セッションを失った)、新しいセッションで作り直す', async () => {
+  const site = fakeSite({ week: (session) => (session.id === 0 ? JSON.stringify({ result: [] }) : undefined) });
   const { scrape } = make(site);
   assert.equal((await scrape()).length, 4);
-  assert.equal(scrape.stats().created, 5);
+  assert.equal(scrape.stats().created, 5, '1 本作り直した');
 });
 
 test('同じ週が 3 回続けて失敗したら公園名入りのエラーで照会全体が失敗する。他の週は最後まで取り終える', async () => {

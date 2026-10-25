@@ -256,23 +256,26 @@ async function runReserve(s, extra = {}) {
     // 試行の記録(auto-events の result)に載せる診断: 経路・先起こしの有無・所要・やり直しの理由(10/25 に遅い試行の原因が追えなかったため)
     result.diag = { ...(result.diag || {}), path: useFast ? 'fast' : 'ui', warm: !!warm1, elapsedMs: result.elapsedMs };
     if (useFast && result.status === 'error') {
+      // 高速経路の error は、まず高速経路でもう一度(新しいセッション。約 30 秒)。都サイトの一時エラー(「データ通信を正しく行うことが
+      // できませんでした」・セッション未認識)はやり直せば通ることが多く、UI 操作のやり直し(70〜120 秒)で枠が消えていた(2026-10-26 00:12 の実例)。
+      // 「予約」を押した後の error(先を越されたか一時エラー)も同じ(埋まっていれば週データの確認で taken)。
+      // それでも error で、どちらの回も「予約」を押していなければ、最後に UI 操作でやり直す(押した後なら二重の送信を避けて終える)
       const firstError = result.message;
       const firstMs = result.elapsedMs;
-      if (result.diag?.applySent) {
-        // 「予約」を押した後の error(完了画面にならず、一覧にも無い)= 最後の送信で先を越されたか、サイトの一時エラー。
-        // UI 操作でやり直すと 90 秒以上と通信 15 回を使う(2026-10-25 23:11 の実例)ので、高速経路でもう一度だけ試す
-        // (埋まっていれば週データの確認で 30 秒ほどで taken、空いていればそのまま予約)
-        log(`  「予約」を押した後に error のため、高速経路でもう一度: ${result.message}`);
-        s.message = 'もう一度確かめています(高速経路)…';
-        const warm2 = await acquireWarmBrowser();
-        result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true, warm: warm2 });
-        result.diag = { ...(result.diag || {}), path: 'fast2', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
-      } else {
-        log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
+      const firstApplySent = !!result.diag?.applySent;
+      log(`  高速経路の結果が error のため、高速経路でもう一度: ${result.message}`);
+      s.message = 'もう一度確かめています(高速経路)…';
+      const warm2 = await acquireWarmBrowser();
+      result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true, warm: warm2 });
+      result.diag = { ...(result.diag || {}), path: 'fast2', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
+      if (result.status === 'error' && !firstApplySent && !result.diag?.applySent) {
+        const secondError = result.message;
+        const secondMs = result.elapsedMs;
+        log(`  高速経路が 2 回とも error のためブラウザ方式でやり直し: ${result.message}`);
         s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
-        const warm2 = await acquireWarmBrowser();
-        result = await reserve(slot, credentials, { ...browserOptions, warm: warm2 });
-        result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
+        const warm3 = await acquireWarmBrowser();
+        result = await reserve(slot, credentials, { ...browserOptions, warm: warm3 });
+        result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm3, elapsedMs: result.elapsedMs, firstError, firstMs, secondError, secondMs };
       }
     }
   } catch (e) {

@@ -305,7 +305,10 @@ export async function reserve(slot, credentials, options = {}) {
   if (options.warm && !warm) await discardWarm(); // ページが閉じられていた束は、新しく起動する前に閉じ切る(同じプロファイルで 2 つ開かない)
   const bundle = warm || (await launchBrowserForReserve(options, log));
   const { browser, context, page, setPhase } = bundle;
-  if (warm) log(`ブラウザ: 先に起こしてあったものを使用(トップページ ${warm.topLoadedAt ? `${Math.round((Date.now() - warm.topLoadedAt) / 1000)} 秒前に読み込み済み` : '未読み込み'})`);
+  if (warm) {
+    log(`ブラウザ: 先に起こしてあったものを使用(トップページ ${warm.topLoadedAt ? `${Math.round((Date.now() - warm.topLoadedAt) / 1000)} 秒前に読み込み済み` : '未読み込み'})`);
+    if (warm.blocked) for (const k of Object.keys(warm.blocked)) warm.blocked[k] = 0; // 待機中(読み直し)に止めた分は数えない
+  }
   setPhase(fastInPage ? 'top' : 'ui');
 
   // 人間らしい操作(reCAPTCHA v3 のスコア対策)。実際にマウスを動かして押し、入力に間を置くだけで、
