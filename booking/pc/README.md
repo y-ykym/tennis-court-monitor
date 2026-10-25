@@ -207,6 +207,7 @@ docker compose ps                                                      # 3 サ�
   **KM2.5x4mm ネジ ×4**、ゴム足 ×4 だけ。組み込み後の実測は 40℃ 前後
 - **電源を切るときの注意**: `sudo shutdown -h now` → 緑の ACT ランプが消えてから電源を抜く。
   作業は**毎時 00 分の直後**に始める(Worker の生存確認がその時刻。10 分を超えると LINE に ⚠️ が出る)
+- **夜間の成立カード**: 0:00〜8:00 に自動予約が成立したときの LINE カードは、その場では送らず 8:00 にまとめて送る(本人依頼 2026-10-26。`NIGHT_HOLD=0` でやめる。溜まり分は `/var/lib/booking/pending-morning.json`、`auto-check.sh` に件数が出る)。手動の「よやく」の結果・reCAPTCHA の確認依頼・失敗のカードはその場で送る
 - **ログ**: `docker compose logs` はコンテナを作り直すと消える。サーバーのログは `/var/lib/booking/logs/server-YYYY-MM-DD.log`(volume。7 日分)にも残る(2026-10-25)。
   予約の試行の内訳(経路・所要・やり直しの理由)は `./auto-stats.sh 7 --list` の各行末〔…〕にも出る
 - **更新**: `cd ~/tennis-court-monitor/booking/pc && git pull && docker compose up -d --build`

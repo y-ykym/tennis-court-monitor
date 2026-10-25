@@ -52,6 +52,8 @@ services:
       AUTO_EVENTS_FILE: /var/lib/booking/auto-events.jsonl
       # サーバーのログを日付ごとに残す(コンテナを作り直しても消えない。7 日で削除。2026-10-25)
       LOG_DIR: /var/lib/booking/logs
+      # 夜間(0:00〜8:00)に成立した自動予約のカードの置き場(8:00 にまとめて送る。2026-10-26)。NIGHT_HOLD=0 でやめる
+      PENDING_MORNING_FILE: /var/lib/booking/pending-morning.json
       # 失敗時のスクリーンショットと HTML(個人情報を含む。Pi の外に出さない)。作り直しても残る。7 日で削除
       DEBUG_DIR: /var/lib/booking/debug-out
       SCREEN_W: '600'

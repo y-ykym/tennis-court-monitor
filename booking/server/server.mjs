@@ -26,6 +26,7 @@
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
 //   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
 //   LOG_DIR                 サーバーのログを日付ごとに残す場所(例 /var/lib/booking/logs。無ければ docker logs だけ)
+//   NIGHT_HOLD=0            夜間(0:00〜8:00)の自動予約の成立カードを 8:00 にまとめて送る(src/morning-digest.js。既定 on)のをやめる
 //   DEBUG_DIR               失敗時のスクリーンショットと HTML の置き場(既定 /tmp/debug-out。volume に置くと作り直しても残る。7 日で削除)
 //   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード(既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う)
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
@@ -54,6 +55,7 @@ import { reserve, launchBrowserForReserve } from '../src/reserve.js';
 import { createBrowserWarmer } from '../src/browser-warmer.js';
 import { prefetchInPage } from '../src/site-inpage.js';
 import { createFileLog } from '../src/file-log.js';
+import { createMorningDigest } from '../src/morning-digest.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
@@ -127,6 +129,16 @@ const lineQueue = createLineQueue({
   push: (message) => pushResult(message, LINE),
   log,
 }).start();
+// 夜間(0:00〜8:00)の自動予約の成立カードは溜めて 8:00 にまとめて送る(本人依頼 2026-10-26。寝ている間に届いても見ないため)。
+// 手動の「よやく」の結果・reCAPTCHA の確認依頼・失敗のカードは対象外(その場で送る)
+const morningDigest =
+  process.env.NIGHT_HOLD !== '0'
+    ? createMorningDigest({
+        file: process.env.PENDING_MORNING_FILE || '/var/lib/booking/pending-morning.json',
+        send: (messages, what) => lineQueue.send(messages, what),
+        log,
+      })
+    : null;
 
 function credentialsFor(person) {
   const p = person === 'B' ? 'B' : 'A';
@@ -360,7 +372,11 @@ if (AUTO_MODE !== 'off') {
         const s = newSession(token, payload, 'auto');
         return runReserve(s, { reservationList: true, beforeApply });
       },
-      notify: (message, what) => (LINE.token && LINE.to ? lineQueue.send(message, what) : Promise.resolve(false)),
+      notify: async (message, what) => {
+        if (!LINE.token || !LINE.to) return false;
+        if (morningDigest && what === '自動予約の成立カード' && morningDigest.hold(message, what)) return true; // 夜間は 8:00 にまとめて
+        return lineQueue.send(message, what);
+      },
       notifyVacancy: async (slots) => {
         if (!LINE.token || !LINE.to) return;
         for (const m of buildFlexMessages(slots)) await lineQueue.send(m, '空き通知カード(予約直前に対象外になった枠)');
@@ -504,6 +520,8 @@ const server = http.createServer((req, res) => {
         lastCycle: autoRunner?.lastCycle() ?? null,
         // 先に起こしてあるブラウザの状態(src/browser-warmer.js。auto-check が表示する)
         warm: warmer ? warmer.status() : null,
+        // 夜間に溜めている成立カード(8:00 にまとめて送る)
+        nightHold: morningDigest ? morningDigest.status() : null,
         // 空き照会の連続失敗回数(3 回以上で照会の間隔を広げている。サイトのメンテナンス中はここが増え続ける)
         consecutiveFailures: autoRunner?.consecutiveFailures() ?? null,
         // 直近の照会で見えていた監視対象の空き(実枠テストで枠を選ぶときに見る)
@@ -588,6 +606,10 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 pruneDebugDir();
+if (morningDigest) {
+  morningDigest.start();
+  log('夜間(0:00〜8:00)に成立した自動予約のカードは 8:00 にまとめて送ります(NIGHT_HOLD=0 でやめられる)');
+}
 if (warmer) {
   warmer.start();
   log('[warm] ブラウザを先に起こしておきます(BROWSER_WARM=0 でやめられる)');

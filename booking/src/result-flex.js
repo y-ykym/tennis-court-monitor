@@ -234,7 +234,7 @@ export async function pushResult(message, { token, to }, { retries = 3, delayMs 
       const res = await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ to, messages: [message] }),
+        body: JSON.stringify({ to, messages: Array.isArray(message) ? message : [message] }), // 配列なら 1 回の push に複数件(最大 5。夜間のまとめ送り)
         signal: AbortSignal.timeout(10000),
       });
       if (res.ok) return;
