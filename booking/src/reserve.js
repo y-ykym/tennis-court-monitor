@@ -3,7 +3,8 @@
 //
 //   reserve(slot, credentials, options) → Promise<Result>
 //
-//   slot        = { park: '1050', date: '2026-09-17', startHour: 15, people: 2 }
+//   slot        = { park: '1050', date: '2026-09-17', startHour: 15, people: 2, vacant?: 3 }
+//                 vacant(省略可)は空き照会で分かっている面数。fastInPage のとき、あれば週データの再確認(1 往復 約 10 秒)を飛ばして枠を選ぶ
 //   credentials = { userId, password }            利用者番号(8桁)とパスワード
 //   options     = {
 //     headless: true,        ブラウザを画面に出さない(既定)。ローカル確認では false にできる
@@ -311,11 +312,16 @@ export async function reserve(slot, credentials, options = {}) {
         await saveDebug(page, debugDir, 'top-unexpected');
         throw new ReserveError('error', `トップページにログインボタンがありません (HTTP ${topRes?.status() ?? '?'}, ${await pageId(page)}: ${diag})`);
       }
-      const r = await page.evaluate(inPageFlow, { slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour) }, credentials, withList: reservationList });
+      const vacant = slot.vacant == null || slot.vacant === '' ? null : Number(slot.vacant);
+      const r = await page.evaluate(inPageFlow, {
+        slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour), vacant: Number.isFinite(vacant) && vacant >= 1 ? vacant : null, tzoneNo: tz },
+        credentials,
+        withList: reservationList,
+      });
       if (!r.ok) throw new ReserveError(r.status, r.message);
       loggedIn = true;
       facility = r.facility || slot.park;
-      log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面 (${Date.now() - started}ms)`);
+      log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面${r.skippedWeek ? '(照会の値。週データ省略)' : ''} (${Date.now() - started}ms)`);
       if (r.listHtml) await inspectList(r.listHtml);
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
       log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms)`);
@@ -548,17 +554,20 @@ export async function reserve(slot, credentials, options = {}) {
     const timeout = /Timeout|timeout/.test(e.message);
     return done('error', `${timeout ? 'タイムアウト' : '想定外のエラー'}: ${e.message.split('\n')[0]}`);
   } finally {
-    // ログアウト(失敗しても結果には影響させない)。サイトの doAction() は submit 後に未定義関数を呼ぶ画面があるため submit だけ行う
+    // ログアウト(失敗しても結果には影響させない)。サイトの doAction() は submit 後に未定義関数を呼ぶ画面があるため submit だけ行う。
+    // 待つのはログアウトの応答(ヘッダ)まで。画面の読み込み完了(load)を待つと毎回 15 秒で時間切れになり、
+    // 予約の行列の次の候補がその分遅れていた(2026-10-25 実測。同じ時間に 2 コート空いたときの 2 件目に効く)
     if (loggedIn && !page.isClosed()) {
       try {
+        const logoutStarted = Date.now();
         await Promise.all([
-          page.waitForNavigation({ timeout: 15000 }).catch(() => {}),
+          page.waitForResponse((res) => res.url().includes('AttestationEndAction'), { timeout: 10000 }).catch(() => {}),
           page.evaluate(() => {
             document.form1.action = gRsvWTransUserAttestationEndAction;
             document.form1.submit();
           }),
         ]);
-        log('ログアウト');
+        log(`ログアウト (${Date.now() - logoutStarted}ms)`);
       } catch (e) {
         log(`ログアウト失敗(無視): ${e.message.split('\n')[0]}`);
       }
