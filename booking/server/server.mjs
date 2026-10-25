@@ -25,6 +25,7 @@
 //   PROFILE_LOCAL=1         ブラウザプロファイル(Cookie 等)を docker volume に持ち越す
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
 //   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
+//   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード(既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う)
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
 //   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)。WORKER_URL は自動予約の合図の宛先にも使う
@@ -49,6 +50,7 @@ import { WebSocketServer, createWebSocketStream } from 'ws';
 import { createRequire } from 'node:module';
 import { reserve, launchBrowserForReserve } from '../src/reserve.js';
 import { createBrowserWarmer } from '../src/browser-warmer.js';
+import { prefetchInPage } from '../src/site-inpage.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
@@ -58,6 +60,7 @@ import { createEventLog } from '../src/auto-events.js';
 import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 
 const require = createRequire(import.meta.url);
+const { jstTodayIso } = require('../../lib/date.js');
 const { sendHeartbeat, addExcludedSlots, dropAllowedSlots, fetchTennisbearPlans, triggerCalendarSync } = require('../../lib/auto-client.js');
 const { AUTO_BOOKING } = require('../../lib/config.js');
 const { slotKey } = require('../../lib/auto-rules.js');
@@ -84,6 +87,8 @@ const PROFILE_DIR = '/tmp/profile';
 const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
 // ブラウザを先に起こしておく(起動 + トップページの読み込み 約 5〜7 秒を予約の前に済ませる。8 分おきにトップを読み直してセッションを保つ)
 const BROWSER_WARM = process.env.BROWSER_WARM !== '0';
+// 先に起こしたブラウザで、ログイン画面(鍵 loginJKey)と、最も出やすい公園の検索を前もって済ませておく(各 3〜5.5 秒の短縮。2026-10-25)
+const WARM_PRESEARCH_PARK = (process.env.WARM_PRESEARCH_PARK ?? '1040').trim() || null;
 // 結果を LINE に push する(両方あるとき)
 const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
 // LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
@@ -148,6 +153,7 @@ const warmer = BROWSER_WARM
   ? createBrowserWarmer({
       launch: () => launchBrowserForReserve(launchOptions(), (m) => log(`  [warm] ${m}`)),
       topUrl: 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp',
+      prefetch: (b) => b.page.evaluate(prefetchInPage, { park: WARM_PRESEARCH_PARK, date: jstTodayIso() }),
       log: (m) => log(`[warm] ${m}`),
     })
   : null;

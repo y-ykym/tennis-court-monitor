@@ -2,8 +2,12 @@
 // 高速経路(ブラウザ内版): サイトのトップページを開いたブラウザの「中」で、fetch を使って
 // ログイン → 空き検索 → 週データ → 枠の選択 まで進める。UI 操作(クリック・入力・描画待ち)を省いて速くする。
 //
-//   page.evaluate(inPageFlow, { slot, credentials, withList }) → { ok: true, applyFields, facility, vacant, skippedWeek, listHtml? }
-//                                                              | { ok: false, status: 'auth_error'|'taken'|'error', message }
+//   page.evaluate(inPageFlow, { slot, credentials, withList, prefetched }) → { ok: true, applyFields, facility, vacant, skippedWeek, skippedLoginPage, skippedSearch, listHtml? }
+//                                                                          | { ok: false, status: 'auth_error'|'taken'|'error', message }
+//   prefetched(省略可): 先に起こしてあるブラウザで prefetchInPage() が取っておいたもの { loginFields, loginRecaptcha, search: { park, instCd, facility, fields } }。
+//     loginFields があればログイン画面(1 往復 3〜4.5 秒)を飛ばしていきなりログインを送る(鍵 loginJKey は 9 分後も有効。2026-10-25 実測)。
+//     search.park が slot.park と同じなら検索(1 往復 4〜5.5 秒)も飛ばす(検索条件はセッションに残り、ログインをまたぐ。別の公園なら検索し直す。
+//     検索時の日付が今日でも先の日付の枠を選べる。2026-10-25 実測)
 //   slot.vacant / slot.tzoneNo(省略可): 空き照会で分かっている面数と時間帯番号。両方あれば週データ JSON(1 往復 約 10 秒)を取らず、
 //     その値で枠を選ぶ(フェーズ3 の自動予約。2026-10-25)。無ければ従来どおり週データで空きを確かめてから選ぶ(LINE の「よやく」)。
 //     **ただし現在は使っていない(server.mjs は vacant を渡さない)**。実測(2026-10-25)で、サーバーは枠選択 Ajax でも確認画面でも
@@ -23,7 +27,7 @@
 // 通信の内訳は docs/site-notes.md「フェーズ1.5 追加調査」「フェーズ2 追加調査」を参照。書き込みは枠の選択まで。
 // ============================================================
 
-export async function inPageFlow({ slot, credentials, withList = false }) {
+export async function inPageFlow({ slot, credentials, withList = false, prefetched = null }) {
   const dec = new TextDecoder('shift_jis');
   const ymd = slot.date.replace(/-/g, '');
   const startTime = Number(slot.startHour) * 100;
@@ -57,15 +61,25 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
   }
 
   try {
-    // 1. ログイン画面(loginJKey を含む hidden 一式)
-    const loginPage = await req('/web/rsvWTransUserLoginAction.do', { displayNo: 'pawab2000', displayNoFrm: 'pawab2000' });
-    if (loginPage.status !== 200 || pageId(loginPage.body) !== 'pawab2100.jsp' || !hiddenValue(loginPage.body, 'loginJKey')) {
-      return fail('error', `ログイン画面が想定外です (HTTP ${loginPage.status}, ${pageId(loginPage.body) || '不明'})`);
+    // 1. ログイン画面(loginJKey を含む hidden 一式)。先に取ってあればそれを使う
+    let loginFields;
+    let loginRecaptcha = false;
+    const skippedLoginPage = !!(prefetched && prefetched.loginFields && prefetched.loginFields.loginJKey);
+    if (skippedLoginPage) {
+      loginFields = prefetched.loginFields;
+      loginRecaptcha = !!prefetched.loginRecaptcha;
+    } else {
+      const loginPage = await req('/web/rsvWTransUserLoginAction.do', { displayNo: 'pawab2000', displayNoFrm: 'pawab2000' });
+      if (loginPage.status !== 200 || pageId(loginPage.body) !== 'pawab2100.jsp' || !hiddenValue(loginPage.body, 'loginJKey')) {
+        return fail('error', `ログイン画面が想定外です (HTTP ${loginPage.status}, ${pageId(loginPage.body) || '不明'})`);
+      }
+      loginFields = hiddenFields(loginPage.body);
+      loginRecaptcha = /gRecaptchaActive\s*=\s*true/.test(loginPage.body);
     }
-    if (/gRecaptchaActive\s*=\s*true/.test(loginPage.body)) return fail('error', 'ログイン画面で reCAPTCHA が有効のため fetch ではログインできません');
+    if (loginRecaptcha) return fail('error', 'ログイン画面で reCAPTCHA が有効のため fetch ではログインできません');
 
     // 2. ログイン(ブラウザの submitLogin() と同じ送信内容)
-    const form = new URLSearchParams(hiddenFields(loginPage.body));
+    const form = new URLSearchParams(loginFields);
     form.set('userId', credentials.userId);
     form.set('password', credentials.password);
     for (const ch of credentials.password) form.append('loginCharPass', ch);
@@ -83,25 +97,36 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
     }
     if (!home.body.includes('gRsvWTransUserAttestationEndAction);')) return fail('error', `ログイン後の画面が想定外です (${pageId(home.body) || '不明'})`);
 
-    // 3. 空き検索(週表示画面。hidden 一式を控える)
-    const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
-      displayNo: 'pawab2000',
-      daystarthome: slot.date,
-      daystart: slot.date,
-      selectPpsClPpscd: '1000_1030',
-      selectPpsClsCd: '1000',
-      selectPpsCd: '1030',
-      selectAreaBcd: slot.park,
-      selectBldCd: '',
-      selectIcd: '0',
-      dayofweekClearFlg: '1',
-      timezoneClearFlg: '1',
-    });
-    const instCd = hiddenValue(week.body, 'selectInstCd');
-    if (pageId(week.body) !== 'prwrc2000.jsp' || hiddenValue(week.body, 'selectBldCd') !== slot.park || !instCd) {
-      return fail('error', `検索結果画面が想定外です (${pageId(week.body) || '不明'}, 公園=${hiddenValue(week.body, 'selectBldCd')})`);
+    // 3. 空き検索(週表示画面。hidden 一式を控える)。同じ公園を先に検索してあれば飛ばす(検索条件はセッションに残っている)
+    let instCd;
+    let facility;
+    let weekFields;
+    const skippedSearch = !!(prefetched && prefetched.search && prefetched.search.park === slot.park && prefetched.search.instCd && prefetched.search.fields);
+    if (skippedSearch) {
+      instCd = prefetched.search.instCd;
+      facility = prefetched.search.facility || slot.park;
+      weekFields = prefetched.search.fields;
+    } else {
+      const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
+        displayNo: 'pawab2000',
+        daystarthome: slot.date,
+        daystart: slot.date,
+        selectPpsClPpscd: '1000_1030',
+        selectPpsClsCd: '1000',
+        selectPpsCd: '1030',
+        selectAreaBcd: slot.park,
+        selectBldCd: '',
+        selectIcd: '0',
+        dayofweekClearFlg: '1',
+        timezoneClearFlg: '1',
+      });
+      instCd = hiddenValue(week.body, 'selectInstCd');
+      if (pageId(week.body) !== 'prwrc2000.jsp' || hiddenValue(week.body, 'selectBldCd') !== slot.park || !instCd) {
+        return fail('error', `検索結果画面が想定外です (${pageId(week.body) || '不明'}, 公園=${hiddenValue(week.body, 'selectBldCd')})`);
+      }
+      facility = decodeEntities(hiddenValue(week.body, 'selectBldName') || '') || slot.park;
+      weekFields = hiddenFields(week.body);
     }
-    const facility = decodeEntities(hiddenValue(week.body, 'selectBldName') || '') || slot.park;
 
     // 4. 対象セル(空き面数・終了時刻・時間帯番号)。空き照会で分かっていれば週データ JSON(約 10 秒)は取らない
     let cell = null;
@@ -174,8 +199,8 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
     }
 
     // 予約内容確認画面へ進む POST の値(checkSelect() が送るもの: 週表示画面の hidden 一式 + applyFlg=1)
-    const applyFields = { ...hiddenFields(week.body), daystart: slot.date, applyFlg: '1', selectSize: String(sel.selectState ?? 1) };
-    return { ok: true, applyFields, facility, vacant: Number(cell.rsvNum), skippedWeek, listHtml };
+    const applyFields = { ...weekFields, daystart: slot.date, applyFlg: '1', selectSize: String(sel.selectState ?? 1) };
+    return { ok: true, applyFields, facility, vacant: Number(cell.rsvNum), skippedWeek, skippedLoginPage, skippedSearch, listHtml };
   } catch (e) {
     return fail('error', `ブラウザ内 fetch でエラー: ${e && e.message ? e.message : String(e)}`);
   }
@@ -210,4 +235,72 @@ export function submitApplyForm(fields) {
   }
   document.body.appendChild(f);
   f.submit();
+}
+
+// 先に起こしてあるブラウザの中で、予約の手続きの最初の 2 往復を前もって済ませておく(src/browser-warmer.js が 8 分おきに呼ぶ。2026-10-25)。
+//   page.evaluate(prefetchInPage, { park, date }) → { ok, loginFields, loginRecaptcha, search: { park, instCd, facility, fields, date } | null, message }
+//   - 検索(park が空なら行わない): 検索条件がセッションに載り、ログインをまたいで残る。date は今日でよい(先の日付の枠も選べる)
+//   - ログイン画面: loginJKey を含む hidden 一式。9 分後も有効
+//   順番は 検索 → ログイン画面(実測した順)。ログインはしない。ブラウザで実行されるので自己完結
+export async function prefetchInPage({ park = null, date }) {
+  const dec = new TextDecoder('shift_jis');
+  const out = { ok: false, loginFields: null, loginRecaptcha: false, search: null, message: '' };
+  async function req(path, form) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(form).toString(),
+      credentials: 'include',
+      redirect: 'manual',
+    });
+    return { status: res.status, body: dec.decode(await res.arrayBuffer()) };
+  }
+  const pageId = (html) => (html.slice(0, 500).match(/<!-- (\w+\.jsp) -->/) || [])[1] || null;
+  const hiddenValue = (html, name) => (html.match(new RegExp(`name="${name}"[^>]*value="([^"]*)"`)) || [])[1] ?? null;
+  const decodeEntities = (s) =>
+    s.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  function hiddenFields(html) {
+    const o = {};
+    const re = /<input[^>]*type="hidden"[^>]*>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const name = (m[0].match(/name="([^"]*)"/) || [])[1];
+      if (name) o[name] = decodeEntities((m[0].match(/value="([^"]*)"/) || [])[1] ?? '');
+    }
+    return o;
+  }
+  try {
+    if (park) {
+      const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
+        displayNo: 'pawab2000',
+        daystarthome: date,
+        daystart: date,
+        selectPpsClPpscd: '1000_1030',
+        selectPpsClsCd: '1000',
+        selectPpsCd: '1030',
+        selectAreaBcd: park,
+        selectBldCd: '',
+        selectIcd: '0',
+        dayofweekClearFlg: '1',
+        timezoneClearFlg: '1',
+      });
+      const instCd = hiddenValue(week.body, 'selectInstCd');
+      if (pageId(week.body) === 'prwrc2000.jsp' && hiddenValue(week.body, 'selectBldCd') === park && instCd) {
+        out.search = { park, instCd, facility: decodeEntities(hiddenValue(week.body, 'selectBldName') || '') || park, fields: hiddenFields(week.body), date };
+      } else {
+        out.message += `検索結果画面が想定外 (${pageId(week.body) || '不明'}, 公園=${hiddenValue(week.body, 'selectBldCd')}) `;
+      }
+    }
+    const loginPage = await req('/web/rsvWTransUserLoginAction.do', { displayNo: 'pawab2000', displayNoFrm: 'pawab2000' });
+    if (loginPage.status === 200 && pageId(loginPage.body) === 'pawab2100.jsp' && hiddenValue(loginPage.body, 'loginJKey')) {
+      out.loginFields = hiddenFields(loginPage.body);
+      out.loginRecaptcha = /gRecaptchaActive\s*=\s*true/.test(loginPage.body);
+    } else {
+      out.message += `ログイン画面が想定外 (HTTP ${loginPage.status}, ${pageId(loginPage.body) || '不明'}) `;
+    }
+    out.ok = !!out.loginFields;
+  } catch (e) {
+    out.message += `ブラウザ内 fetch でエラー: ${e && e.message ? e.message : String(e)}`;
+  }
+  return out;
 }
