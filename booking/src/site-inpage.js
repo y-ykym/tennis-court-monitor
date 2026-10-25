@@ -252,6 +252,7 @@ export async function prefetchInPage({ park = null, date }) {
       body: new URLSearchParams(form).toString(),
       credentials: 'include',
       redirect: 'manual',
+      signal: AbortSignal.timeout(20000), // 先取りは急がない代わりに、固まって予約の開始を止めないよう 20 秒で諦める
     });
     return { status: res.status, body: dec.decode(await res.arrayBuffer()) };
   }

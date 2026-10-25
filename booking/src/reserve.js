@@ -59,6 +59,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const BASE_URL = 'https://kouen.sports.metro.tokyo.lg.jp';
+// 今日の日付(JST、YYYY-MM-DD)。先取りした検索が今日のものかの判定に使う
+const jstTodayIso = () => new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 // 開始時刻(時) → セル id(td#YYYYMMDD_NN)の時間帯インデックス NN
 const HOUR_TO_TZ = { 9: '10', 11: '20', 13: '30', 15: '40', 17: '50', 19: '60' };
 // 種目: テニス（人工芝）
@@ -274,9 +276,22 @@ export async function reserve(slot, credentials, options = {}) {
     if (stop) throw new ReserveError(stop.status || 'capped', stop.message || '見送りました');
   };
 
-  if (!credentials?.userId || !credentials?.password) return done('auth_error', '利用者番号またはパスワードが未設定です');
+  // 先に起こしたブラウザ(options.warm)を受け取ったら、この関数が必ず閉じる(閉じないと warmer が「使用中」のまま次を起こせず、
+  // 永続プロファイルも掴んだままになる)。入力の不備で手続きに入らず戻るときもここで閉じる
+  const discardWarm = async () => {
+    try {
+      await options.warm?.close?.();
+    } catch {
+      /* 閉じられなくても結果には影響させない */
+    }
+  };
+  if (!credentials?.userId || !credentials?.password) {
+    await discardWarm();
+    return done('auth_error', '利用者番号またはパスワードが未設定です');
+  }
   const tz = HOUR_TO_TZ[Number(slot.startHour)];
   if (!tz || !/^\d{4}-\d{2}-\d{2}$/.test(slot.date || '') || !/^\d{4}$/.test(slot.park || '')) {
+    await discardWarm();
     return done('error', `枠の指定が不正です (${JSON.stringify(slot)})`);
   }
   const { ymd, label: dateLabel } = dateParts(slot.date);
@@ -285,6 +300,7 @@ export async function reserve(slot, credentials, options = {}) {
 
   // ブラウザ: 先に起こしてあるもの(options.warm)があればそれを使い、無ければここで起動する
   const warm = options.warm && options.warm.page && !options.warm.page.isClosed() ? options.warm : null;
+  if (options.warm && !warm) await discardWarm(); // ページが閉じられていた束は、新しく起動する前に閉じ切る(同じプロファイルで 2 つ開かない)
   const bundle = warm || (await launchBrowserForReserve(options, log));
   const { browser, context, page, setPhase } = bundle;
   if (warm) log(`ブラウザ: 先に起こしてあったものを使用(トップページ ${warm.topLoadedAt ? `${Math.round((Date.now() - warm.topLoadedAt) / 1000)} 秒前に読み込み済み` : '未読み込み'})`);
@@ -363,7 +379,11 @@ export async function reserve(slot, credentials, options = {}) {
       }
       const vacant = slot.vacant == null || slot.vacant === '' ? null : Number(slot.vacant);
       // 先に起こしてあるブラウザが取っておいたログイン画面・検索(トップが新しいときだけ。読み直したらセッションが変わるので使わない)
-      const prefetched = topFresh && warm?.prefetched ? warm.prefetched : null;
+      let prefetched = topFresh && warm?.prefetched ? warm.prefetched : null;
+      if (prefetched?.search && prefetched.search.date !== jstTodayIso()) {
+        // 日付が変わった直後(0:00〜次の読み直し)は検索条件が前日のまま。ログイン画面の先取りだけ使い、検索はやり直す
+        prefetched = { ...prefetched, search: null };
+      }
       const r = await page.evaluate(inPageFlow, {
         slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour), vacant: Number.isFinite(vacant) && vacant >= 1 ? vacant : null, tzoneNo: tz },
         credentials,
