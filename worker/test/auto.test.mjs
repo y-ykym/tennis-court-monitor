@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import {
   handleAuto, verifyAutoRequest, pruneExclusions, addExcludedSlots, loadExclusions, autoStatus, signAutoData, verifyAutoData,
   buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE, AUTO_COMMAND_TEXT,
-  MSG_AUTO_BAD_SLOT, START_HOURS, hoursRangeText, addAllowedSlot, addExcludedDate,
+  MSG_AUTO_BAD_SLOT, START_HOURS, hoursRangeText, addAllowedSlot, addExcludedDate, dropAllowedSlotsAt,
 } from '../src/auto.js';
 import { buildPostbackReply } from '../src/index.js';
 import { MSG_AUTO_UNAVAILABLE } from '../src/messages.js';
@@ -544,4 +544,22 @@ test('対象に追加した枠(2026-10-25): 日付ピッカー(b)→ 時間帯�
   assert.deepEqual(libPrune(raw, NOW).allowSlots.map(slotKey), ['1040|2026-09-14|11:00']);
   env.BOOKING_KV.store.set('auto_exclusions', JSON.stringify({ dates: [], slots: [], allowDates: ['2026-09-16'] }));
   assert.deepEqual((await loadExclusions(env, NOW)).allowSlots, []);
+});
+
+test('API: /auto/exclusions の dropAllowSlots で、予約が取れた日時の「対象に追加した枠」を公園を問わず消す(2026-10-25)', async () => {
+  const env = envOf();
+  for (const park of ['1040', '1050', '1160']) await addAllowedSlot(env, { park, date: '2026-09-16', start: '17:00' }, NOW);
+  await addAllowedSlot(env, { park: '1040', date: '2026-09-16', start: '19:00' }, NOW);
+  await addAllowedSlot(env, { park: '1040', date: '2026-09-17', start: '17:00' }, NOW);
+  assert.equal((await loadExclusions(env, NOW)).allowSlots.length, 5);
+  // 大島 9/16 17:00 が取れた → 9/16 17:00 の 3 公園ぶんが消え、9/16 19:00 と 9/17 17:00 は残る
+  const res = await handleAuto(signed('POST', '/auto/exclusions', { dropAllowSlots: [{ date: '2026-09-16', start: '17:00' }] }, NOW), env, ctx, { now: NOW });
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).allowSlots.map(slotKeyOf), ['1040|2026-09-16|19:00', '1040|2026-09-17|17:00']);
+  // 壊れた指定は無視。addSlots と同時でもよい
+  await dropAllowedSlotsAt(env, [{ date: '2026-09-16' }, null, { date: '2026-09-17', start: '17:00' }], NOW);
+  assert.deepEqual((await loadExclusions(env, NOW)).allowSlots.map(slotKeyOf), ['1040|2026-09-16|19:00']);
+  const res2 = await handleAuto(signed('POST', '/auto/exclusions', { dropAllowSlots: [{ date: '2026-09-16', start: '19:00' }], addSlots: [{ park: '1160', date: '2026-09-20', start: '09:00' }] }, NOW), env, ctx, { now: NOW });
+  const ex2 = await res2.json();
+  assert.deepEqual([ex2.allowSlots, ex2.slots.map(slotKeyOf)], [[], ['1160|2026-09-20|09:00']]);
 });

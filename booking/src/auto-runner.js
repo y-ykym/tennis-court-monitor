@@ -106,7 +106,8 @@ export function createAutoRunner({
   scrape, // async () => Slot[]
   queue, // booking-queue.js
   state, // auto-state.js
-  worker, // { heartbeat(payload) → Promise<{ dates, slots, allowSlots? }>, addExcludedSlots(slots) → Promise, tennisbear?(person) → Promise<{ configured, events }>,
+  worker, // { heartbeat(payload) → Promise<{ dates, slots, allowSlots? }>, addExcludedSlots(slots) → Promise, dropAllowedSlots?([{ date, start }]) → Promise,
+  //         tennisbear?(person) → Promise<{ configured, events }>,
   //         calendarSync?(person) → void(フェーズ11。予約成立の直後に Worker へ同期を頼む。結果は待たない) }
   book, // async (candidate, { credentials, beforeApply }) → reserve() の結果
   credentialsFor, // (person) → { userId, password, label } | null
@@ -432,6 +433,7 @@ export function createAutoRunner({
       const start = startHHMM(c.startHour);
       const end = startHHMM(Number(c.startHour) + 2);
       state.addOwn({ key, person: c.person, id: result.reservationNo || '', date: c.date, start, end, park: c.park, facility: park?.name || c.facility });
+      await dropAllowedSlotsAt(c.date, start);
       // フェーズ11: その人の Google カレンダーの同期を Worker に頼む(待たない。配線が無ければ何もしない)
       if (typeof worker.calendarSync === 'function') {
         try {
@@ -472,6 +474,21 @@ export function createAutoRunner({
 
   // その人のテニスベアの予定(隣接の判定用)。Worker の /auto/tennisbear を呼び、TB_PLANS_TTL_MS の間は使い回す。
   // 取れなければ直近 TB_PLANS_STALE_MAX_MS 以内の結果で代用し、それも無ければ null(呼び出し側は見送る)。
+  // 予約が取れた日時の「対象に追加した枠」を、公園を問わず消す(同じ時間に別のコートではできない。2026-10-25)。
+  // 手元の写しからも外し、Worker にも頼む(失敗しても次の heartbeat で写しは戻るだけ。Worker 側は残るので手で「解除」)
+  async function dropAllowedSlotsAt(date, start) {
+    const hit = (exclusions?.allowSlots || []).filter((a) => a.date === date && a.start === start);
+    if (!hit.length) return;
+    exclusions.allowSlots = exclusions.allowSlots.filter((a) => !(a.date === date && a.start === start));
+    log(`予約が取れたので同じ日時の対象枠を消します: ${hit.map((a) => a.facility || a.park).join('・')} ${date} ${start}`);
+    if (typeof worker.dropAllowedSlots !== 'function') return;
+    try {
+      await worker.dropAllowedSlots([{ date, start }]);
+    } catch (e) {
+      log(`対象枠の削除を Worker に頼めませんでした(「せってい」で手で解除してください): ${e.message}`);
+    }
+  }
+
   // worker.tennisbear が配線されていない(テスト等)ときは「予定なし」として都の予約だけで判定する
   async function tennisbearPlansFor(person) {
     if (typeof worker.tennisbear !== 'function') return { configured: false, events: [], at: now() };
