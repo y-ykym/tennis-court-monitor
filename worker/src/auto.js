@@ -79,7 +79,7 @@ export const MAX_DAYS_AHEAD = 35;
 // ペナルティ日数(サイトの penaltyday)。lib/config.js の AUTO_BOOKING.PENALTY_DAYS・penalty-alert.js の DEFAULT_PENALTY_DAYS と同じ値。
 // 対象に追加した枠の利用日が 今日〜今日+この日数 なら、取消にペナルティが付く旨をカードの注記に添える
 export const PENALTY_DAYS = 3;
-// サイトの枠の開始時刻(2 時間枠。lib/config.js の AUTO_BOOKING.HOUR_PRIORITY と同じ 6 つ)。日時ピッカーで選んだ時刻はこのどれかに丸める
+// サイトの枠の開始時刻(2 時間枠。lib/config.js の AUTO_BOOKING.HOUR_PRIORITY と同じ 6 つ)。「対象枠を追加」のカードの時間帯の行はこの 6 つ
 export const START_HOURS = [9, 11, 13, 15, 17, 19];
 const SIG_BYTES = 16;
 
@@ -447,7 +447,7 @@ export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEve
 }
 
 // ---- 「せってい」カードの postback data(短い署名付き) ----
-const POSTBACK_KINDS = ['a', 'd', 's', 'b', 't', 'c', 'u']; // a 除外日を追加 / d 除外日を解除 / s 除外枠を解除 / b 対象枠を追加(日時ピッカー) / t 公園の選択を切り替え / c 決定(まとめて追加) / u 対象枠を解除
+const POSTBACK_KINDS = ['a', 'd', 's', 'b', 't', 'c', 'u']; // a 除外日を追加 / d 除外日を解除 / s 除外枠を解除 / b 対象枠を追加(日付ピッカー) / t 時間帯・コートの選択を切り替え / c 決定(まとめて追加) / u 対象枠を解除
 export async function signAutoData(secret, kind, value, exp) {
   if (!secret) throw new Error('署名鍵が未設定です');
   if (!POSTBACK_KINDS.includes(kind)) throw new Error('kind が不正です');
@@ -511,7 +511,7 @@ export async function buildAutoSettingsReply(env, { now = Date.now(), note = nul
     slots.push({ ...s, removeData: await signAutoData(secret, 's', `${s.park}_${s.date.replace(/-/g, '')}_${s.start.replace(':', '')}`, exp) });
   }
   const addData = await signAutoData(secret, 'a', '-', exp);
-  // 対象に追加した枠(2026-10-25)。各行に「解除」(u)、フッターに「対象枠を追加」(b。日時ピッカー)
+  // 対象に追加した枠(2026-10-25)。各行に「解除」(u)、見出しの右に「＋ 追加」(b。日付ピッカー → 時間帯とコートを選ぶカード)
   const allowSlots = [];
   for (const s of ex.allowSlots) {
     allowSlots.push({ ...s, penalty: isPenaltyPeriod(s.date, today), removeData: await signAutoData(secret, 'u', slotValueOf(s), exp) });
