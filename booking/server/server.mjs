@@ -25,6 +25,7 @@
 //   PROFILE_LOCAL=1         ブラウザプロファイル(Cookie 等)を docker volume に持ち越す
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
 //   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
+//   STATIC_CACHE=0          サイトの JS の控え(src/static-cache.js。既定 on)をやめる。STATIC_CACHE_DIR で控えの置き場(無ければメモリだけ)
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
 //   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)。WORKER_URL は自動予約の合図の宛先にも使う
@@ -49,6 +50,7 @@ import { WebSocketServer, createWebSocketStream } from 'ws';
 import { createRequire } from 'node:module';
 import { reserve, launchBrowserForReserve } from '../src/reserve.js';
 import { createBrowserWarmer } from '../src/browser-warmer.js';
+import { createStaticCache } from '../src/static-cache.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
@@ -84,6 +86,8 @@ const PROFILE_DIR = '/tmp/profile';
 const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
 // ブラウザを先に起こしておく(起動 + トップページの読み込み 約 5〜7 秒を予約の前に済ませる。8 分おきにトップを読み直してセッションを保つ)
 const BROWSER_WARM = process.env.BROWSER_WARM !== '0';
+// サイトの JS の控え(no-store で配られるため毎回 1 本 4〜8 秒かかっていた。控えを差し込んで確認画面を速くする。CSS は高速経路で読まないので対象外)
+const staticCache = process.env.STATIC_CACHE !== '0' ? createStaticCache({ dir: process.env.STATIC_CACHE_DIR || null, log: (m) => log(`[cache] ${m}`) }) : null;
 // 結果を LINE に push する(両方あるとき)
 const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
 // LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
@@ -140,7 +144,7 @@ function newSession(token, payload, kind) {
 
 // ブラウザの起動オプション(予約の実行と、先に起こしておく warmer で同じものを使う)
 function launchOptions() {
-  const o = { headless: false, launchArgs: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'], viewport: null };
+  const o = { headless: false, launchArgs: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'], viewport: null, staticCache };
   if (PROFILE_LOCAL) o.userDataDir = PROFILE_DIR; // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
   return o;
 }
@@ -533,6 +537,7 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
+if (staticCache) staticCache.start();
 if (warmer) {
   warmer.start();
   log('[warm] ブラウザを先に起こしておきます(BROWSER_WARM=0 でやめられる)');

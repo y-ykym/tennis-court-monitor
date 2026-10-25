@@ -21,6 +21,7 @@
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //     reservationList: false, (フェーズ3)ログイン直後にその人の予約一覧(prwha1000)を取り、結果に reservationsBefore として付ける
+//     staticCache: null,     src/static-cache.js の控え。サイトの JS の要求に控えを差し込む(無ければ取って控える。CSS は対象外)
 //     warm: null,            launchBrowserForReserve() で先に起こしてあるブラウザ { browser, context, page, setPhase, close, topLoadedAt }。
 //                            渡すと起動を省き、fastInPage で topLoadedAt が新しければトップページの読み込みも省く(src/browser-warmer.js。2026-10-25)。
 //                            渡したブラウザはこの関数が閉じる
@@ -129,9 +130,12 @@ export async function launchBrowserForReserve(options = {}, log = () => {}) {
   //                  サイトの JS(予約ボタン・確認ダイアログ)と Google の reCAPTCHA は読む(同時接続の空きができ 12.8 秒 → 約 9.5 秒の見込み)
   //   phase 'ui'      UI 操作の経路: 何も足さない(画面の見た目と JS をそのまま使う)
   // ※reCAPTCHA(google.com / gstatic.com)は止めない(画像選択のチャレンジが表示できなくなる)
+  // 止めないサイトの JS は、控え(options.staticCache。src/static-cache.js)があればそれを差し込み、無ければ取って控える(CSS は控えない)。
+  // サイトは no-store で配るためブラウザは毎回取り直し、1 本 4〜8 秒かかる(2026-10-25 実測)。控えで確認画面の表示が 5 秒前後縮む
   let phase = 'ui';
-  const blocked = { assets: 0, pageFiles: 0 }; // 止めた数(assets: 画像等、pageFiles: JS・CSS)。ログで効いているか確かめる用
-  await context.route('**/*', (route) => {
+  const staticCache = options.staticCache || null;
+  const blocked = { assets: 0, pageFiles: 0, cached: 0, fetched: 0 }; // ログで効いているか確かめる用(cached: 控えを差し込んだ数)
+  await context.route('**/*', async (route) => {
     const type = route.request().resourceType();
     const url = route.request().url();
     if (url.includes('chatbot.metro.tokyo.lg.jp')) return route.abort();
@@ -143,6 +147,24 @@ export async function launchBrowserForReserve(options = {}, log = () => {}) {
     if ((phase === 'top' && (type === 'script' || type === 'stylesheet')) || (phase === 'confirm' && (type === 'stylesheet' || url.includes('jquery-barcode')))) {
       blocked.pageFiles++;
       return route.abort();
+    }
+    if (staticCache && staticCache.isCacheable(url, type)) {
+      const hit = staticCache.get(url);
+      if (hit) {
+        blocked.cached++;
+        return route.fulfill({ status: 200, headers: { 'content-type': hit.contentType, 'cache-control': 'no-store' }, body: hit.body });
+      }
+      try {
+        const res = await route.fetch();
+        const body = await res.body();
+        if (res.ok()) {
+          staticCache.put(url, body, res.headers()['content-type']);
+          blocked.fetched++;
+        }
+        return await route.fulfill({ response: res, body });
+      } catch {
+        return route.continue().catch(() => {});
+      }
     }
     return route.continue();
   });
@@ -372,7 +394,7 @@ export async function reserve(slot, credentials, options = {}) {
       if (r.listHtml) await inspectList(r.listHtml);
       setPhase('confirm'); // ここからはサイトの JS と reCAPTCHA が要る(CSS とバーコード用 JS は止めたまま)
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
-      log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms, 止めた読み込み JS/CSS 計 ${bundle.blocked?.pageFiles ?? '-'} 件)`);
+      log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms, 止めた読み込み JS/CSS 計 ${bundle.blocked?.pageFiles ?? '-'} 件, 控えから ${bundle.blocked?.cached ?? '-'} 件, 取って控えた ${bundle.blocked?.fetched ?? '-'} 件)`);
     } else {
       // 1. トップ → ログイン画面
       const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
