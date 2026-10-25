@@ -479,8 +479,10 @@ test('対象に追加した枠(2026-10-25): 日付ピッカー(b)→ 時間帯�
   const ex7 = await loadExclusions(env, NOW);
   assert.deepEqual(ex7.allowSlots.map(slotKeyOf).sort(), KEYS4);
   assert.deepEqual(ex7.allowSlots.map((s) => [s.end, s.facility]).sort(), [['15:00', '亀戸中央公園'], ['15:00', '大島小松川公園'], ['17:00', '亀戸中央公園'], ['17:00', '大島小松川公園']]);
-  assert.ok(texts(r7.flex.contents).some((s) => s === '9/16(水) 13:00 亀戸中央公園'));
-  assert.equal(texts(r7.flex.contents).filter((s) => s === '⚠ 取消にペナルティ').length, 4, 'ペナルティ期間の枠は 2 行目に小さく ⚠');
+  const t7 = texts(r7.flex.contents);
+  assert.equal(t7.filter((s) => s === '9/16(水)').length, 1, '日ごとにまとめる(日付の行は 1 つ)');
+  assert.equal(t7.filter((s) => s === '⚠ 取消にペナルティ').length, 1, 'ペナルティ期間の ⚠ は日付の行に 1 回だけ');
+  assert.deepEqual(t7.filter((s) => /^\d{1,2}:00〜\d{1,2}:00 /.test(s)), ['13:00〜15:00 亀戸中央', '13:00〜15:00 大島小松川', '15:00〜17:00 亀戸中央', '15:00〜17:00 大島小松川'], '枠の行は時刻と短い公園名');
   const undoAll = actions(r7.flex.contents).filter((a) => a.type === 'postback' && a.label === '解除');
   assert.equal(undoAll.length, 4, '除外日・除外枠は無いので「解除」は追加した 4 枠ぶん');
   const undoVals = await Promise.all(undoAll.map((a) => verifyAutoData(SECRET, a.data, NOW)));

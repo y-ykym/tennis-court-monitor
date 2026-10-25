@@ -25,8 +25,9 @@
 //   │  9/27(土) 13:00 大島小松川公園(キャンセル済み) [解除] │
 //   │ 対象に追加した枠                   ■＋ 追加 │  ← 2026-10-25 追加(10-15〜10-25 は日単位の「ペナルティ期間でも予約する日」だった)。日時ピッカー
 //   │ ペナルティ期間でも、この枠だけは…           │
-//   │  9/26(金) 13:00 亀戸中央公園          [解除] │
-//   │  ⚠ 取消にペナルティ                        │  ← ペナルティ期間の枠には 2 行目に小さく
+//   │ 9/26(金)  ⚠ 取消にペナルティ               │  ← 日ごとにまとめ、⚠ は日付の行に 1 回(ペナルティ期間の日だけ)
+//   │   13:00〜15:00 亀戸中央              [解除] │  ← 「公園」を省いて折り返さないように
+//   │   15:00〜17:00 大島小松川            [解除] │
 //   ├──────────────────────────────────┤
 //   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
@@ -202,11 +203,19 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   const addSlotAction = addSlotData ? { type: 'datetimepicker', label: '＋ 追加', data: addSlotData, mode: 'date', initial: today, min: today, max: maxDate } : null;
   body.push(heading('対象に追加した枠', 'ペナルティ期間でも、この枠だけは空きが出たら自動予約する(取消はペナルティ付き)', addSlotAction));
   if (allowSlots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
+  // 日ごとにまとめる(2026-10-25 実機: 8 枠で「10/25(日) 17:00 猿江恩賜公園 / ⚠ 取消にペナルティ」が 8 回並び、公園名も折り返して読みにくかった)。
+  // 日付の行に ⚠ を 1 回だけ、枠の行は「17:00〜19:00 猿江恩賜」と短く(「公園」を省く)。一覧は date → start の順に並んでいる
+  let lastDate = null;
   allowSlots.slice(0, MAX_ROWS).forEach((s) => {
-    // 1 行目に日時と公園、ペナルティ期間の枠は 2 行目に小さく ⚠(「解除」ボタンと重ならないように)
-    const label = { type: 'box', layout: 'vertical', flex: 1, contents: [text(fmtSlot(s), { size: 'md', color: COLOR_TEXT, wrap: true })] };
-    if (s.penalty) label.contents.push(text('⚠ 取消にペナルティ', { size: 'xs', color: '#8A4B00', margin: 'xs' }));
-    body.push({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: [label, removePill(s.removeData, `${fmtSlot(s)} を対象から外す`)] });
+    if (s.date !== lastDate) {
+      lastDate = s.date;
+      const head = [text(fmtDate(s.date), { size: 'sm', weight: 'bold', color: COLOR_TEXT, flex: 0 })];
+      if (s.penalty) head.push(text('⚠ 取消にペナルティ', { size: 'xs', color: '#8A4B00', flex: 1, margin: 'md', gravity: 'center' }));
+      body.push({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: head });
+    }
+    const end = s.end || `${String(Number(s.start.slice(0, 2)) + 2).padStart(2, '0')}:00`;
+    const label = `${fmtTime(s.start)}〜${fmtTime(end)} ${String(s.facility).replace(/公園$/, '')}`;
+    body.push({ type: 'box', layout: 'horizontal', margin: 'xs', alignItems: 'center', paddingStart: '8px', contents: [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' }), { ...removePill(s.removeData, `${fmtSlot(s)} を対象から外す`), margin: 'md' }] });
   });
   if (allowSlots.length > MAX_ROWS) body.push(text(`…ほか${allowSlots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
