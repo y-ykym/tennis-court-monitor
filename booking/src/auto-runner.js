@@ -48,7 +48,7 @@ import { buildResultFlex } from './result-flex.js';
 
 const require = createRequire(import.meta.url);
 const { AUTO_BOOKING } = require('../../lib/config.js');
-const { filterTargetSlots } = require('../../lib/filter.js');
+const { isTargetSlot } = require('../../lib/filter.js');
 const { jstTodayIso, jstEndOfDaySec, jstHHMM } = require('../../lib/date.js');
 const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, isPenaltyPeriod, startHHMM, findPlaceConflict } = require('../../lib/auto-rules.js');
 
@@ -124,6 +124,9 @@ export function createAutoRunner({
   let timer = null;
   let running = false;
   let exclusions = null; // { dates, slots, allowSlots, at }(allowSlots = 「せってい」で対象に追加した枠。2026-10-25。10-15〜10-25 は日単位の allowDates)
+  // 「対象に追加した枠」に新しく入った枠キー。次の照会で既知から外し、その時点で空いていれば「新しく出た空き」として予約しに行く
+  // (追加した時点で既に空いている枠は、差分では「新しい」にならず取りに行かないため。2026-10-25)
+  const freshAllowKeys = new Set();
   let remoteEnabled = true; // LINE の「じどうおふ」で false(Worker の応答で更新)
   let remoteNotify = true; // LINE の「つうちおふ」で false(予約直前に対象外になった枠の空き通知カードを送らない)
   const effectiveMode = () => (mode === 'on' && !remoteEnabled ? 'paused' : mode);
@@ -176,6 +179,8 @@ export function createAutoRunner({
       if (res && Array.isArray(res.dates) && Array.isArray(res.slots)) {
         const allowSlots = Array.isArray(res.allowSlots) ? res.allowSlots : [];
         const changed = !exclusions || JSON.stringify([res.dates, res.slots.map(slotKey), allowSlots.map(slotKey)]) !== JSON.stringify([exclusions.dates, exclusions.slots.map(slotKey), exclusions.allowSlots.map(slotKey)]);
+        const before = new Set((exclusions?.allowSlots || []).map(slotKey));
+        for (const k of allowSlots.map(slotKey)) if (!before.has(k)) freshAllowKeys.add(k);
         exclusions = { dates: res.dates, slots: res.slots, allowSlots, at: now() };
         if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件、対象に追加した枠 ${allowSlots.length} 件`);
       }
@@ -213,10 +218,18 @@ export function createAutoRunner({
       }
       if (consecutiveFailures >= BACKOFF_AFTER) log(`空き照会が回復しました(連続失敗 ${consecutiveFailures} 回のあと)。通常の間隔に戻します`);
       consecutiveFailures = 0;
-      const targets = filterTargetSlots(slots);
+      // 監視対象(平日は猿江 19:00 だけ・土日祝は全部。lib/filter.js)に加えて、「せってい」で対象に追加した枠はいつでも見る
+      // (平日の 17:00 や大島・亀戸は監視対象ではないため、これが無いと追加しても見てもらえない。2026-10-25)
+      const allowKeys = new Set((exclusions?.allowSlots || []).map(slotKey));
+      const targets = slots.filter((s) => isTargetSlot(s) || allowKeys.has(slotKey(s)));
       lastTargets = targets;
       const keys = targets.map(slotKey);
       const known = state.knownKeys();
+      // 「対象に追加した枠」に入ったばかりの枠を既知から外す → いま空いていれば下で「新しく出た空き」になる
+      for (const k of freshAllowKeys) {
+        if (known.delete(k)) log(`対象に追加された枠がいま空いているので、新しい空きとして扱います: ${k}`);
+      }
+      freshAllowKeys.clear();
       // 実枠テスト用: 指定された枠を既知から外して「新しく出た」扱いにする
       for (const k of readForgetKeys()) {
         if (known.delete(k)) log(`テスト用に既知から外しました(次の判定で新しい空きとして扱う): ${k}`);

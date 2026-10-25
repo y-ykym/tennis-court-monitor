@@ -901,3 +901,39 @@ test('対象に追加した枠(2026-10-25): heartbeat の allowSlots にある�
   assert.equal(h2.state.attemptStatus('1040|2026-09-16|19:00'), 'skipped_penalty');
   assert.equal(h2.vacancyCards.length, 1, '従来の空き通知カードを送る');
 });
+
+test('対象に追加した枠(2026-10-25): 平日の監視対象外の枠(大島 17:00)も追加してあれば見て予約する。追加した時点で既に空いていた枠も、次の照会で取りに行く', async () => {
+  // 9/14(月) 10:00。9/15(火)・9/16(水)は平日なので普段の監視対象は猿江 19:00 だけ(どちらもペナルティ期間)
+  const allowOoshima = { park: '1160', date: '2026-09-16', start: '17:00', end: '19:00', facility: '大島小松川公園' };
+  let ex = { dates: [], slots: [], allowSlots: [allowOoshima] };
+  const h = harness({ workerOverride: {} });
+  h.workerRef.heartbeat = async () => ex;
+  // 猿江 9/15 19:00 は監視対象で、最初から空いている(初回で既知になる)
+  h.setSlots([slot('大島小松川公園', '2026-09-16', '17:00-19:00'), slot('亀戸中央公園', '2026-09-16', '17:00-19:00'), slot('猿江恩賜公園', '2026-09-15', '19:00-21:00')]);
+  await h.runner.tick(); // 初回(既知の登録)。この時点で heartbeat が allowSlots を持ってくる
+  h.advance(60_000);
+  const r = await h.runner.tick();
+  assert.equal(r.planned, 1, '追加した大島 17:00 は平日でも監視対象になり予約する。亀戸 17:00 は監視対象外、猿江 9/15 19:00 は既知でペナルティ期間');
+  await flush();
+  assert.deepEqual(h.bookings, ['2026-09-16 1160 17 B']);
+
+  // 運用中に「せってい」で猿江 9/15 19:00 を追加 → 既に空いていて既知だが、次の照会で「新しい空き」として予約しに行く
+  ex = { dates: [], slots: [], allowSlots: [allowOoshima, { park: '1040', date: '2026-09-15', start: '19:00', end: '21:00', facility: '猿江恩賜公園' }] };
+  h.advance(60_000);
+  await h.runner.tick(); // heartbeat で追加を受け取る(照会はその前なので、この回はまだ動かない)
+  h.advance(60_000);
+  const r2 = await h.runner.tick();
+  assert.equal(r2.planned, 1);
+  await flush();
+  assert.ok(h.logs.some((l) => l.includes('新しい空きとして扱います: 1040|2026-09-15|19:00')));
+  assert.deepEqual(h.bookings, ['2026-09-16 1160 17 B', '2026-09-15 1040 19 B']);
+
+  // 全部解除したら、平日の大島・亀戸 17:00 は監視対象外に戻る(猿江 19:00 は監視対象のまま既知)
+  ex = { dates: [], slots: [], allowSlots: [] };
+  h.advance(60_000);
+  await h.runner.tick();
+  h.advance(60_000);
+  const r3 = await h.runner.tick();
+  assert.equal(r3.newSlots, 0);
+  assert.deepEqual(h.runner.lastTargets().map((s) => `${s.facility} ${s.date} ${s.time}`), ['猿江恩賜公園 2026-09-15 19:00-21:00']);
+});
