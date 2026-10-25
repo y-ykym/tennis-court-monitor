@@ -17,19 +17,21 @@
 //   │ │ [ON] 新しい空きをカードで知らせます       │ │
 //   │ └──────────────────────────────┘ │
 //   │ ───────────────────────────────── │
-//   │ 除外日  この日は自動予約も空き通知もしない    │
+//   │ 除外日                          ■＋ 追加 │  ← 見出しの右に濃紺の「＋ 追加」(日付ピッカー)。2026-10-25 にフッターから移動
+//   │ この日は自動予約も空き通知もしない           │     (フッターに横並びだと iPhone で「除外日を…」と文字が切れた)
 //   │  9/27(土)                         [解除] │
-//   │ 除外枠  手放した枠。空きが出ても取り直さない  │
+//   │ 除外枠                                   │
+//   │ 手放した枠。空きが出ても取り直さない         │
 //   │  9/27(土) 13:00 大島小松川公園(キャンセル済み) [解除] │
-//   │ 対象に追加した枠  この枠だけは必ず自動予約する   │  ← 2026-10-25 追加(10-15〜10-25 は日単位の「ペナルティ期間でも予約する日」だった)
-//   │  9/26(金) 13:00 亀戸中央公園 ⚠ペナルティ [解除] │  ← ペナルティ期間の枠には ⚠ を添える
+//   │ 対象に追加した枠                   ■＋ 追加 │  ← 2026-10-25 追加(10-15〜10-25 は日単位の「ペナルティ期間でも予約する日」だった)。日時ピッカー
+//   │ ペナルティ期間でも、この枠だけは…           │
+//   │  9/26(金) 13:00 亀戸中央公園          [解除] │
+//   │  ⚠ 取消にペナルティ                        │  ← ペナルティ期間の枠には 2 行目に小さく
 //   ├──────────────────────────────────┤
-//   │ ➕ 対象枠を追加(日時ピッカー)              │  ← フッターのボタンは 1 行に 1 つ(横に並べると文字が切れる)
-//   │ 📅 除外日を追加(日付ピッカー)              │
 //   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
 //
-//   「➕ 対象枠を追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園のボタンで確定する
+//   「対象に追加した枠」の「＋ 追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園のボタンで確定する
 // ============================================================
 
 const COMMAND_TEXT = 'せってい';
@@ -151,12 +153,17 @@ function switchRow(title, view, { onText, offText, first = false }) {
   };
 }
 
-// 見出し(名前 + 薄い説明)
-const heading = (title, desc) => ({
+// 見出し(名前 + 薄い説明)。addAction を渡すと名前の右にスイッチと同じ濃紺の「＋ 追加」ボタン(日付/日時ピッカー)を置く
+const heading = (title, desc, addAction = null) => ({
   type: 'box',
   layout: 'vertical',
   margin: 'xl',
-  contents: [text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT }), text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' })],
+  contents: [
+    addAction
+      ? { type: 'box', layout: 'horizontal', alignItems: 'center', contents: [text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT, flex: 1, gravity: 'center' }), pill('＋ 追加', addAction, { filled: true })] }
+      : text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT }),
+    text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' }),
+  ],
 });
 const row = (label, pillBox) => ({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' }), pillBox] });
 const reasonText = (r) => (r === 'released' ? 'サイトで取消' : 'キャンセル済み');
@@ -176,8 +183,8 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   body.push(switchRow('空き通知カード', notifySwitchView(status), { onText: NOTIFY_ON_TEXT, offText: NOTIFY_OFF_TEXT }));
   body.push({ type: 'separator', color: COLOR_LINE, margin: 'xl' });
 
-  // 除外日・除外枠
-  body.push(heading('除外日', 'この日は自動予約も空き通知もしない'));
+  // 除外日・除外枠。「＋ 追加」は日付ピッカー(LINE の datetimepicker)。選ぶと postback に params.date が付いて返る
+  body.push(heading('除外日', 'この日は自動予約も空き通知もしない', { type: 'datetimepicker', label: '＋ 追加', data: addData, mode: 'date', initial: today, min: today, max: maxDate }));
   if (dates.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
   dates.slice(0, MAX_ROWS).forEach((d) => body.push(row(fmtDate(d.date), removePill(d.removeData, `${fmtDate(d.date)} の除外を解除`))));
   if (dates.length > MAX_ROWS) body.push(text(`…ほか${dates.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
@@ -190,12 +197,16 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  // 対象に追加した枠(2026-10-25)。ペナルティ期間(今日〜+3 日)の枠は普段は自動予約しないが、ここに追加した枠だけは取りに行く
-  body.push(heading('対象に追加した枠', 'この枠だけは、ペナルティ期間でも空きが出たら自動予約する(取り消すとペナルティ 1 点)。下の「➕ 対象枠を追加」で足す'));
+  // 対象に追加した枠(2026-10-25)。ペナルティ期間(今日〜+3 日)の枠は普段は自動予約しないが、ここに追加した枠だけは取りに行く。
+  // 「＋ 追加」は日時ピッカー(mode: datetime)。選ぶと params.datetime("YYYY-MM-DDThh:mm")が付いて返り、Worker が公園を選ぶカードを返す
+  const addSlotAction = addSlotData ? { type: 'datetimepicker', label: '＋ 追加', data: addSlotData, mode: 'datetime', initial: `${today}T09:00`, min: `${today}T00:00`, max: `${maxDate}T23:59` } : null;
+  body.push(heading('対象に追加した枠', 'ペナルティ期間でも、この枠だけは空きが出たら自動予約する(取消はペナルティ付き)', addSlotAction));
   if (allowSlots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
   allowSlots.slice(0, MAX_ROWS).forEach((s) => {
-    const label = `${fmtSlot(s)}${s.penalty ? ' ⚠ペナルティ期間' : ''}`;
-    body.push(row(label, removePill(s.removeData, `${fmtSlot(s)} を対象から外す`)));
+    // 1 行目に日時と公園、ペナルティ期間の枠は 2 行目に小さく ⚠(「解除」ボタンと重ならないように)
+    const label = { type: 'box', layout: 'vertical', flex: 1, contents: [text(fmtSlot(s), { size: 'md', color: COLOR_TEXT, wrap: true })] };
+    if (s.penalty) label.contents.push(text('⚠ 取消にペナルティ', { size: 'xs', color: '#8A4B00', margin: 'xs' }));
+    body.push({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: [label, removePill(s.removeData, `${fmtSlot(s)} を対象から外す`)] });
   });
   if (allowSlots.length > MAX_ROWS) body.push(text(`…ほか${allowSlots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
@@ -224,13 +235,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
         backgroundColor: '#FFFFFF',
         contents: [
           { type: 'separator', color: COLOR_LINE },
-          // 日時ピッカー(mode: datetime)。選ぶと params.datetime("YYYY-MM-DDThh:mm")が付いて返り、Worker が公園を選ぶカードを返す。
-          // ボタンは 1 行に 1 つずつ縦に並べる。横に 2 つ並べると iPhone で「除外日を…」と文字が切れる(2026-10-25 実機で確認)
-          ...(addSlotData
-            ? [{ type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '➕ 対象枠を追加', data: addSlotData, mode: 'datetime', initial: `${today}T09:00`, min: `${today}T00:00`, max: `${maxDate}T23:59` } }]
-            : []),
-          // 日付ピッカー(LINE の datetimepicker)。選ぶと postback に params.date が付いて返る
-          { type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '📅 除外日を追加', data: addData, mode: 'date', initial: today, min: today, max: maxDate } },
+          // 「追加」のボタンは各見出しの右(2026-10-25 に移動。フッターに横並びだと文字が切れた)。フッターは「更新」だけ
           { type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '↻ 更新', text: COMMAND_TEXT } },
         ],
       },
