@@ -59,6 +59,16 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
     `checkTextValue`(予約ボタン)・`showConfirm`・`jQuery` はサイトの JS が要る。CSS 3 本と jquery-barcode を止めれば同時接続が空き約 3 秒の短縮見込み
   - 反映: `reserve.js` の `launchBrowserForReserve` が phase('top' / 'confirm' / 'ui')で止めるものを切り替える。
     ブラウザを先に起こしてトップまで開いておく `src/browser-warmer.js`(8 分おきに読み直し)も同日に追加
+  - 確認画面の JS のうち `paw_l100.js`(Cookie・検索条件の保存の補助。28 KB)は `prwea1000.js`・`paw_common.js`・`paw_bsui.js` から参照されない。
+    止めると同じホストへの JS が 6 本になり同時接続(6 本)に収まる: **DOMContentLoaded 12.8 → 6.5 秒**(22:10 実測。`grecaptcha` も 0.7 秒で使えた)。
+    必要なのは jquery・paw_bsui(showConfirm の modal 代替)・paw_errormsg・paw_doaction・paw_common(showAlert / chk*)・prwea1000(checkTextValue)
+  - **検索条件はログインをまたいで残る**(22:05 実測): 匿名でトップ → 検索(公園 X)→ ログイン画面 → ログイン → (検索せず)枠選択 Ajax → 確認画面に到達。
+    トップを読み直しても残る。別の公園の枠を検索し直さずに選ぶと Ajax が `{"ErrManager":{"message":"システム異常が発生しました。"}}`
+    → 先起こしのブラウザで「最も出やすい公園(猿江)」を検索しておけば、猿江の候補はログイン後の検索(4〜5.5 秒)を省ける
+  - **ログイン画面の鍵(`loginJKey`)は 9 分後も有効**(22:08〜22:17 実測。トップ → ログイン画面 → 9 分放置 → ログイン成功)
+    → 先起こしのブラウザでログイン画面も取っておけば、本番はいきなりログイン送信から始められる(3〜4.5 秒短縮。8 分おきの読み直しに合わせて取り直す)
+  - ログイン直後のホーム(`pawab2000`)に自分の予約一覧は無い(日付はお知らせのもの)。一覧(`prwha1000`)の往復は省けない
+  - 月表示の Ajax(`getMonthInfoAjax`)は日ごとの空き状況アイコン(全て空き等)の要約で、時間帯ごとの面数は返さない。照会には使えない
   - JS・CSS の応答ヘッダは `Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0`(ETag は `W/"<サイズ>-<更新時刻>"`)で、
     ブラウザは毎回取り直す。**JS 8 本を手元に控えて差し込む案は実装して計測したが不採用(本人判断、2026-10-25)**:
     確認画面の表示が 9.5 → 7.0 秒(JS は同時に読まれるので 1 本ずつの遅さは積み上がらない)しか縮まず、
