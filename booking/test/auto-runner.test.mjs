@@ -27,6 +27,7 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
   const vacancyCards = [];
   const heartbeats = [];
   const added = [];
+  const dropped = [];
   const bookings = [];
   const state = createAutoState({ file: tmpFile(), now: () => t });
   const queue = createBookingQueue();
@@ -38,6 +39,7 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
       return exclusions;
     },
     addExcludedSlots: async (s) => added.push(...s),
+    dropAllowedSlots: async (s) => dropped.push(...s),
   });
   const runner = createAutoRunner({
     mode,
@@ -66,7 +68,7 @@ function harness({ mode = 'on', slots = [], exclusions = { dates: [], slots: [] 
     eventLog: eventsFile ? createEventLog({ file: eventsFile }) : null,
   });
   return {
-    runner, state, queue, logs, notified, heartbeats, added, bookings, vacancyCards, workerRef,
+    runner, state, queue, logs, notified, heartbeats, added, dropped, bookings, vacancyCards, workerRef,
     setSlots: (s) => (current = s),
     advance: (ms) => (t += ms),
     now: () => t,
@@ -905,7 +907,9 @@ test('対象に追加した枠(2026-10-25): heartbeat の allowSlots にある�
 test('対象に追加した枠(2026-10-25): 平日の監視対象外の枠(大島 17:00)も追加してあれば見て予約する。追加した時点で既に空いていた枠も、次の照会で取りに行く', async () => {
   // 9/14(月) 10:00。9/15(火)・9/16(水)は平日なので普段の監視対象は猿江 19:00 だけ(どちらもペナルティ期間)
   const allowOoshima = { park: '1160', date: '2026-09-16', start: '17:00', end: '19:00', facility: '大島小松川公園' };
-  let ex = { dates: [], slots: [], allowSlots: [allowOoshima] };
+  // 同じ日時の猿江 17:00 も追加してある(取れたらこちらは消える)
+  const allowSarue = { park: '1040', date: '2026-09-16', start: '17:00', end: '19:00', facility: '猿江恩賜公園' };
+  let ex = { dates: [], slots: [], allowSlots: [allowOoshima, allowSarue] };
   const h = harness({ workerOverride: {} });
   h.workerRef.heartbeat = async () => ex;
   // 猿江 9/15 19:00 は監視対象で、最初から空いている(初回で既知になる)
@@ -916,6 +920,9 @@ test('対象に追加した枠(2026-10-25): 平日の監視対象外の枠(大�
   assert.equal(r.planned, 1, '追加した大島 17:00 は平日でも監視対象になり予約する。亀戸 17:00 は監視対象外、猿江 9/15 19:00 は既知でペナルティ期間');
   await flush();
   assert.deepEqual(h.bookings, ['2026-09-16 1160 17 B']);
+  // 取れたら、同じ日時の対象枠(猿江 17:00 と取れた大島 17:00 自身)を Worker に消してもらう
+  assert.deepEqual(h.dropped, [{ date: '2026-09-16', start: '17:00' }]);
+  assert.ok(h.logs.some((l) => l.includes('同じ日時の対象枠を消します: 大島小松川公園・猿江恩賜公園 2026-09-16 17:00')));
 
   // 運用中に「せってい」で猿江 9/15 19:00 を追加 → 既に空いていて既知だが、次の照会で「新しい空き」として予約しに行く
   ex = { dates: [], slots: [], allowSlots: [allowOoshima, { park: '1040', date: '2026-09-15', start: '19:00', end: '21:00', facility: '猿江恩賜公園' }] };

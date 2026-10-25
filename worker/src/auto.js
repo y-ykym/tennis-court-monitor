@@ -15,7 +15,8 @@
 //   API(Pi と Actions から。認証は lib/auto-client.js と同じ HMAC + 時刻):
 //     GET  /auto/state        → { alive, active, mode, lastSeenAt, dates, slots, allowSlots }   Actions が通知を絞る判断に使う(Pi を直接 probe する)
 //     POST /auto/heartbeat    { active, mode, ... } → 除外一覧 { dates, slots, allowSlots }     Pi が 1 分おきに呼ぶ(除外一覧の取得。KV には書かない)
-//     POST /auto/exclusions   { addSlots: [{ park, date, start, end, facility, reason }] } → 除外一覧   Pi が「手放した枠」を登録
+//     POST /auto/exclusions   { addSlots: [{ park, date, start, end, facility, reason }], dropAllowSlots: [{ date, start }] } → 除外一覧
+//                             Pi が「手放した枠」を登録 / 予約が取れた日時の「対象に追加した枠」を公園を問わず消す(同じ時間に別のコートではできないため。2026-10-25)
 //     POST /auto/tennisbear   { person: 'A'|'B' } → { configured, events: [{ date, start, end, park, facility, source:'tennisbear' }] }
 //                             Pi が予約直前に呼ぶ(2026-09-24)。その人のテニスベアの今後の予定(tennisbear.js)を、公園コードを付けて返す。
 //                             隣の時間帯に別の場所の予定があれば Pi は自動予約を見送る。TB_EMAIL_*/TB_PASS_* が無い人は configured:false・events:[]。
@@ -221,6 +222,15 @@ export async function removeAllowedSlot(env, key, now = Date.now()) {
   ex.allowSlots = ex.allowSlots.filter((a) => slotKeyOf(a) !== key);
   return saveExclusions(env, ex, now);
 }
+// 予約が取れた日時(date, start)の「対象に追加した枠」を公園を問わず消す(2026-10-25。同じ時間に別のコートではできない。取れた枠自身も消す)
+export async function dropAllowedSlotsAt(env, slots, now = Date.now()) {
+  const ex = await loadExclusions(env, now);
+  const at = new Set((slots || []).filter((s) => s?.date && s?.start).map((s) => `${s.date} ${s.start}`));
+  const before = ex.allowSlots.length;
+  ex.allowSlots = ex.allowSlots.filter((a) => !at.has(`${a.date} ${a.start}`));
+  if (before !== ex.allowSlots.length) console.log(`[auto] 予約が取れた日時の対象枠を ${before - ex.allowSlots.length} 件消しました(${[...at].join(', ')})`);
+  return saveExclusions(env, ex, now);
+}
 export async function removeExcludedDate(env, dateIso, now = Date.now()) {
   const ex = await loadExclusions(env, now);
   ex.dates = ex.dates.filter((d) => d !== dateIso);
@@ -407,6 +417,7 @@ export async function handleAuto(request, env, ctx, { now = Date.now(), fetchEve
     return Response.json({ ...ex, enabled: sw.enabled, notifyEnabled: ns.enabled, serverTime: now });
   }
   if (p === '/auto/exclusions' && request.method === 'POST') {
+    if (Array.isArray(json.dropAllowSlots) && json.dropAllowSlots.length) await dropAllowedSlotsAt(env, json.dropAllowSlots, now);
     const ex = await addExcludedSlots(env, Array.isArray(json.addSlots) ? json.addSlots : [], now);
     return Response.json(ex);
   }
