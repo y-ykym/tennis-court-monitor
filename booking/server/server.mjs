@@ -208,8 +208,8 @@ async function runReserve(s, extra = {}) {
       }, 1000);
     });
 
-  // vacant は自動予約だけが持つ(空き照会で分かった面数。高速経路で週データの再確認を飛ばすのに使う)。手動の「よやく」には無い
-  const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2), vacant: payload.vacant ?? null };
+  // reserve() の slot.vacant(週データの再確認を飛ばす)は渡さない(2026-10-25 の判断。サーバーが選択時に空きを検証しないため)
+  const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2) };
   log(`予約フロー開始${s.kind === 'auto' ? '(自動予約)' : ''}: ${slotText(payload)} 予約者=${creds.label}`);
   const credentials = { userId: creds.userId, password: creds.password };
   const browserOptions = {
@@ -238,6 +238,7 @@ async function runReserve(s, extra = {}) {
     log(`予約フロー例外: ${e.message}`);
   }
   s.status = 'done';
+  warmer?.resume(); // 予約が終わった合図(warmer はこれまで新しい Chromium を起こさない。先に起こした束が閉じられているかも確かめる)
   s.result = result;
   s.message = result.message;
   log(`予約フロー終了: ${result.status} ${result.message}`);

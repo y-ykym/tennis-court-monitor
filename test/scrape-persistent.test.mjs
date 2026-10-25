@@ -120,20 +120,30 @@ test('同じ週が 3 回続けて失敗したら公園名入りのエラーで�
   assert.deepEqual(scrape.stats(), { sessions: 3, created: 6 }, '失敗したセッションは持たない');
 });
 
-test('セッションは 30 分で作り直す。日付が変わっても作り直す', async () => {
+test('セッションは 作ってから 30 分 か 前回使ってから 8 分 で作り直す。日付が変わっても作り直す', async () => {
   const site = fakeSite();
   let today = '20261025';
   const { scrape, clock } = make(site, { todayYmd: () => today });
   await scrape();
-  clock.advance(29 * 60 * 1000);
+  // 5 分おきに使っていれば(放置 8 分未満)30 分までは作り直さない
+  for (let i = 0; i < 5; i++) {
+    clock.advance(5 * 60 * 1000);
+    await scrape();
+  }
+  assert.equal(scrape.stats().created, 4, '25 分・使い続けていれば作り直さない');
+  clock.advance(6 * 60 * 1000);
   await scrape();
-  assert.equal(scrape.stats().created, 4, '29 分では作り直さない');
-  clock.advance(2 * 60 * 1000);
+  assert.equal(scrape.stats().created, 8, '作ってから 31 分で全部作り直す');
+  // 放置 9 分(照会間隔が 10〜15 分に広がったとき)は、使う前に作り直す
+  clock.advance(9 * 60 * 1000);
   await scrape();
-  assert.equal(scrape.stats().created, 8, '31 分で全部作り直す');
+  assert.equal(scrape.stats().created, 12, '9 分放置したら作り直す(週 JSON で一度失敗してからではなく、先に)');
+  clock.advance(7 * 60 * 1000);
+  await scrape();
+  assert.equal(scrape.stats().created, 12, '7 分なら使い回す');
   today = '20261026';
   const slots = await scrape();
-  assert.equal(scrape.stats().created, 12, '日付が変わったら作り直す');
+  assert.equal(scrape.stats().created, 16, '日付が変わったら作り直す');
   assert.ok(slots.every((s) => s.date >= '2026-10-26'), '新しい日付から取る');
 });
 
@@ -147,4 +157,33 @@ test('トップページがメンテナンス画面なら作り直しても取�
   const { scrape } = make(site);
   await assert.rejects(scrape(), /の取得に失敗: トップページが想定外です/);
   assert.equal(scrape.stats().sessions, 0);
+});
+
+test('サイト全体が落ちている(トップが想定外)ときは、セッションの用意に 3 回失敗した時点で打ち切り、通信を増やさない', async () => {
+  const site = fakeSite();
+  const orig = site.createSession;
+  site.createSession = () => {
+    const req = orig();
+    return async (pathname, form) => (pathname === '/web/index.jsp' ? '<html>メンテナンス中</html>' : req(pathname, form));
+  };
+  // 3 公園 × 4 週 = 12 本で試す(本番と同じ数)
+  const parks = [{ name: 'A', code: '1040' }, { name: 'B', code: '1050' }, { name: 'C', code: '1160' }];
+  const scrape = createPersistentScraper({ parks, weeksPerPark: 4, createSession: site.createSession, log: () => {} });
+  await assert.rejects(scrape(), /の取得に失敗/);
+  assert.ok(site.calls.top <= 6, `トップへの通信は少数で止まる(実際 ${site.calls.top} 回。打ち切りが無ければ 36 回)`);
+  assert.equal(scrape.stats().sessions, 0);
+});
+
+test('一部のセッションの用意だけが失敗する場合は、従来どおり 3 回までやり直して取る', async () => {
+  const site = fakeSite();
+  let fails = 0;
+  const orig = site.createSession;
+  site.createSession = () => {
+    const req = orig();
+    return async (pathname, form) => (pathname === '/web/index.jsp' && fails++ < 2 ? '<html>一時エラー</html>' : req(pathname, form));
+  };
+  const { scrape } = make(site);
+  const slots = await scrape();
+  assert.equal(slots.length, 4);
+  assert.equal(scrape.stats().sessions, 4);
 });
