@@ -125,8 +125,10 @@ export async function launchBrowserForReserve(options = {}, log = () => {}) {
   //   常に           画像・フォント・メディア・都のチャットボット
   //   phase 'top'     高速経路のトップページ: サイトの JS・CSS も止める。fetch と form しか使わないので不要
   //                  (2026-10-25 実測: 22.5 秒 → 4.0 秒。ログインボタンの有無の判定と form1 は HTML だけで足りる)
-  //   phase 'confirm' 高速経路の確認画面以降: CSS 3 本と jquery-barcode(利用者カードのバーコード用)を止める。
-  //                  サイトの JS(予約ボタン・確認ダイアログ)と Google の reCAPTCHA は読む(同時接続の空きができ 12.8 秒 → 約 9.5 秒の見込み)
+  //   phase 'confirm' 高速経路の確認画面以降: CSS 3 本と、確認画面で使われない JS 2 本(jquery-barcode = 利用者カードのバーコード用、
+  //                  paw_l100 = Cookie と検索条件の保存の補助。prwea1000 / paw_common / paw_bsui から参照なし)を止める。
+  //                  残る JS は jquery・paw_bsui・paw_errormsg・paw_doaction・paw_common・prwea1000 の 6 本で同時接続(6 本)に収まり、
+  //                  Google の reCAPTCHA はそのまま読む(2026-10-25 実測: DOMContentLoaded 12.8 秒 → 6.5 秒)
   //   phase 'ui'      UI 操作の経路: 何も足さない(画面の見た目と JS をそのまま使う)
   // ※reCAPTCHA(google.com / gstatic.com)は止めない(画像選択のチャレンジが表示できなくなる)
   let phase = 'ui';
@@ -140,7 +142,7 @@ export async function launchBrowserForReserve(options = {}, log = () => {}) {
       blocked.assets++;
       return route.abort();
     }
-    if ((phase === 'top' && (type === 'script' || type === 'stylesheet')) || (phase === 'confirm' && (type === 'stylesheet' || url.includes('jquery-barcode')))) {
+    if ((phase === 'top' && (type === 'script' || type === 'stylesheet')) || (phase === 'confirm' && (type === 'stylesheet' || /jquery-barcode|\/paw_l100\.js/.test(url)))) {
       blocked.pageFiles++;
       return route.abort();
     }
