@@ -38,6 +38,9 @@ services:
       PROFILE_LOCAL: '1'       # ブラウザプロファイルを下の volume に持ち越す
       # フェーズ3: 空き照会(lib/scrape.js)の失敗時レスポンスはコンテナ内に溜めない(1 分周期で増えるため)
       SCRAPE_DEBUG_DIR: ''
+      # 空き照会の取り方(2026-10-25)。'1' = 公園 × 週 = 12 本のセッションを持ち続け、毎回は週の JSON だけを 12 本同時に取る
+      # (1 回の照会 約 50 秒 → 約 10 秒、通信 18 → 12 回)。おかしければ '0' で従来の「公園ごとに 4 週を順番に取る」に戻す
+      AUTO_SCRAPE_WEEKS: '1'
       # 想定外の応答(メンテナンス画面など)の最新 1 件だけを上書きで残す(メンテ中に何が返るかの実物を記録するため。2026-09-27)
       SCRAPE_LAST_FAILURE_FILE: /var/lib/booking/last-scrape-failure.html
       AUTO_STATE_FILE: /var/lib/booking/auto-state.json
