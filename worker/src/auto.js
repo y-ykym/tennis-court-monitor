@@ -208,15 +208,18 @@ export async function addExcludedDate(env, dateIso, now = Date.now()) {
   if (!ex.dates.includes(dateIso)) ex.dates.push(dateIso);
   return saveExclusions(env, ex, now);
 }
-// 対象に追加した枠を追加・解除(2026-10-25)。追加したら除外枠からは外す(本人が改めて取ると決めた枠)
-export async function addAllowedSlot(env, { park, date, start }, now = Date.now()) {
+// 対象に追加した枠を追加・解除(2026-10-25)。追加したら除外枠からは外す(本人が改めて取ると決めた枠)。複数まとめて KV 書き込み 1 回
+export async function addAllowedSlots(env, list, now = Date.now()) {
   const ex = await loadExclusions(env, now);
-  const slot = { park, date, start, end: endOfStart(start), facility: PARK_NAMES[park], at: now };
-  const k = slotKeyOf(slot);
-  if (!ex.allowSlots.some((a) => slotKeyOf(a) === k)) ex.allowSlots.push(slot);
-  ex.slots = ex.slots.filter((s) => slotKeyOf(s) !== k);
+  for (const { park, date, start } of list) {
+    const slot = { park, date, start, end: endOfStart(start), facility: PARK_NAMES[park], at: now };
+    const k = slotKeyOf(slot);
+    if (!ex.allowSlots.some((a) => slotKeyOf(a) === k)) ex.allowSlots.push(slot);
+    ex.slots = ex.slots.filter((s) => slotKeyOf(s) !== k);
+  }
   return saveExclusions(env, ex, now);
 }
+export const addAllowedSlot = (env, slot, now = Date.now()) => addAllowedSlots(env, [slot], now);
 export async function removeAllowedSlot(env, key, now = Date.now()) {
   const ex = await loadExclusions(env, now);
   ex.allowSlots = ex.allowSlots.filter((a) => slotKeyOf(a) !== key);
@@ -228,7 +231,8 @@ export async function dropAllowedSlotsAt(env, slots, now = Date.now()) {
   const at = new Set((slots || []).filter((s) => s?.date && s?.start).map((s) => `${s.date} ${s.start}`));
   const before = ex.allowSlots.length;
   ex.allowSlots = ex.allowSlots.filter((a) => !at.has(`${a.date} ${a.start}`));
-  if (before !== ex.allowSlots.length) console.log(`[auto] 予約が取れた日時の対象枠を ${before - ex.allowSlots.length} 件消しました(${[...at].join(', ')})`);
+  if (before === ex.allowSlots.length) return ex; // 消すものが無ければ KV に書かない(書き込みは無料枠 1 日 1,000 回)
+  console.log(`[auto] 予約が取れた日時の対象枠を ${before - ex.allowSlots.length} 件消しました(${[...at].join(', ')})`);
   return saveExclusions(env, ex, now);
 }
 export async function removeExcludedDate(env, dateIso, now = Date.now()) {
@@ -538,8 +542,8 @@ function parsePickValue(value) {
   const hours = m[5] === '0' ? [] : [...new Set(m[5].split('-').map(Number))].filter((h) => START_HOURS.includes(h));
   return { parks, hours, date: `${m[2]}-${m[3]}-${m[4]}` };
 }
-// 指定できる日か(今日〜今日+MAX_DAYS_AHEAD)
-const isPickableDate = (date, today) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= today && date <= addDaysIso(today, MAX_DAYS_AHEAD);
+// 指定できる日か(実在する日で、今日〜今日+MAX_DAYS_AHEAD)
+const isPickableDate = (date, today) => /^\d{4}-\d{2}-\d{2}$/.test(date) && addDaysIso(date, 0) === date && date >= today && date <= addDaysIso(today, MAX_DAYS_AHEAD);
 // その日のうち、まだ始まっていない枠の開始時
 const futureHours = (date, now) => START_HOURS.filter((h) => jstDateTimeMs(date, hhmmOf(h)) > now);
 // 時間帯とコートを選ぶカード(複数選択。2026-10-25)。hours/parks = いま選んでいるもの。各行のボタンには「押した後の選択」を載せ、「決定」には今の選択を載せる
@@ -610,13 +614,10 @@ export async function handleAutoPostback(env, data, params, { now = Date.now() }
       return buildPickReply(env, { date: s.date, hours, parks: s.parks, today, now });
     }
     if (!hours.length || !s.parks.length) return { text: MSG_AUTO_BAD_SLOT };
-    const added = [];
-    for (const park of s.parks) {
-      for (const h of hours) {
-        await addAllowedSlot(env, { park, date: s.date, start: hhmmOf(h) }, now);
-        added.push(`${park}|${s.date}|${hhmmOf(h)}`);
-      }
-    }
+    const toAdd = [];
+    for (const park of s.parks) for (const h of hours) toAdd.push({ park, date: s.date, start: hhmmOf(h) });
+    await addAllowedSlots(env, toAdd, now);
+    const added = toAdd.map((a) => `${a.park}|${a.date}|${a.start}`);
     const names = s.parks.map((p) => PARK_NAMES[p]).join('・');
     note = `${fmt(s.date)} ${hoursRangeText(hours)} ${names} の ${added.length} 枠を対象に追加しました(空きが出れば自動予約します${isPenaltyPeriod(s.date, today) ? '。ペナルティ期間なので、取り消すとペナルティ 1 点が付きます' : ''})`;
     console.log(`[auto] 対象枠を追加: ${added.join(', ')}`);

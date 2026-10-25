@@ -226,11 +226,14 @@ export function createAutoRunner({
       lastTargets = targets;
       const keys = targets.map(slotKey);
       const known = state.knownKeys();
-      // 「対象に追加した枠」に入ったばかりの枠を既知から外す → いま空いていれば下で「新しく出た空き」になる
-      for (const k of freshAllowKeys) {
-        if (known.delete(k)) log(`対象に追加された枠がいま空いているので、新しい空きとして扱います: ${k}`);
+      // 「対象に追加した枠」に入ったばかりの枠を既知から外す → いま空いていれば下で「新しく出た空き」になる。
+      // 初回起動(既知の登録だけで予約しない回)では消さず、次の照会に持ち越す
+      if (!state.needsBaseline()) {
+        for (const k of freshAllowKeys) {
+          if (known.delete(k)) log(`対象に追加された枠がいま空いているので、新しい空きとして扱います: ${k}`);
+        }
+        freshAllowKeys.clear();
       }
-      freshAllowKeys.clear();
       // 実枠テスト用: 指定された枠を既知から外して「新しく出た」扱いにする
       for (const k of readForgetKeys()) {
         if (known.delete(k)) log(`テスト用に既知から外しました(次の判定で新しい空きとして扱う): ${k}`);

@@ -519,6 +519,7 @@ test('対象に追加した枠(2026-10-25): 日付ピッカー(b)→ 時間帯�
   assert.deepEqual(pb(rToday).map((a) => a.label), [...HOURS.slice(1), ...PARKS]);
   assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-10-20' } }), { text: MSG_AUTO_BAD_SLOT });
   assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: null }), { text: MSG_AUTO_BAD_SLOT });
+  assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-09-31' } }), { text: MSG_AUTO_BAD_SLOT }, '実在しない日');
   const evening = NOW + 10 * 3600 * 1000; // 9/14 20:00(add.data は 1 時間で切れるので、その時刻の署名で)
   const addEvening = await signAutoData(SECRET, 'b', '-', Math.floor(evening / 1000) + 3600);
   assert.deepEqual(await buildPostbackReply(env, addEvening, { now: evening, params: { date: '2026-09-14' } }), { text: MSG_AUTO_BAD_SLOT });
