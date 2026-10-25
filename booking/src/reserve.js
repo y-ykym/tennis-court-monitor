@@ -580,6 +580,8 @@ export async function reserve(slot, credentials, options = {}) {
       alerts.length = 0; // ここまでの alert(トップページの Ajax 失敗など)は結果判定に混ぜない
       await pause();
       applySent = true; // ここから先は、途中で失敗しても予約が入っている可能性がある(一覧で確かめる)
+      diag.applySent = true; // server.mjs のやり直しの判断に使う(押した後の error は UI 操作でやり直さない)
+      diag.applyAtMs = Date.now() - started;
       await Promise.all([page.waitForNavigation({ timeout: APPLY_TIMEOUT, waitUntil: 'domcontentloaded' }), humanClick('#btn-go')]);
     }
     // 送信後の画面を判定する(成功 / 失敗の種類)。onChallenge があり v2 チェックボックスが出た場合は人間に渡してから再判定
