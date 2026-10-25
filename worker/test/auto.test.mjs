@@ -202,7 +202,7 @@ test('「せってい」カード: スイッチ 2 つ(ON/OFF ボタン)・除外
   assert.equal(t.filter((s) => s === 'ON').length, 2, '自動予約・空き通知カードとも ON');
   assert.ok(t.some((s) => s.includes('大島小松川公園') && s.includes('キャンセル済み')));
   const acts = actions(reply.flex.contents);
-  const picker = acts.find((a) => a.type === 'datetimepicker');
+  const picker = acts.find((a) => a.type === 'datetimepicker' && a.mode === 'date');
   assert.equal(picker.mode, 'date');
   assert.equal(picker.min, '2026-09-14');
   assert.equal(picker.max, '2026-10-19');
@@ -422,8 +422,8 @@ test('対象に追加した枠(2026-10-25): 日時ピッカー(b)→ 公園を�
   assert.ok(t0.includes('対象に追加した枠'));
   assert.ok(!t0.some((s) => s.includes('ペナルティ期間でも予約する日')), '日単位の旧機能は消えている');
   const pickers = actions(r0.flex.contents).filter((a) => a.type === 'datetimepicker');
-  assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['📅 除外日を追加', 'date'], ['➕ 対象枠を追加', 'datetime']]);
-  const add = pickers[1];
+  assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['➕ 対象枠を追加', 'datetime'], ['📅 除外日を追加', 'date']], '対象枠の行が先(1 行まるごと)');
+  const add = pickers[0];
   assert.ok(add.data.length <= 300);
   assert.equal((await verifyAutoData(SECRET, add.data, NOW)).kind, 'b');
   assert.match(r0.text, /対象に追加した枠: なし/);
