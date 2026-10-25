@@ -55,6 +55,8 @@ print(verdict)
 print(f"  mode={mode}  LINEスイッチ={'ON' if enabled else 'OFF'}  空き通知カード={'ON' if notify else 'OFF'}  起動 {jst(started)}({up_min} 分前)")
 print(f"  最後の照会: {jst(last_at)}({age_min} 分前、所要 {int(last_ms/1000)} 秒)" + (f'  エラー: {last_err}' if last_err else ''))
 print(f"  いま空いている監視対象: {len(s.get('targets') or [])} 件  除外一覧: 除外日 {ex.get('dates',0)}・除外枠 {ex.get('slots',0)}・対象に追加した枠 {ex.get('allowSlots',0)}(更新 {jst(ex.get('at') or 0)})  予約の行列: 実行中={q.get('running') or 'なし'} 待ち={len(q.get('waiting') or [])}")
+w = s.get('warm')
+if w: print(f"  先に起こしたブラウザ: {w.get('state')}{'(予約で使用中)' if w.get('busy') else ''}  トップ読み込み {jst(w.get('topLoadedAt') or 0)}  起動 {w.get('launched')} 回  連続失敗 {w.get('failures')}")
 if last_err: print(f'  ※ 直近の照会でエラー(連続 {fails} 回)。回線か予約サイト側の一時的な不調が多い。下の fetch failed 件数を見る')
 if fails >= 3: print('  ※ 想定外の応答の実物は docker compose exec booking cat /var/lib/booking/last-scrape-failure.html で見られる(最新 1 件)')
 
@@ -82,6 +84,7 @@ docker compose logs --since 24h --no-log-prefix booking 2>/dev/null | grep '\[au
 echo "  fetch failed: $(docker compose logs --since 24h booking 2>/dev/null | grep -c 'fetch failed') 件 / 24h(回線不調の目安)"
 echo "  直近の照会 3 行:"
 docker compose logs --since 24h --no-log-prefix booking 2>/dev/null | grep '\[auto\] 照会:' | tail -3 | sed 's/^/    /'
+echo "  ※ コンテナを作り直す前のログは /var/lib/booking/logs/server-YYYY-MM-DD.log(7 日分)。例: docker compose exec booking sh -c 'grep -E \"予約|高速経路|warm\" /var/lib/booking/logs/server-\$(date +%F).log | tail -40'"
 
 hr "Worker から見た登録(registered が true なら外から Pi に届く)"
 curl -s -m 15 "$WORKER_URL/booking/status" || echo "応答なし"

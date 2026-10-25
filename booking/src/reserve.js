@@ -261,7 +261,9 @@ export async function reserve(slot, credentials, options = {}) {
   const started = Date.now();
   // (フェーズ3)ログイン直後に取った予約一覧。結果に付けて返す(呼び出し側が手放した枠の検出に使う)
   let reservationsBefore = null;
-  const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, ...(reservationsBefore ? { reservationsBefore } : {}), ...extra });
+  // 診断(結果に diag として付ける。server.mjs が経路・先起こしの有無を足し、auto-runner が記録に残す)
+  const diag = {};
+  const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, diag: { ...diag }, ...(reservationsBefore ? { reservationsBefore } : {}), ...extra });
   // 予約一覧 HTML を解析して控え、beforeApply に見せる。中止の指示があれば ReserveError で抜ける(予約は送らない)
   // 本物の一覧画面でなければ(障害時のお知らせページ・セッション切れのホーム等)件数も手放し判定も信用できないので、ここで中止する
   // (2026-10-08 08:03 に「0 件」を信じて自動予約した 4 枠を除外枠に誤登録した)
@@ -394,10 +396,14 @@ export async function reserve(slot, credentials, options = {}) {
       loggedIn = true;
       facility = r.facility || slot.park;
       const skipped = [r.skippedLoginPage && 'ログイン画面', r.skippedSearch && '検索', r.skippedWeek && '週データ'].filter(Boolean);
+      diag.topSkipped = !!topFresh;
+      diag.skipped = skipped;
+      diag.selectedAtMs = Date.now() - started;
       log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面${skipped.length ? `(先取りで省略: ${skipped.join('・')})` : ''} (${Date.now() - started}ms)`);
       if (r.listHtml) await inspectList(r.listHtml);
       setPhase('confirm'); // ここからはサイトの JS と reCAPTCHA が要る(CSS とバーコード用 JS は止めたまま)
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
+      diag.confirmAtMs = Date.now() - started;
       log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms, 止めた読み込み JS/CSS 計 ${bundle.blocked?.pageFiles ?? '-'} 件)`);
     } else {
       // 1. トップ → ログイン画面

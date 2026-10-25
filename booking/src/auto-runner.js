@@ -160,10 +160,12 @@ export function createAutoRunner({
     }
   };
   // 試行状態の更新と記録(running は記録しない)
-  const attempt = (c, status, message) => {
+  const attempt = (c, status, message, extra = {}) => {
     state.markAttempt(c.key, status);
-    if (status !== 'running') event('result', { key: c.key, status, person: c.person, message: message || undefined });
+    if (status !== 'running') event('result', { key: c.key, status, person: c.person, message: message || undefined, ...extra });
   };
+  // 予約実行の結果から記録に残す診断(所要・経路 fast/ui・先起こし warm・先取りで省略したもの・やり直しの理由)
+  const resultExtra = (result) => ({ ...(result.elapsedMs != null ? { elapsedMs: result.elapsedMs } : {}), ...(result.diag ? { diag: result.diag } : {}) });
 
   async function heartbeat(extra = {}) {
     const payload = { active: bookingEnabled(), mode: effectiveMode(), at: now(), queued: queue.waiting().length, running: queue.isBusy(), lastCycle, ...extra };
@@ -421,14 +423,14 @@ export function createAutoRunner({
       authFailedAt.set(c.person, now());
       log(`予約者 ${c.person} のログインが拒否されたため、${Math.round(AUTH_PAUSE_MS / 3600000)} 時間は ${c.person} の自動予約を止めます`);
       if (!first) {
-        attempt(c, result.status, result.message);
+        attempt(c, result.status, result.message, resultExtra(result));
         state.save();
         return result;
       }
     } else if (ok) {
       authFailedAt.delete(c.person);
     }
-    attempt(c, result.status, result.message);
+    attempt(c, result.status, result.message, resultExtra(result));
     log(`自動予約 結果: ${result.status} ${describe(c)} ${result.message || ''}`.trim());
 
     if (ok) {

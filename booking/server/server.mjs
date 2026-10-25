@@ -25,6 +25,7 @@
 //   PROFILE_LOCAL=1         ブラウザプロファイル(Cookie 等)を docker volume に持ち越す
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
 //   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
+//   LOG_DIR                 サーバーのログを日付ごとに残す場所(例 /var/lib/booking/logs。無ければ docker logs だけ)
 //   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード(既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う)
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
@@ -51,6 +52,7 @@ import { createRequire } from 'node:module';
 import { reserve, launchBrowserForReserve } from '../src/reserve.js';
 import { createBrowserWarmer } from '../src/browser-warmer.js';
 import { prefetchInPage } from '../src/site-inpage.js';
+import { createFileLog } from '../src/file-log.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
@@ -94,7 +96,13 @@ const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.e
 // LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
 const PUBLIC_BASE = (process.env.BOOKING_PUBLIC_URL || process.env.WORKER_URL || '').replace(/\/$/, '');
 
-const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+// ログは画面(docker logs)と、LOG_DIR があれば日付ごとのファイル(src/file-log.js。コンテナを作り直しても残る。7 日で消す)の両方へ
+const fileLog = createFileLog({ dir: process.env.LOG_DIR || '', log: (m) => console.log(`[${new Date().toISOString()}] ${m}`) });
+const log = (msg) => {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  fileLog.write(line);
+};
 const SERVER_STARTED_AT = Date.now();
 
 // LINE への push は「届くまで持ち越す」(回線断の間に送れなかった結果カードを取りこぼさない)。保存先は docker volume
@@ -227,11 +235,18 @@ async function runReserve(s, extra = {}) {
     // (同じプロファイルで 2 つ目を起こすと「使用中」で失敗するため、warmer を通して 1 つずつにする)
     const useFast = process.env.FAST_PATH !== '0';
     s.message = useFast ? 'ログインして枠を選んでいます(高速経路)…' : 'ブラウザでログインして枠を選んでいます…';
-    result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast, warm: await acquireWarmBrowser() });
+    const warm1 = await acquireWarmBrowser();
+    result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast, warm: warm1 });
+    // 試行の記録(auto-events の result)に載せる診断: 経路・先起こしの有無・所要・やり直しの理由(10/25 に遅い試行の原因が追えなかったため)
+    result.diag = { ...(result.diag || {}), path: useFast ? 'fast' : 'ui', warm: !!warm1, elapsedMs: result.elapsedMs };
     if (useFast && result.status === 'error') {
       log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
       s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
-      result = await reserve(slot, credentials, { ...browserOptions, warm: await acquireWarmBrowser() });
+      const firstError = result.message;
+      const firstMs = result.elapsedMs;
+      const warm2 = await acquireWarmBrowser();
+      result = await reserve(slot, credentials, { ...browserOptions, warm: warm2 });
+      result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
     }
   } catch (e) {
     result = { status: 'error', message: e.message };
@@ -291,7 +306,7 @@ if (AUTO_MODE !== 'off') {
     autoRunner = createAutoRunner({
       mode: AUTO_MODE,
       eventLog: eventsFile ? createEventLog({ file: eventsFile, log }) : null,
-      scrape: createScraper(),
+      scrape: createScraper({ log }),
       queue,
       state,
       worker: {
@@ -457,6 +472,8 @@ const server = http.createServer((req, res) => {
         now: Date.now(),
         intervalMs: autoRunner?.intervalMs ?? null,
         lastCycle: autoRunner?.lastCycle() ?? null,
+        // 先に起こしてあるブラウザの状態(src/browser-warmer.js。auto-check が表示する)
+        warm: warmer ? warmer.status() : null,
         // 空き照会の連続失敗回数(3 回以上で照会の間隔を広げている。サイトのメンテナンス中はここが増え続ける)
         consecutiveFailures: autoRunner?.consecutiveFailures() ?? null,
         // 直近の照会で見えていた監視対象の空き(実枠テストで枠を選ぶときに見る)

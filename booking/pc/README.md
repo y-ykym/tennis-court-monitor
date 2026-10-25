@@ -207,6 +207,8 @@ docker compose ps                                                      # 3 サ�
   **KM2.5x4mm ネジ ×4**、ゴム足 ×4 だけ。組み込み後の実測は 40℃ 前後
 - **電源を切るときの注意**: `sudo shutdown -h now` → 緑の ACT ランプが消えてから電源を抜く。
   作業は**毎時 00 分の直後**に始める(Worker の生存確認がその時刻。10 分を超えると LINE に ⚠️ が出る)
+- **ログ**: `docker compose logs` はコンテナを作り直すと消える。サーバーのログは `/var/lib/booking/logs/server-YYYY-MM-DD.log`(volume。7 日分)にも残る(2026-10-25)。
+  予約の試行の内訳(経路・所要・やり直しの理由)は `./auto-stats.sh 7 --list` の各行末〔…〕にも出る
 - **更新**: `cd ~/tennis-court-monitor/booking/pc && git pull && docker compose up -d --build`
   予約の実行中(Chromium が開いている最中)に作り直すと、プロファイルに Chromium の「使用中」の印(SingletonLock)が残って以後ブラウザが起動できなくなるが、
   起動スクリプト(docker-entrypoint.sh)が始める前に消すので手当は不要(2026-10-25 15:56 の反映で発生し、同日に組み込み)。

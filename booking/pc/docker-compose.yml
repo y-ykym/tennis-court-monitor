@@ -50,6 +50,8 @@ services:
       AUTO_STATE_FILE: /var/lib/booking/auto-state.json
       # 枠の出現・消滅・試行の記録(JSONL。コンテナを作り直しても残る。./auto-stats.sh で集計。2026-10-11)
       AUTO_EVENTS_FILE: /var/lib/booking/auto-events.jsonl
+      # サーバーのログを日付ごとに残す(コンテナを作り直しても消えない。7 日で削除。2026-10-25)
+      LOG_DIR: /var/lib/booking/logs
       SCREEN_W: '600'
       SCREEN_H: '1000'
     volumes:

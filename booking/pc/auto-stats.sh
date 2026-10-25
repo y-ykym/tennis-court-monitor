@@ -45,7 +45,7 @@ for key, es in by_key.items():
     while i < len(es):
         e = es[i]
         if e['type'] != 'appeared': i += 1; continue
-        a = dict(at=e['at'], key=key, facility=e.get('facility'), date=e.get('date'), time=e.get('time'), intervalMs=e.get('intervalMs'), gone_at=None, life_min=None, outcome='', reason='')
+        a = dict(at=e['at'], key=key, facility=e.get('facility'), date=e.get('date'), time=e.get('time'), intervalMs=e.get('intervalMs'), gone_at=None, life_min=None, outcome='', reason='', result_at=None, elapsedMs=None, diag={})
         j = i + 1
         while j < len(es) and es[j]['type'] != 'appeared':
             x = es[j]
@@ -53,6 +53,7 @@ for key, es in by_key.items():
                 a['gone_at'] = x['at']; a['life_min'] = (x['at'] - e['at']) / 60000
             elif x['type'] == 'result':
                 a['outcome'] = x.get('status', ''); a['reason'] = x.get('message') or ''
+                a['result_at'] = x['at']; a['elapsedMs'] = x.get('elapsedMs'); a['diag'] = x.get('diag') or {}
             elif x['type'] == 'skipped' and not a['outcome']:
                 a['outcome'] = 'skipped_' + str(x.get('kind')); a['reason'] = x.get('reason') or ''
             elif x['type'] in ('queued', 'dry_run') and not a['outcome']:
@@ -104,5 +105,13 @@ if want_list:
         if a['outcome'] == 'success': continue
         g = f"→ {jst(a['gone_at']).strftime('%H:%M')} ({a['life_min']:.0f}分)" if a['gone_at'] else '→ (まだ見えている)'
         iv = f"[{int(a['intervalMs']/60000)}分]" if a.get('intervalMs') else ''
-        print(f"  {jst(a['at']).strftime('%m/%d(%a) %H:%M')} {g}  {a['date']} {a['time']} {a['facility']} {iv}  {a['outcome'] or '-'} {a['reason']}")
+        # 出現 → 結果までの秒数と、予約実行の診断(10/25 以降の記録にだけある): 経路 fast/ui、先起こし warm、先取りで省略、やり直しの理由
+        d = a.get('diag') or {}
+        det = ''
+        if a.get('result_at'):
+            det = f" 〔結果まで {int((a['result_at'] - a['at']) / 1000)} 秒"
+            if a.get('elapsedMs') is not None: det += f"・実行 {int(a['elapsedMs'] / 1000)} 秒"
+            if d: det += f"・{d.get('path', '?')}{'+warm' if d.get('warm') else ''}" + (f"・省略 {'/'.join(d['skipped'])}" if d.get('skipped') else '') + (f"・やり直し前: {str(d['firstError'])[:40]}" if d.get('firstError') else '')
+            det += '〕'
+        print(f"  {jst(a['at']).strftime('%m/%d(%a) %H:%M')} {g}  {a['date']} {a['time']} {a['facility']} {iv}  {a['outcome'] or '-'} {a['reason']}{det}")
 PY

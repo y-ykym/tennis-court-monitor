@@ -10,7 +10,9 @@
 //     skipped     振り分けで見送り       { key, kind, reason }
 //     queued      予約の行列へ           { key, person }
 //     dry_run     予約するはずだった     { key, person }(dry-run か LINE で停止中)
-//     result      予約の実行の結果       { key, status, person, message }(success / taken / capped / conflict / skipped_* / error …)
+//     result      予約の実行の結果       { key, status, person, message, elapsedMs?, diag? }(success / taken / capped / conflict / skipped_* / error …)
+//                 diag(2026-10-25 から): { path: 'fast'|'ui', warm: 先に起こしたブラウザを使ったか, elapsedMs, topSkipped, skipped: ['ログイン画面','検索'],
+//                   selectedAtMs, confirmAtMs, firstError?: 高速経路が error でやり直したときの理由, firstMs? }
 //     poll_failed 空き照会の失敗         { consecutive, message }
 //   量の目安: 1 日 10〜60 行(照会の成功は記録しない)
 // ============================================================
