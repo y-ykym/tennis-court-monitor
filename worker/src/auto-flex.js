@@ -24,8 +24,9 @@
 //   │ 対象に追加した枠  この枠だけは必ず自動予約する   │  ← 2026-10-25 追加(10-15〜10-25 は日単位の「ペナルティ期間でも予約する日」だった)
 //   │  9/26(金) 13:00 亀戸中央公園 ⚠ペナルティ [解除] │  ← ペナルティ期間の枠には ⚠ を添える
 //   ├──────────────────────────────────┤
-//   │ ➕ 対象枠を追加(日時ピッカー。1 行まるごと)        │
-//   │ 📅 除外日を追加(日付ピッカー)   ↻ 更新    │
+//   │ ➕ 対象枠を追加(日時ピッカー)              │  ← フッターのボタンは 1 行に 1 つ(横に並べると文字が切れる)
+//   │ 📅 除外日を追加(日付ピッカー)              │
+//   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
 //
 //   「➕ 対象枠を追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園のボタンで確定する
@@ -224,19 +225,13 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
         contents: [
           { type: 'separator', color: COLOR_LINE },
           // 日時ピッカー(mode: datetime)。選ぶと params.datetime("YYYY-MM-DDThh:mm")が付いて返り、Worker が公園を選ぶカードを返す。
-          // 1 行に 3 つ並べると「除外日を…」「対象枠を…」と文字が切れる(2026-10-25 実機)ので、この行だけで 1 行
+          // ボタンは 1 行に 1 つずつ縦に並べる。横に 2 つ並べると iPhone で「除外日を…」と文字が切れる(2026-10-25 実機で確認)
           ...(addSlotData
             ? [{ type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '➕ 対象枠を追加', data: addSlotData, mode: 'datetime', initial: `${today}T09:00`, min: `${today}T00:00`, max: `${maxDate}T23:59` } }]
             : []),
-          {
-            type: 'box',
-            layout: 'horizontal',
-            contents: [
-              // 日付ピッカー(LINE の datetimepicker)。選ぶと postback に params.date が付いて返る
-              { type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '📅 除外日を追加', data: addData, mode: 'date', initial: today, min: today, max: maxDate } },
-              { type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '↻ 更新', text: COMMAND_TEXT } },
-            ],
-          },
+          // 日付ピッカー(LINE の datetimepicker)。選ぶと postback に params.date が付いて返る
+          { type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '📅 除外日を追加', data: addData, mode: 'date', initial: today, min: today, max: maxDate } },
+          { type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '↻ 更新', text: COMMAND_TEXT } },
         ],
       },
     },
