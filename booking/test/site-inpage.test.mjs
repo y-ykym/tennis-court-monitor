@@ -2,7 +2,7 @@
 // 本来はブラウザで動く自己完結の関数だが、fetch・TextDecoder・URLSearchParams は Node にもあるので、fetch を偽物に差し替えて Node で動かす
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { inPageFlow } from '../src/site-inpage.js';
+import { inPageFlow, prefetchInPage } from '../src/site-inpage.js';
 
 // Shift_JIS のバイト列を作る(偽サイトの応答用)。使う日本語は「空き」「予約あり」だけなので表で置き換える
 const SJIS = { 空: [0x8b, 0xf3], き: [0x82, 0xab], 予: [0x97, 0x5c], 約: [0x96, 0xf1], あ: [0x82, 0xa0], り: [0x82, 0xe8] };
@@ -113,4 +113,63 @@ test('予約一覧が本物の画面でなければ error(枠は選んだ後)', 
   assert.equal(r.status, 'error');
   assert.match(r.message, /予約一覧画面が想定外/);
   assert.equal(paths(calls).at(-1), 'rsvWGetCancelRsvDataAction');
+});
+
+const LOGIN_FIELDS = { loginJKey: 'JKEY-PRE', displayNo: 'pawab2100' };
+const SEARCH_PRE = { park: PARK.code, instCd: '10500030', facility: PARK.name, fields: { selectInstCd: '10500030', selectBldCd: PARK.code, displayNo: 'prwrc2000', daystart: '2026-10-25' }, date: '2026-10-25' };
+
+test('先取りしたログイン画面と同じ公園の検索があれば、どちらも飛ばしていきなりログイン → 週データ → 枠選択', async () => {
+  const calls = fakeFetch(defaultRespond());
+  const r = await inPageFlow({ slot, credentials: creds, withList: true, prefetched: { loginFields: LOGIN_FIELDS, loginRecaptcha: false, search: SEARCH_PRE } });
+  assert.equal(r.ok, true, r.message);
+  assert.deepEqual(paths(calls), ['rsvWUserAttestationLoginAction', 'rsvWOpeInstSrchVacantAjaxAction', 'rsvWOpeInstReservAjaxAction', 'rsvWGetCancelRsvDataAction']);
+  assert.equal(calls[0].form.loginJKey, 'JKEY-PRE', '先取りした鍵でログインを送る');
+  assert.equal(calls[2].form.instCd, '10500030', '先取りした施設コードで枠を選ぶ');
+  assert.equal(r.skippedLoginPage, true);
+  assert.equal(r.skippedSearch, true);
+  assert.equal(r.facility, PARK.name);
+  assert.equal(r.applyFields.daystart, '2026-11-05', '確認画面への POST の日付は枠の日付(先取りの日付ではない)');
+  assert.equal(r.applyFields.selectInstCd, '10500030');
+});
+
+test('先取りの検索が別の公園なら検索はやり直す(ログイン画面だけ飛ばす)', async () => {
+  const calls = fakeFetch(defaultRespond());
+  const r = await inPageFlow({ slot, credentials: creds, prefetched: { loginFields: LOGIN_FIELDS, search: { ...SEARCH_PRE, park: '1040' } } });
+  assert.equal(r.ok, true, r.message);
+  assert.deepEqual(paths(calls), ['rsvWUserAttestationLoginAction', 'rsvWOpeInstSrchVacantAction', 'rsvWOpeInstSrchVacantAjaxAction', 'rsvWOpeInstReservAjaxAction']);
+  assert.equal(r.skippedLoginPage, true);
+  assert.equal(r.skippedSearch, false);
+});
+
+test('先取りのログイン画面で reCAPTCHA が有効なら、従来どおり error で止まる', async () => {
+  fakeFetch(defaultRespond());
+  const r = await inPageFlow({ slot, credentials: creds, prefetched: { loginFields: LOGIN_FIELDS, loginRecaptcha: true } });
+  assert.equal(r.status, 'error');
+  assert.match(r.message, /reCAPTCHA/);
+});
+
+test('prefetchInPage: 検索 → ログイン画面 の順に取り、鍵と検索の値を返す', async () => {
+  const calls = fakeFetch(defaultRespond());
+  const r = await prefetchInPage({ park: PARK.code, date: '2026-10-25' });
+  assert.equal(r.ok, true, r.message);
+  assert.deepEqual(paths(calls), ['rsvWOpeInstSrchVacantAction', 'rsvWTransUserLoginAction']);
+  assert.equal(calls[0].form.selectAreaBcd, PARK.code);
+  assert.equal(calls[0].form.daystart, '2026-10-25');
+  assert.equal(r.loginFields.loginJKey, 'JKEY');
+  assert.equal(r.loginRecaptcha, false);
+  assert.deepEqual({ park: r.search.park, instCd: r.search.instCd, facility: r.search.facility }, { park: PARK.code, instCd: '10500030', facility: PARK.name });
+  assert.equal(r.search.fields.selectBldCd, PARK.code);
+});
+
+test('prefetchInPage: 公園が無ければログイン画面だけ。ログイン画面が想定外なら ok=false', async () => {
+  let calls = fakeFetch(defaultRespond());
+  let r = await prefetchInPage({ park: null, date: '2026-10-25' });
+  assert.equal(r.ok, true);
+  assert.equal(r.search, null);
+  assert.deepEqual(paths(calls), ['rsvWTransUserLoginAction']);
+  calls = fakeFetch(defaultRespond({ '/web/rsvWTransUserLoginAction.do': () => '<!-- pawfa1000.jsp --><html>error</html>' }));
+  r = await prefetchInPage({ park: PARK.code, date: '2026-10-25' });
+  assert.equal(r.ok, false);
+  assert.match(r.message, /ログイン画面が想定外/);
+  assert.ok(r.search, '検索の方は取れている');
 });

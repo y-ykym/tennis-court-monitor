@@ -1,9 +1,11 @@
 // ============================================================
 // 予約に使うブラウザを先に起こし、トップページまで開いて待たせておく(「枠が出てから予約を押すまで」の短縮。2026-10-25)
 //
-//   const warmer = createBrowserWarmer({ launch, topUrl, log, refreshMs, maxAgeMs, retryMs, now, timers })
+//   const warmer = createBrowserWarmer({ launch, topUrl, prefetch, log, refreshMs, maxAgeMs, retryMs, now, timers })
 //     launch     async () => bundle   reserve.js の launchBrowserForReserve(...) を呼ぶ関数。bundle = { page, context, setPhase, close, ... }
 //     topUrl     先に開いておくページ(都サイトのトップ)
+//     prefetch   async (bundle) => any  トップを開いた後に呼ぶ(省略可)。返り値を bundle.prefetched に入れる(ログイン画面と検索の先取り。
+//                src/site-inpage.js の prefetchInPage)。失敗(例外か { ok: false })なら bundle.prefetched = null のまま使う
 //     refreshMs  トップを読み直す間隔(既定 8 分。都サイトのセッションは放置 10 分で切れる。docs/site-notes.md)
 //     maxAgeMs   これより古いトップは「新しい」とみなさない(既定 9 分。reserve.js 側の判定と同じ)
 //     retryMs    起動や読み込みに失敗したあと次に試すまで(既定 1 分)
@@ -23,6 +25,7 @@
 export function createBrowserWarmer({
   launch,
   topUrl,
+  prefetch = null,
   log = () => {},
   refreshMs = 8 * 60 * 1000,
   maxAgeMs = 9 * 60 * 1000,
@@ -54,7 +57,18 @@ export function createBrowserWarmer({
     await b.page.goto(topUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (!(await b.page.$('[onclick*="gRsvWTransUserLoginAction"]'))) throw new Error('トップページにログインボタンがありません(メンテナンス中の可能性)');
     b.topLoadedAt = now();
+    b.prefetched = null;
+    if (prefetch) {
+      try {
+        const r = await prefetch(b);
+        if (r && r.ok !== false) b.prefetched = r;
+        else log(`先取りできませんでした(予約時に取り直します): ${(r && r.message) || '不明'}`);
+      } catch (e) {
+        log(`先取りに失敗(予約時に取り直します): ${e.message.split('\n')[0]}`);
+      }
+    }
   }
+  const prefetchSummary = (b) => (b.prefetched ? `、先取り: ログイン画面${b.prefetched.loginFields ? 'あり' : 'なし'}・検索${b.prefetched.search ? b.prefetched.search.park : 'なし'}` : '');
 
   async function discard(b, why) {
     if (!b) return;
@@ -84,7 +98,7 @@ export function createBrowserWarmer({
         bundle = b;
         state = 'ready';
         failures = 0;
-        log(`先に起こしました(${Math.round((now() - started) / 1000)} 秒。${launched} 回目)`);
+        log(`先に起こしました(${Math.round((now() - started) / 1000)} 秒。${launched} 回目${prefetchSummary(b)})`);
         schedule(refresh, refreshMs);
       } catch (e) {
         failures++;

@@ -362,15 +362,19 @@ export async function reserve(slot, credentials, options = {}) {
         throw new ReserveError('error', `トップページにログインボタンがありません (HTTP ${topRes?.status() ?? '?'}, ${await pageId(page)}: ${diag})`);
       }
       const vacant = slot.vacant == null || slot.vacant === '' ? null : Number(slot.vacant);
+      // 先に起こしてあるブラウザが取っておいたログイン画面・検索(トップが新しいときだけ。読み直したらセッションが変わるので使わない)
+      const prefetched = topFresh && warm?.prefetched ? warm.prefetched : null;
       const r = await page.evaluate(inPageFlow, {
         slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour), vacant: Number.isFinite(vacant) && vacant >= 1 ? vacant : null, tzoneNo: tz },
         credentials,
         withList: reservationList,
+        prefetched,
       });
       if (!r.ok) throw new ReserveError(r.status, r.message);
       loggedIn = true;
       facility = r.facility || slot.park;
-      log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面${r.skippedWeek ? '(照会の値。週データ省略)' : ''} (${Date.now() - started}ms)`);
+      const skipped = [r.skippedLoginPage && 'ログイン画面', r.skippedSearch && '検索', r.skippedWeek && '週データ'].filter(Boolean);
+      log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面${skipped.length ? `(先取りで省略: ${skipped.join('・')})` : ''} (${Date.now() - started}ms)`);
       if (r.listHtml) await inspectList(r.listHtml);
       setPhase('confirm'); // ここからはサイトの JS と reCAPTCHA が要る(CSS とバーコード用 JS は止めたまま)
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);

@@ -181,3 +181,31 @@ test('閉じた直後(次を起こす前)の acquire は、起こして待って
   await clock.advance(10_000);
   assert.equal(launched.length, 2, '予約してあった起こし直しは取り消されている');
 });
+
+test('prefetch を渡すとトップを開くたびに呼び、結果を bundle.prefetched に入れる。失敗しても束は使える', async () => {
+  const clock = fakeClock();
+  const { launch, launched } = fakeLaunch();
+  let n = 0;
+  const prefetch = async (b) => {
+    n++;
+    assert.equal(b.topLoadedAt, clock.now(), 'トップを開いた後に呼ばれる');
+    if (n === 2) throw new Error('fetch failed');
+    if (n === 3) return { ok: false, message: 'ログイン画面が想定外' };
+    return { ok: true, loginFields: { loginJKey: 'K' + n }, search: { park: '1040' } };
+  };
+  const logs = [];
+  const w = createBrowserWarmer({ launch, topUrl: TOP, prefetch, log: (m) => logs.push(m), now: clock.now, timers: clock.timers });
+  w.start();
+  await flush();
+  assert.equal(launched[0].prefetched.loginFields.loginJKey, 'K1');
+  assert.ok(logs.some((m) => /先取り: ログイン画面あり・検索1040/.test(m)));
+  await clock.advance(8 * 60 * 1000); // 読み直し → prefetch が例外
+  assert.equal(w.status().state, 'ready', '先取りの失敗では束を捨てない');
+  assert.equal(launched[0].prefetched, null);
+  await clock.advance(8 * 60 * 1000); // 読み直し → ok:false
+  assert.equal(launched[0].prefetched, null);
+  await clock.advance(8 * 60 * 1000); // 読み直し → 成功
+  assert.equal(launched[0].prefetched.loginFields.loginJKey, 'K4');
+  const b = await w.acquire();
+  assert.equal(b.prefetched.loginFields.loginJKey, 'K4');
+});
