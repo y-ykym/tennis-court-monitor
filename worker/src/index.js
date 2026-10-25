@@ -28,7 +28,7 @@
 //   フェーズ11(src/calendar-sync.js): 毎時 0 分の Cron で、A・B の予定(都の予約 + テニスベアの確定参加)を各自の Google カレンダーへ同期
 //                          (追加・更新・削除。目印の無い予定には触らない)。Pi からの POST /auto/calendar-sync(予約成立の直後)と、
 //                          キャンセル完了直後の 1 件削除(removeCalendarEvent)も。認証はサービスアカウント(src/gcal.js)
-//   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠、対象に追加した枠)。その「解除」「日を追加」「対象枠を追加」(postback 'x|…')。
+//   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠、対象に追加した枠)。その「解除」「＋ 追加」(除外日・対象枠)と、対象枠の時間帯・コートの切り替え・「決定」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
 //

@@ -154,7 +154,7 @@ function switchRow(title, view, { onText, offText, first = false }) {
   };
 }
 
-// 見出し(名前 + 薄い説明)。addAction を渡すと名前の右にスイッチと同じ濃紺の「＋ 追加」ボタン(日付/日時ピッカー)を置く
+// 見出し(名前 + 薄い説明)。addAction を渡すと名前の右にスイッチと同じ濃紺の「＋ 追加」ボタン(日付ピッカー)を置く
 const heading = (title, desc, addAction = null) => ({
   type: 'box',
   layout: 'vertical',
@@ -172,7 +172,7 @@ const fmtSlot = (s) => `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`;
 
 // model = { status, dates: [{ date, removeData }], slots: [{ date, start, facility, reason, removeData }],
 //           allowSlots: [{ date, start, facility, penalty, removeData }](対象に追加した枠。penalty = 利用日がペナルティ期間),
-//           addData(除外日の日付ピッカー), addSlotData(対象枠の日時ピッカー), today, maxDate, note }
+//           addData(除外日の日付ピッカー), addSlotData(対象枠の日付ピッカー → 時間帯とコートを選ぶカード), today, maxDate, note }
 export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], addData, addSlotData = null, today, maxDate, note = null }) {
   const body = [];
   if (note) {
