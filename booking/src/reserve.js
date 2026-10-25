@@ -130,14 +130,20 @@ export async function launchBrowserForReserve(options = {}, log = () => {}) {
   //   phase 'ui'      UI 操作の経路: 何も足さない(画面の見た目と JS をそのまま使う)
   // ※reCAPTCHA(google.com / gstatic.com)は止めない(画像選択のチャレンジが表示できなくなる)
   let phase = 'ui';
+  const blocked = { assets: 0, pageFiles: 0 }; // 止めた数(assets: 画像等、pageFiles: JS・CSS)。ログで効いているか確かめる用
   await context.route('**/*', (route) => {
     const type = route.request().resourceType();
     const url = route.request().url();
     if (url.includes('chatbot.metro.tokyo.lg.jp')) return route.abort();
     if (!url.startsWith(BASE_URL)) return route.continue();
-    if (['image', 'font', 'media'].includes(type)) return route.abort();
-    if (phase === 'top' && (type === 'script' || type === 'stylesheet')) return route.abort();
-    if (phase === 'confirm' && (type === 'stylesheet' || url.includes('jquery-barcode'))) return route.abort();
+    if (['image', 'font', 'media'].includes(type)) {
+      blocked.assets++;
+      return route.abort();
+    }
+    if ((phase === 'top' && (type === 'script' || type === 'stylesheet')) || (phase === 'confirm' && (type === 'stylesheet' || url.includes('jquery-barcode')))) {
+      blocked.pageFiles++;
+      return route.abort();
+    }
     return route.continue();
   });
   const page = context.pages()[0] || (await context.newPage());
@@ -146,6 +152,7 @@ export async function launchBrowserForReserve(options = {}, log = () => {}) {
     browser,
     context,
     page,
+    blocked,
     setPhase: (p) => {
       phase = p;
     },
@@ -343,6 +350,7 @@ export async function reserve(slot, credentials, options = {}) {
       // 先に起こしてあるブラウザでトップページが新しければ(都サイトのセッションは放置 10 分で切れる)読み込みを省く
       const topFresh = warm?.topLoadedAt && Date.now() - warm.topLoadedAt < 9 * 60 * 1000;
       const topRes = topFresh ? null : await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+      log(`トップページ${topFresh ? '(先に読み込み済み)' : ''} (${Date.now() - started}ms, 止めた読み込み JS/CSS ${bundle.blocked?.pageFiles ?? '-'} 件)`);
       if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
         // 何を受け取ったかを残す(サイトの 502・メンテナンス・IP による応答差の切り分け用)
         const diag = await page
@@ -364,7 +372,7 @@ export async function reserve(slot, credentials, options = {}) {
       if (r.listHtml) await inspectList(r.listHtml);
       setPhase('confirm'); // ここからはサイトの JS と reCAPTCHA が要る(CSS とバーコード用 JS は止めたまま)
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
-      log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms)`);
+      log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms, 止めた読み込み JS/CSS 計 ${bundle.blocked?.pageFiles ?? '-'} 件)`);
     } else {
       // 1. トップ → ログイン画面
       const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
