@@ -49,6 +49,16 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
   → **週 JSON の省略は見送り**(先に取られていた回に「予約」まで押しに行くことになるため)。実装(`slot.vacant`)は残すが server.mjs は渡さない
 - 確認画面からは `POST /web/rsvWOpeReservedApplyBackAction.do`(確認画面の hidden 一式)で週表示画面に戻れる(サイトの「キャンセル」と同じ)
 - ログアウトの `waitForNavigation`(load 待ち)は毎回 15 秒で時間切れになっていた(応答自体は 4.7 秒)。応答待ちに変更
+- **ブラウザでのページ読み込みの内訳(2026-10-25 19:45、Pi、画像・フォント・チャットボットは遮断済み)**:
+  - トップ `index.jsp`: 文書 5.4 秒のあと CSS 3 本 + JS 12 本(1 本 4.7〜17 秒。同じホストへは同時 6 本までなので後ろの JS が待たされる)で
+    **DOMContentLoaded 22.5 秒**。JS・CSS を止めると **4.0 秒**。高速経路は fetch と form しか使わないので止めてよい
+    (ログインボタンの判定 `[onclick*="gRsvWTransUserLoginAction"]` と `document.form1` は HTML だけで足りる)
+  - 確認画面 `prwea1000`: 文書 5.0 秒のあと CSS 3 本(4.3〜5 秒)+ JS 9 本(jquery 4.5、jquery-barcode 4.3、paw_bsui 4.6、
+    paw_errormsg/paw_doaction/paw_common/paw_l100/prwea1000 7.7〜8.0、Google の recaptcha api.js 0.4)で **DOMContentLoaded 12.8 秒**、
+    さらに gstatic の recaptcha__ja.js(4.3 秒)が済んで `grecaptcha.execute` が使えるまで +4.3 秒。
+    `checkTextValue`(予約ボタン)・`showConfirm`・`jQuery` はサイトの JS が要る。CSS 3 本と jquery-barcode を止めれば同時接続が空き約 3 秒の短縮見込み
+  - 反映: `reserve.js` の `launchBrowserForReserve` が phase('top' / 'confirm' / 'ui')で止めるものを切り替える。
+    ブラウザを先に起こしてトップまで開いておく `src/browser-warmer.js`(8 分おきに読み直し)も同日に追加
 - 反映: 予約一覧は枠選択の後に取る(先に取られていた回は取らない)。ログアウトは応答待ちだけ(3〜4 秒)。週 JSON は従来どおり取る
 
 ---

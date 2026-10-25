@@ -21,6 +21,9 @@
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //     reservationList: false, (フェーズ3)ログイン直後にその人の予約一覧(prwha1000)を取り、結果に reservationsBefore として付ける
+//     warm: null,            launchBrowserForReserve() で先に起こしてあるブラウザ { browser, context, page, setPhase, close, topLoadedAt }。
+//                            渡すと起動を省き、fastInPage で topLoadedAt が新しければトップページの読み込みも省く(src/browser-warmer.js。2026-10-25)。
+//                            渡したブラウザはこの関数が閉じる
 //     beforeApply: null,     (フェーズ3)予約一覧を見た直後に呼ぶ ({ reservations }) → null なら続行、{ status, message } を返すと
 //                            そこで中止し、その status の結果を返す(利用日ごとの 2 件上限の判定に使う。予約は送らない)
 //   }
@@ -76,6 +79,81 @@ export class ReserveError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+// ブラウザを起動し、予約に使うコンテキストとページを用意する。reserve() の中と、先に起こしておく src/browser-warmer.js の両方から使う。
+// 返り値 { browser, context, page, setPhase, close }
+//   setPhase('top' | 'confirm' | 'ui'): 読み込みを止めるものを切り替える(下の route を参照)
+export async function launchBrowserForReserve(options = {}, log = () => {}) {
+  const { headless = true } = options;
+  // ブラウザ本体: BROWSER_CHANNEL=chrome なら Google Chrome 安定版(reCAPTCHA の判定が素の Chromium より穏やかになる見込み)。
+  // 入っていない環境では Playwright 同梱の Chromium に戻す
+  const channel = options.channel ?? process.env.BROWSER_CHANNEL ?? undefined;
+  // 起動オプションは環境変数でも足せる(運用側の判断で設定する。値はここでは決めない):
+  //   CHROME_ARGS         追加の起動引数(空白区切り)
+  //   IGNORE_DEFAULT_ARGS Playwright 既定の起動引数から外すもの(空白区切り)
+  const envArgs = (process.env.CHROME_ARGS || '').split(/\s+/).filter(Boolean);
+  const ignoreDefaultArgs = (process.env.IGNORE_DEFAULT_ARGS || '').split(/\s+/).filter(Boolean);
+  const launchBase = { headless, args: ['--lang=ja-JP', ...envArgs, ...(options.launchArgs || [])] };
+  if (ignoreDefaultArgs.length) launchBase.ignoreDefaultArgs = ignoreDefaultArgs;
+  const contextBase = {
+    // viewport: null を渡すとウィンドウサイズに従う(noVNC で画面ごと配信するとき用)
+    viewport: 'viewport' in options ? options.viewport : { width: 1000, height: 900 },
+    locale: 'ja-JP',
+    timezoneId: 'Asia/Tokyo',
+  };
+  // userDataDir を渡すとプロファイル(Cookie 等)を持ち越す永続コンテキストで起動する(src/profile-store.js で保存・復元)
+  const launchWith = async (ch) => {
+    if (options.userDataDir) {
+      const ctx = await chromium.launchPersistentContext(options.userDataDir, { ...launchBase, ...contextBase, channel: ch || undefined });
+      return { browser: ctx.browser(), context: ctx };
+    }
+    const br = await chromium.launch({ ...launchBase, channel: ch || undefined });
+    return { browser: br, context: await br.newContext(contextBase) };
+  };
+  let browser;
+  let context;
+  try {
+    ({ browser, context } = await launchWith(channel));
+  } catch (e) {
+    if (!channel) throw e;
+    log(`${channel} を起動できないため同梱の Chromium を使います: ${e.message.split('\n')[0]}`);
+    ({ browser, context } = await launchWith(undefined));
+  }
+  log(`ブラウザ: ${browser?.version?.() ?? '(persistent)'}${channel ? ` (channel=${channel})` : ''}${options.userDataDir ? ' プロファイル持ち越し' : ''}${envArgs.length || ignoreDefaultArgs.length ? ' 起動オプション指定あり' : ''}`);
+  // 読み込まないもの。サイトの静的ファイル配信が遅い(1 ファイル 4〜8 秒。同じホストへは同時 6 本まで)ため、予約に不要なものは読まない。
+  //   常に           画像・フォント・メディア・都のチャットボット
+  //   phase 'top'     高速経路のトップページ: サイトの JS・CSS も止める。fetch と form しか使わないので不要
+  //                  (2026-10-25 実測: 22.5 秒 → 4.0 秒。ログインボタンの有無の判定と form1 は HTML だけで足りる)
+  //   phase 'confirm' 高速経路の確認画面以降: CSS 3 本と jquery-barcode(利用者カードのバーコード用)を止める。
+  //                  サイトの JS(予約ボタン・確認ダイアログ)と Google の reCAPTCHA は読む(同時接続の空きができ 12.8 秒 → 約 9.5 秒の見込み)
+  //   phase 'ui'      UI 操作の経路: 何も足さない(画面の見た目と JS をそのまま使う)
+  // ※reCAPTCHA(google.com / gstatic.com)は止めない(画像選択のチャレンジが表示できなくなる)
+  let phase = 'ui';
+  await context.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    const url = route.request().url();
+    if (url.includes('chatbot.metro.tokyo.lg.jp')) return route.abort();
+    if (!url.startsWith(BASE_URL)) return route.continue();
+    if (['image', 'font', 'media'].includes(type)) return route.abort();
+    if (phase === 'top' && (type === 'script' || type === 'stylesheet')) return route.abort();
+    if (phase === 'confirm' && (type === 'stylesheet' || url.includes('jquery-barcode'))) return route.abort();
+    return route.continue();
+  });
+  const page = context.pages()[0] || (await context.newPage());
+  page.setDefaultTimeout(STEP_TIMEOUT);
+  return {
+    browser,
+    context,
+    page,
+    setPhase: (p) => {
+      phase = p;
+    },
+    close: async () => {
+      await context.close().catch(() => {});
+      await browser?.close?.().catch(() => {});
+    },
+  };
 }
 
 // 画面種別(<!-- xxx.jsp --> コメント)
@@ -196,53 +274,12 @@ export async function reserve(slot, credentials, options = {}) {
   const cellId = `${ymd}_${tz}`;
   const people = String(slot.people || 2);
 
-  // ブラウザ本体: BROWSER_CHANNEL=chrome なら Google Chrome 安定版(reCAPTCHA の判定が素の Chromium より穏やかになる見込み)。
-  // 入っていない環境では Playwright 同梱の Chromium に戻す
-  const channel = options.channel ?? process.env.BROWSER_CHANNEL ?? undefined;
-  // 起動オプションは環境変数でも足せる(運用側の判断で設定する。値はここでは決めない):
-  //   CHROME_ARGS         追加の起動引数(空白区切り)
-  //   IGNORE_DEFAULT_ARGS Playwright 既定の起動引数から外すもの(空白区切り)
-  const envArgs = (process.env.CHROME_ARGS || '').split(/\s+/).filter(Boolean);
-  const ignoreDefaultArgs = (process.env.IGNORE_DEFAULT_ARGS || '').split(/\s+/).filter(Boolean);
-  const launchBase = { headless, args: ['--lang=ja-JP', ...envArgs, ...(options.launchArgs || [])] };
-  if (ignoreDefaultArgs.length) launchBase.ignoreDefaultArgs = ignoreDefaultArgs;
-  const contextBase = {
-    // viewport: null を渡すとウィンドウサイズに従う(noVNC で画面ごと配信するとき用)
-    viewport: 'viewport' in options ? options.viewport : { width: 1000, height: 900 },
-    locale: 'ja-JP',
-    timezoneId: 'Asia/Tokyo',
-  };
-  // userDataDir を渡すとプロファイル(Cookie 等)を持ち越す永続コンテキストで起動する(src/profile-store.js で保存・復元)
-  const launchWith = async (ch) => {
-    if (options.userDataDir) {
-      const ctx = await chromium.launchPersistentContext(options.userDataDir, { ...launchBase, ...contextBase, channel: ch || undefined });
-      return { browser: ctx.browser(), context: ctx };
-    }
-    const br = await chromium.launch({ ...launchBase, channel: ch || undefined });
-    return { browser: br, context: await br.newContext(contextBase) };
-  };
-  let browser;
-  let context;
-  try {
-    ({ browser, context } = await launchWith(channel));
-  } catch (e) {
-    if (!channel) throw e;
-    log(`${channel} を起動できないため同梱の Chromium を使います: ${e.message.split('\n')[0]}`);
-    ({ browser, context } = await launchWith(undefined));
-  }
-  log(`ブラウザ: ${browser?.version?.() ?? '(persistent)'}${channel ? ` (channel=${channel})` : ''}${options.userDataDir ? ' プロファイル持ち越し' : ''}${envArgs.length || ignoreDefaultArgs.length ? ' 起動オプション指定あり' : ''}`);
-  // サイトの静的ファイル配信が遅い(1ファイル3〜7秒)ため、予約に不要な画像・フォント・都のチャットボットは読み込まない。
-  // サイト本体の JS と Google の reCAPTCHA はそのまま通す
-  // ※reCAPTCHA(google.com / gstatic.com)の画像・フォントは止めない(画像選択のチャレンジが表示できなくなる)
-  await context.route('**/*', (route) => {
-    const type = route.request().resourceType();
-    const url = route.request().url();
-    if (url.includes('chatbot.metro.tokyo.lg.jp')) return route.abort();
-    const siteAsset = url.startsWith(BASE_URL) && ['image', 'font', 'media'].includes(type);
-    return siteAsset ? route.abort() : route.continue();
-  });
-  const page = context.pages()[0] || (await context.newPage());
-  page.setDefaultTimeout(STEP_TIMEOUT);
+  // ブラウザ: 先に起こしてあるもの(options.warm)があればそれを使い、無ければここで起動する
+  const warm = options.warm && options.warm.page && !options.warm.page.isClosed() ? options.warm : null;
+  const bundle = warm || (await launchBrowserForReserve(options, log));
+  const { browser, context, page, setPhase } = bundle;
+  if (warm) log(`ブラウザ: 先に起こしてあったものを使用(トップページ ${warm.topLoadedAt ? `${Math.round((Date.now() - warm.topLoadedAt) / 1000)} 秒前に読み込み済み` : '未読み込み'})`);
+  setPhase(fastInPage ? 'top' : 'ui');
 
   // 人間らしい操作(reCAPTCHA v3 のスコア対策)。実際にマウスを動かして押し、入力に間を置くだけで、
   // ブラウザの正体やトークンの偽装はしない(検出回避ではなく、実際に自然に操作する)。
@@ -302,8 +339,10 @@ export async function reserve(slot, credentials, options = {}) {
   };
   try {
     if (fastInPage) {
-      // 高速経路(ブラウザ内版): トップページを開き、その中で fetch によりログイン〜枠選択 → 確認画面へ POST
-      const topRes = await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
+      // 高速経路(ブラウザ内版): トップページを開き、その中で fetch によりログイン〜枠選択 → 確認画面へ POST。
+      // 先に起こしてあるブラウザでトップページが新しければ(都サイトのセッションは放置 10 分で切れる)読み込みを省く
+      const topFresh = warm?.topLoadedAt && Date.now() - warm.topLoadedAt < 9 * 60 * 1000;
+      const topRes = topFresh ? null : await page.goto(`${BASE_URL}/web/index.jsp`, { waitUntil: 'domcontentloaded' });
       if (!(await page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
         // 何を受け取ったかを残す(サイトの 502・メンテナンス・IP による応答差の切り分け用)
         const diag = await page
@@ -323,6 +362,7 @@ export async function reserve(slot, credentials, options = {}) {
       facility = r.facility || slot.park;
       log(`高速経路(ブラウザ内): 枠選択まで完了 空き${r.vacant}面${r.skippedWeek ? '(照会の値。週データ省略)' : ''} (${Date.now() - started}ms)`);
       if (r.listHtml) await inspectList(r.listHtml);
+      setPhase('confirm'); // ここからはサイトの JS と reCAPTCHA が要る(CSS とバーコード用 JS は止めたまま)
       await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.evaluate(submitApplyForm, r.applyFields)]);
       log(`高速経路(ブラウザ内): 予約内容確認画面へ POST (${Date.now() - started}ms)`);
     } else {
@@ -572,8 +612,7 @@ export async function reserve(slot, credentials, options = {}) {
         log(`ログアウト失敗(無視): ${e.message.split('\n')[0]}`);
       }
     }
-    await context.close().catch(() => {});
-    await browser?.close?.().catch(() => {});
+    await bundle.close();
   }
 }
 

@@ -24,6 +24,7 @@
 //   DISPLAY, SCREEN_W, SCREEN_H, PORT
 //   PROFILE_LOCAL=1         ブラウザプロファイル(Cookie 等)を docker volume に持ち越す
 //   FAST_PATH=0             高速経路(ページ内 fetch でログイン〜枠選択)を使わず UI 操作で進める(既定は高速経路)
+//   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
 //   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)。WORKER_URL は自動予約の合図の宛先にも使う
@@ -46,7 +47,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, createWebSocketStream } from 'ws';
 import { createRequire } from 'node:module';
-import { reserve } from '../src/reserve.js';
+import { reserve, launchBrowserForReserve } from '../src/reserve.js';
+import { createBrowserWarmer } from '../src/browser-warmer.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 import { createLineQueue } from '../src/line-queue.js';
 import { verify, sign, slotExpiry } from '../src/token.js';
@@ -80,6 +82,8 @@ const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 116
 // ブラウザプロファイル(Cookie 等)の置き場所。PROFILE_LOCAL=1 のとき docker volume として持ち越す
 const PROFILE_DIR = '/tmp/profile';
 const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';
+// ブラウザを先に起こしておく(起動 + トップページの読み込み 約 5〜7 秒を予約の前に済ませる。8 分おきにトップを読み直してセッションを保つ)
+const BROWSER_WARM = process.env.BROWSER_WARM !== '0';
 // 結果を LINE に push する(両方あるとき)
 const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
 // LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
@@ -134,6 +138,29 @@ function newSession(token, payload, kind) {
   return s;
 }
 
+// ブラウザの起動オプション(予約の実行と、先に起こしておく warmer で同じものを使う)
+function launchOptions() {
+  const o = { headless: false, launchArgs: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'], viewport: null };
+  if (PROFILE_LOCAL) o.userDataDir = PROFILE_DIR; // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
+  return o;
+}
+const warmer = BROWSER_WARM
+  ? createBrowserWarmer({
+      launch: () => launchBrowserForReserve(launchOptions(), (m) => log(`  [warm] ${m}`)),
+      topUrl: 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp',
+      log: (m) => log(`[warm] ${m}`),
+    })
+  : null;
+async function acquireWarmBrowser() {
+  if (!warmer) return null;
+  try {
+    return await warmer.acquire();
+  } catch (e) {
+    log(`  [warm] 先に起こしたブラウザを受け取れませんでした(普通に起動します): ${e.message.split('\n')[0]}`);
+    return null;
+  }
+}
+
 // 予約フロー本体(行列の中で呼ばれる)。extra は reserve() への追加オプション(自動予約の reservationList / beforeApply)
 async function runReserve(s, extra = {}) {
   const { token, payload } = s;
@@ -180,9 +207,7 @@ async function runReserve(s, extra = {}) {
   log(`予約フロー開始${s.kind === 'auto' ? '(自動予約)' : ''}: ${slotText(payload)} 予約者=${creds.label}`);
   const credentials = { userId: creds.userId, password: creds.password };
   const browserOptions = {
-    headless: false,
-    launchArgs: [`--window-size=${SCREEN_W},${SCREEN_H}`, '--window-position=0,0'],
-    viewport: null,
+    ...launchOptions(),
     onChallenge: handoff,
     debugDir: '/tmp/debug-out',
     log: (m) => log(`  ${m}`),
@@ -190,17 +215,17 @@ async function runReserve(s, extra = {}) {
   };
   let result;
   try {
-    // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
-    if (PROFILE_LOCAL) browserOptions.userDataDir = PROFILE_DIR;
     // まず高速経路(ブラウザ内 fetch でログイン〜枠選択)。一時エラーなら全ブラウザ方式(UI 操作)で1回やり直す。
     // 環境変数 FAST_PATH=0 で高速経路を使わず、最初から UI 操作(人間らしい操作)で進める(reCAPTCHA の重さの比較用)
+    // ブラウザは先に起こしてあるもの(warmer)があればそれを使う。やり直しのときも warmer に頼む
+    // (同じプロファイルで 2 つ目を起こすと「使用中」で失敗するため、warmer を通して 1 つずつにする)
     const useFast = process.env.FAST_PATH !== '0';
     s.message = useFast ? 'ログインして枠を選んでいます(高速経路)…' : 'ブラウザでログインして枠を選んでいます…';
-    result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast });
+    result = await reserve(slot, credentials, { ...browserOptions, fastInPage: useFast, warm: await acquireWarmBrowser() });
     if (useFast && result.status === 'error') {
       log(`  高速経路の結果が error のためブラウザ方式でやり直し: ${result.message}`);
       s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
-      result = await reserve(slot, credentials, browserOptions);
+      result = await reserve(slot, credentials, { ...browserOptions, warm: await acquireWarmBrowser() });
     }
   } catch (e) {
     result = { status: 'error', message: e.message };
@@ -508,6 +533,10 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
+if (warmer) {
+  warmer.start();
+  log('[warm] ブラウザを先に起こしておきます(BROWSER_WARM=0 でやめられる)');
+}
 server.listen(PORT, () => {
   log(`予約支援サーバー起動 port=${PORT} display=${process.env.DISPLAY || '(なし)'} 署名鍵=${SECRET ? 'あり' : 'なし!'} VNCパスワード=${VNC_PASSWORD ? 'あり' : 'なし!'} 自動予約=${AUTO_MODE}`);
 });
