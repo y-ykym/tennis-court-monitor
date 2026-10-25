@@ -467,7 +467,7 @@ export function createAutoRunner({
       }
       // ペナルティ期間の枠(「せってい」で対象に追加した枠)の成功カードには、取消にペナルティが付く旨を添える(2026-10-15。10-25 に枠単位へ)
       const penalty = isPenaltyPeriod(c.date, today);
-      await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData, penalty }), '自動予約の結果カード');
+      await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData, penalty }), '自動予約の成立カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result, facility: result.facility || parkOf(c.park)?.name || c.facility }, creds.label, { auto: true }), '自動予約の結果カード');
     } else if (result.status === 'taken' || result.status === 'duplicate' || result.status === 'error') {
