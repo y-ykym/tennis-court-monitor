@@ -3,6 +3,7 @@
 //
 //   known     : 前回の照会で見えていた監視対象の枠キー(差分 = 「新しく出た空き」の検出用)
 //   attempted : 枠キー → { status, at }。同じ枠を二重に試さない(queued/running/success は再投入しない)
+//               queued/running は起動時に消す(行列はメモリ上なので再起動で消えている。残すと同じ枠が空いても二度と試さない。2026-10-25)
 //   seen      : 枠キー → { at, facility, date, time, baseline }。いま見えている枠が初めて見えた時刻(消えたときの記録用。2026-10-11)
 //   own       : 自分(この Pi)が自動予約した枠 [{ key, person, id, date, start, end, park, facility, at }]。
 //               次に予約一覧を見たときに消えていたら「サイトで手放した」とみなして除外枠に登録する
@@ -32,6 +33,10 @@ export function createAutoState({ file, now = Date.now, staleMs = DEFAULT_STALE_
     data.known = [];
     data.seen = {};
   }
+  // 前回のプロセスで「待ち行列」「実行中」だった試行は、再起動した時点で存在しない(行列はメモリ上)。
+  // そのまま残すと NO_RETRY_STATUSES(auto-runner.js)に当たり、同じ枠が空いていても二度と試さない
+  // (2026-10-25: 予約の実行中に Pi へ反映 → running のまま残り、10/26 17:00 大島小松川を見送り続けた)
+  for (const [k, v] of Object.entries(data.attempted)) if (v?.status === 'queued' || v?.status === 'running') delete data.attempted[k];
   let baselineDone = loadedFresh;
 
   function save() {

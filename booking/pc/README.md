@@ -208,6 +208,9 @@ docker compose ps                                                      # 3 サ�
 - **電源を切るときの注意**: `sudo shutdown -h now` → 緑の ACT ランプが消えてから電源を抜く。
   作業は**毎時 00 分の直後**に始める(Worker の生存確認がその時刻。10 分を超えると LINE に ⚠️ が出る)
 - **更新**: `cd ~/tennis-court-monitor/booking/pc && git pull && docker compose up -d --build`
+  予約の実行中(Chromium が開いている最中)に作り直すと、プロファイルに Chromium の「使用中」の印(SingletonLock)が残って以後ブラウザが起動できなくなるが、
+  起動スクリプト(docker-entrypoint.sh)が始める前に消すので手当は不要(2026-10-25 15:56 の反映で発生し、同日に組み込み)。
+  中断された予約は状態ファイルで「実行中」のまま残らない(起動時に消して、同じ枠が空いていればまた試す)
 - **照会間隔の調整の材料**: `./auto-stats.sh 30 --list`(直近 30 日。枠がいつ出て・何分で消えて・取れたか/先を越されたかを時台別・間隔別に集計。記録は `/var/lib/booking/auto-events.jsonl`、中身の説明は `booking/src/auto-events.js`。2026-10-11〜)
 - **OS の更新(方針 2026-09-13。予約中断のリスクは受け入れる判断)**: **毎朝 4:00(±10 分)に OS・カーネル・Docker をすべて自動更新**し、
   再起動が必要なら **4:30 に自動再起動**する(`unattended-upgrades`。設定は `apt/` と `systemd/apt-daily-upgrade-override.conf`、pi-init.sh §7 が置く)。

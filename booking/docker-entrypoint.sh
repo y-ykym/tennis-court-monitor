@@ -17,6 +17,12 @@ fi
 # (2026-09-19 のケース組み込みで発生)。このコンテナの Xvfb は常に1つなので、始める前に必ず消す
 rm -f "/tmp/.X${DISPLAY#:}-lock" "/tmp/.X11-unix/X${DISPLAY#:}"
 
+# 同じく、予約の実行中(Chromium が開いている最中)にコンテナを作り直すと、プロファイル(volume /tmp/profile)に
+# Chromium の「使用中」の印(SingletonLock など。中身は 旧コンテナ名-PID)が残る。新しいコンテナはそれを
+# 「別のパソコンが使っている」と見て起動を拒否し、自動予約・よやく・取消が全部失敗し続ける(2026-10-25 15:56 の反映で発生)。
+# このコンテナで Chromium を使うのは常に 1 つ(予約の行列は直列)なので、始める前に必ず消す
+rm -f /tmp/profile/SingletonLock /tmp/profile/SingletonCookie /tmp/profile/SingletonSocket
+
 Xvfb "$DISPLAY" -screen 0 "${SCREEN_W}x${SCREEN_H}x24" -nolisten tcp -ac +extension RANDR >/tmp/xvfb.log 2>&1 &
 # ディスプレイが上がるのを待つ
 for i in $(seq 1 50); do xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; sleep 0.1; done

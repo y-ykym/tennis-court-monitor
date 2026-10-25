@@ -14,6 +14,7 @@ test('初回起動: 状態ファイルが無ければ既知の枠を取り直す
   assert.equal(s1.needsBaseline(), true);
   s1.setKnown(['1040|2026-09-25|19:00']);
   s1.markAttempt('k1', 'queued');
+  s1.markAttempt('k3', 'taken');
   s1.addOwn({ key: 'k2', person: 'A', date: '2026-09-27' });
   s1.save();
   assert.equal(s1.needsBaseline(), false);
@@ -22,14 +23,15 @@ test('初回起動: 状態ファイルが無ければ既知の枠を取り直す
   const s2 = createAutoState({ file, now: () => t });
   assert.equal(s2.needsBaseline(), false, '新しい状態なら既知を引き継ぐ');
   assert.deepEqual([...s2.knownKeys()], ['1040|2026-09-25|19:00']);
-  assert.equal(s2.attemptStatus('k1'), 'queued');
+  assert.equal(s2.attemptStatus('k1'), null, 'queued/running は再起動で消える(行列はメモリ上)');
+  assert.equal(s2.attemptStatus('k3'), 'taken', '結果の付いた試行記録は引き継ぐ');
   assert.equal(s2.own().length, 1);
 
   t += 11 * 60_000; // 11 分止まっていた
   const s3 = createAutoState({ file, now: () => t });
   assert.equal(s3.needsBaseline(), true, '古い状態なら暴走防止のため既知を取り直す');
   assert.equal(s3.knownKeys().size, 0);
-  assert.equal(s3.attemptStatus('k1'), 'queued', '試行記録と自分の予約は引き継ぐ');
+  assert.equal(s3.attemptStatus('k3'), 'taken', '結果の付いた試行記録と自分の予約は引き継ぐ');
 });
 
 test('prune: 2 日より古い試行記録と過ぎた自分の予約を落とす。壊れたファイルはまっさら', () => {
@@ -48,4 +50,24 @@ test('prune: 2 日より古い試行記録と過ぎた自分の予約を落と�
   fs.writeFileSync(file, '{broken');
   const b = createAutoState({ file, now: () => t });
   assert.equal(b.needsBaseline(), true);
+});
+
+test('再起動: queued/running の試行は消し、success/taken などの結果は残す(実行中に作り直すと running が永久に残り二度と試さない件。2026-10-25)', () => {
+  const file = tmp();
+  let t = 1_000_000;
+  const s1 = createAutoState({ file, now: () => t });
+  s1.markAttempt('a', 'queued');
+  s1.markAttempt('b', 'running');
+  s1.markAttempt('c', 'success');
+  s1.markAttempt('d', 'taken');
+  s1.markAttempt('e', 'error');
+  s1.save();
+
+  t += 60_000;
+  const s2 = createAutoState({ file, now: () => t });
+  assert.equal(s2.attemptStatus('a'), null);
+  assert.equal(s2.attemptStatus('b'), null);
+  assert.equal(s2.attemptStatus('c'), 'success');
+  assert.equal(s2.attemptStatus('d'), 'taken');
+  assert.equal(s2.attemptStatus('e'), 'error');
 });
