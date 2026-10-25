@@ -31,7 +31,7 @@
 //   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
 //
-//   「対象に追加した枠」の「＋ 追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園のボタンで確定する
+//   「対象に追加した枠」の「＋ 追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園を複数選んで「決定」で確定する
 // ============================================================
 
 const COMMAND_TEXT = 'せってい';
@@ -255,27 +255,53 @@ export function autoSettingsText({ status, dates, slots, allowSlots = [], today 
   return lines.join('\n');
 }
 
-// ---- 「➕ 対象枠を追加」で日時を選んだあとの、公園を選ぶカード(2026-10-25) ----
-// model = { date, start, end, penalty, parks: [{ park, name, data }] }。公園のボタンは postback(x|t|…)。押すと対象枠に入り、設定カードが返る
-export function buildParkPickFlex({ date, start, end, penalty, parks }) {
+// ---- 「対象に追加した枠」の「＋ 追加」で日時を選んだあとの、公園を選ぶカード(複数選択。2026-10-25) ----
+// model = { date, start, end, penalty, parks: [{ park, name, selected, data }], confirmData | null }
+//   公園の行は押すたびに選択が切り替わる(postback x|t|…。Worker がこのカードを選択を変えて返す。チャットには何も残さない)。
+//   選んだ行は濃紺に「✓」、選んでいない行は薄い枠。下の「決定」(postback x|c|…)で選んだ公園ぶんの枠をまとめて対象に入れる
+export function buildParkPickFlex({ date, start, end, penalty, parks, confirmData = null }) {
   const when = `${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`;
+  const n = parks.filter((p) => p.selected).length;
   const body = [
     text(when, { size: 'lg', weight: 'bold', color: COLOR_TEXT, wrap: true }),
-    text('どのコートを対象にしますか？', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'sm' }),
+    text('コートを選んで「決定」を押してください(複数可。もう一度押すと外れます)', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'sm' }),
   ];
   if (penalty) body.push(text('⚠ ペナルティ期間の枠です。取れたあとで取り消すとペナルティ 1 点が付きます', { size: 'xs', color: '#8A4B00', wrap: true, margin: 'md' }));
   for (const p of parks) {
     body.push({
       type: 'box',
-      layout: 'vertical',
+      layout: 'horizontal',
       margin: 'md',
-      backgroundColor: COLOR_HEADER_BG,
+      alignItems: 'center',
+      backgroundColor: p.selected ? COLOR_HEADER_BG : '#FFFFFF',
+      borderColor: p.selected ? COLOR_HEADER_BG : COLOR_LINE,
+      borderWidth: '1px',
       cornerRadius: 'xl',
       paddingTop: '10px',
       paddingBottom: '10px',
-      action: { type: 'postback', label: p.name, data: p.data, displayText: `${when} ${p.name} を対象に追加` },
-      contents: [text(p.name, { size: 'sm', weight: 'bold', color: '#FFFFFF', align: 'center' })],
+      paddingStart: '16px',
+      paddingEnd: '16px',
+      action: { type: 'postback', label: p.name, data: p.data },
+      contents: [
+        text(p.selected ? '✓' : '　', { size: 'sm', weight: 'bold', color: '#FFFFFF', flex: 0 }),
+        text(p.name, { size: 'sm', weight: 'bold', color: p.selected ? '#FFFFFF' : COLOR_TEXT, flex: 1, margin: 'md' }),
+      ],
     });
+  }
+  if (confirmData) {
+    body.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'xl',
+      backgroundColor: COLOR_OK,
+      cornerRadius: 'xl',
+      paddingTop: '12px',
+      paddingBottom: '12px',
+      action: { type: 'postback', label: '決定', data: confirmData, displayText: `${when} ${parks.filter((p) => p.selected).map((p) => p.name).join('・')} を対象に追加` },
+      contents: [text(`決定(${n} コート)`, { size: 'md', weight: 'bold', color: '#FFFFFF', align: 'center' })],
+    });
+  } else {
+    body.push(text('コートを 1 つ以上選ぶと「決定」が出ます', { size: 'xs', color: COLOR_MUTED, wrap: true, margin: 'xl', align: 'center' }));
   }
   body.push(text('やめるときは何も押さずにそのままで大丈夫です(ボタンは 1 時間で時間切れ)', { size: 'xs', color: COLOR_MUTED, wrap: true, margin: 'lg' }));
   return {
@@ -290,5 +316,12 @@ export function buildParkPickFlex({ date, start, end, penalty, parks }) {
   };
 }
 export function parkPickText({ date, start, end, penalty, parks }) {
-  return [`➕ 対象枠を追加: ${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`, `どのコートにしますか？(${parks.map((p) => p.name).join(' / ')})`, ...(penalty ? ['⚠ ペナルティ期間の枠です'] : []), 'このカードのボタンが使えないときは「せってい」からやり直してください'].join('\n');
+  const sel = parks.filter((p) => p.selected).map((p) => p.name);
+  return [
+    `➕ 対象枠を追加: ${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`,
+    `コートを選んで「決定」(複数可): ${parks.map((p) => `${p.selected ? '✓' : '・'}${p.name}`).join(' ')}`,
+    `いま選んでいる: ${sel.length ? sel.join('・') : 'なし'}`,
+    ...(penalty ? ['⚠ ペナルティ期間の枠です'] : []),
+    'このカードのボタンが使えないときは「せってい」からやり直してください',
+  ].join('\n');
 }
