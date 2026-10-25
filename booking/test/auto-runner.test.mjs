@@ -860,15 +860,17 @@ test('記録(auto-events): 記録ファイルが無くても動く。見送り�
   assert.deepEqual(readEvents('/nonexistent/auto-events.jsonl'), []);
 });
 
-test('ペナルティ期間でも予約する日(2026-10-15): heartbeat の allowDates にある日はペナルティ期間でも予約し、成功カードに取消のペナルティの警告が付く。解除されたら予約直前の再判定で見送り', async () => {
+test('対象に追加した枠(2026-10-25): heartbeat の allowSlots にある枠はペナルティ期間でも予約し、成功カードに取消のペナルティの警告が付く。同じ日の別の枠は見送り。解除されたら予約直前の再判定で見送り', async () => {
   // 9/14(月) 10:00。9/16(水)は +2 日 = ペナルティ期間
-  const h = harness({ exclusions: { dates: [], slots: [], allowDates: ['2026-09-16'] } });
+  const allow = { park: '1040', date: '2026-09-16', start: '19:00', end: '21:00', facility: '猿江恩賜公園' };
+  const h = harness({ exclusions: { dates: [], slots: [], allowSlots: [allow] } });
   await h.runner.tick();
-  assert.ok(h.logs.some((l) => l.includes('ペナルティ期間でも予約する日 1 件')));
+  assert.ok(h.logs.some((l) => l.includes('対象に追加した枠 1 件')));
   h.advance(60_000);
+  // 平日の監視対象は猿江 19:00 だけなので、同じ日の別の枠の見送りは 9/15 19:00(追加していない枠)で見る
   h.setSlots([slot('猿江恩賜公園', '2026-09-16', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-15', '19:00-21:00')]);
   const r = await h.runner.tick();
-  assert.equal(r.planned, 1, '9/16 だけ予約し、9/15 は従来どおり見送り');
+  assert.equal(r.planned, 1, '9/16 19:00 だけ予約し、9/15 は従来どおり見送り');
   await flush();
   assert.deepEqual(h.bookings, ['2026-09-16 1040 19 B']);
   assert.ok(h.logs.some((l) => l.includes('2026-09-15') && l.includes('ペナルティ期間')));
@@ -877,19 +879,19 @@ test('ペナルティ期間でも予約する日(2026-10-15): heartbeat の allo
   assert.match(card, /取り消すとペナルティ 1 点が付きます/);
   assert.equal(card.includes('"type":"postback"'), false, '+4 日の枠ではないのでキャンセルボタンは無い');
 
-  // allowDates が無い(古い Worker)応答でも落ちない
+  // allowSlots が無い(古い Worker)応答でも落ちない
   let ex = { dates: [], slots: [] };
   const h2 = harness({ workerOverride: {} });
   h2.workerRef.heartbeat = async () => ex;
   await h2.runner.tick();
   h2.advance(60_000);
-  // 行列で待っている間に本人が「解除」→ 次の heartbeat で allowDates から消える → 予約直前の再判定で見送り(従来の空き通知カード)
-  ex = { dates: [], slots: [], allowDates: ['2026-09-16'] };
+  // 行列で待っている間に本人が「解除」→ 次の heartbeat で allowSlots から消える → 予約直前の再判定で見送り(従来の空き通知カード)
+  ex = { dates: [], slots: [], allowSlots: [allow] };
   const gate = deferredGate();
   h2.queue.submit({ id: 'manual:x', kind: 'manual', run: () => gate.promise });
   h2.setSlots([slot('猿江恩賜公園', '2026-09-16', '19:00-21:00')]);
   assert.equal((await h2.runner.tick()).planned, 1);
-  ex = { dates: [], slots: [], allowDates: [] };
+  ex = { dates: [], slots: [], allowSlots: [] };
   h2.advance(60_000);
   h2.setSlots([slot('猿江恩賜公園', '2026-09-16', '19:00-21:00')]);
   await h2.runner.tick(); // heartbeat で解除を受け取る

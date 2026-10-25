@@ -21,14 +21,14 @@
 //   │  9/27(土)                         [解除] │
 //   │ 除外枠  手放した枠。空きが出ても取り直さない  │
 //   │  9/27(土) 13:00 大島小松川公園(キャンセル済み) [解除] │
-//   │ ペナルティ期間でも予約する日                  │  ← 2026-10-15 追加。今日〜今日+3 日の 4 行だけ並ぶ
-//   │  9/25(木) 今日                    [予約する] │
-//   │  9/26(金)              [対象] [解除] │  ← 選んだ日は緑のバッジ
-//   │  9/27(土)                        [予約する] │
-//   │  9/28(日)                        [予約する] │
+//   │ 対象に追加した枠  この枠だけは必ず自動予約する   │  ← 2026-10-25 追加(10-15〜10-25 は日単位の「ペナルティ期間でも予約する日」だった)
+//   │  9/26(金) 13:00 亀戸中央公園 ⚠ペナルティ [解除] │  ← ペナルティ期間の枠には ⚠ を添える
 //   ├──────────────────────────────────┤
-//   │ 📅 除外日を追加(日付ピッカー)   ↻ 更新    │
+//   │ 📅 除外日を追加(日付ピッカー)  ➕ 対象枠を追加(日時ピッカー) │
+//   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
+//
+//   「➕ 対象枠を追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園のボタンで確定する
 // ============================================================
 
 const COMMAND_TEXT = 'せってい';
@@ -159,22 +159,12 @@ const heading = (title, desc) => ({
 });
 const row = (label, pillBox) => ({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' }), pillBox] });
 const reasonText = (r) => (r === 'released' ? 'サイトで取消' : 'キャンセル済み');
-// 「ペナルティ期間でも予約する日」の 1 行。選ばれている日は緑の「対象」バッジ + 「解除」、それ以外は「予約する」
-function penaltyDayRow(d, today) {
-  const label = `${fmtDate(d.date)}${d.date === today ? ' 今日' : ''}`;
-  const contents = [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' })];
-  if (d.allowed) {
-    contents.push({ ...badge(true), margin: 'md', contents: [text('対象', { size: 'xs', weight: 'bold', color: '#FFFFFF' })] });
-    contents.push(pill('解除', { type: 'postback', label: '解除', data: d.data, displayText: `${fmtDate(d.date)} はペナルティ期間なので自動予約しない` }));
-  } else {
-    contents.push(pill('予約する', { type: 'postback', label: '予約する', data: d.data, displayText: `${fmtDate(d.date)} はペナルティ期間でも自動予約する` }));
-  }
-  return { type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents };
-}
+const fmtSlot = (s) => `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`;
 
 // model = { status, dates: [{ date, removeData }], slots: [{ date, start, facility, reason, removeData }],
-//           penaltyDays: [{ date, allowed, data }](今日〜今日+3 日。allowed なら data は解除、そうでなければ追加の postback), addData, today, maxDate, note }
-export function buildAutoSettingsFlex({ status, dates, slots, penaltyDays = [], addData, today, maxDate, note = null }) {
+//           allowSlots: [{ date, start, facility, penalty, removeData }](対象に追加した枠。penalty = 利用日がペナルティ期間),
+//           addData(除外日の日付ピッカー), addSlotData(対象枠の日時ピッカー), today, maxDate, note }
+export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], addData, addSlotData = null, today, maxDate, note = null }) {
   const body = [];
   if (note) {
     body.push({ type: 'box', layout: 'vertical', margin: 'md', backgroundColor: COLOR_NOTE_BG, cornerRadius: 'md', paddingAll: '10px', contents: [text(note, { size: 'sm', color: COLOR_NOTE_FG, wrap: true })] });
@@ -199,18 +189,21 @@ export function buildAutoSettingsFlex({ status, dates, slots, penaltyDays = [], 
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  // ペナルティ期間でも予約する日(2026-10-15)。候補はペナルティ期間の日だけ(今日〜今日+3 日)なので、日付ピッカーではなく一覧から選ぶ
-  if (penaltyDays.length) {
-    body.push(heading('ペナルティ期間でも予約する日', '今日から 3 日先までは、取り消すとペナルティが付くので普段は自動予約しません。それでも取りたい日は「予約する」'));
-    penaltyDays.forEach((d) => body.push(penaltyDayRow(d, today)));
-  }
+  // 対象に追加した枠(2026-10-25)。ペナルティ期間(今日〜+3 日)の枠は普段は自動予約しないが、ここに追加した枠だけは取りに行く
+  body.push(heading('対象に追加した枠', 'この枠だけは、ペナルティ期間でも空きが出たら自動予約する(取り消すとペナルティ 1 点)。下の「➕ 対象枠を追加」で足す'));
+  if (allowSlots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
+  allowSlots.slice(0, MAX_ROWS).forEach((s) => {
+    const label = `${fmtSlot(s)}${s.penalty ? ' ⚠ペナルティ期間' : ''}`;
+    body.push(row(label, removePill(s.removeData, `${fmtSlot(s)} を対象から外す`)));
+  });
+  if (allowSlots.length > MAX_ROWS) body.push(text(`…ほか${allowSlots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(text('除外日・除外枠・予約する日は日が過ぎると自動で消えます。切り替えは 1〜3 分で Pi に届きます。', { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xl' }));
+  body.push(text('除外日・除外枠・対象に追加した枠は日時が過ぎると自動で消えます。切り替えは 1〜3 分で Pi に届きます。', { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xl' }));
 
   const [, tm, td] = today.split('-').map(Number);
   return {
     type: 'flex',
-    altText: autoSettingsText({ status, dates, slots, penaltyDays, today }).slice(0, 400),
+    altText: autoSettingsText({ status, dates, slots, allowSlots, today }).slice(0, 400),
     contents: {
       type: 'bubble',
       size: 'mega',
@@ -236,9 +229,13 @@ export function buildAutoSettingsFlex({ status, dates, slots, penaltyDays = [], 
             contents: [
               // 日付ピッカー(LINE の datetimepicker)。選ぶと postback に params.date が付いて返る
               { type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '📅 除外日を追加', data: addData, mode: 'date', initial: today, min: today, max: maxDate } },
-              { type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '↻ 更新', text: COMMAND_TEXT } },
+              // 日時ピッカー(mode: datetime)。選ぶと params.datetime("YYYY-MM-DDThh:mm")が付いて返り、Worker が公園を選ぶカードを返す
+              ...(addSlotData
+                ? [{ type: 'button', style: 'link', height: 'sm', action: { type: 'datetimepicker', label: '➕ 対象枠を追加', data: addSlotData, mode: 'datetime', initial: `${today}T09:00`, min: `${today}T00:00`, max: `${maxDate}T23:59` } }]
+                : []),
             ],
           },
+          { type: 'box', layout: 'horizontal', contents: [{ type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '↻ 更新', text: COMMAND_TEXT } }] },
         ],
       },
     },
@@ -246,14 +243,51 @@ export function buildAutoSettingsFlex({ status, dates, slots, penaltyDays = [], 
 }
 
 // テキスト版(Flex が 400 で弾かれたときの再送と altText)。ボタンが無いので合言葉を添える
-export function autoSettingsText({ status, dates, slots, penaltyDays = [], today }) {
+export function autoSettingsText({ status, dates, slots, allowSlots = [], today }) {
   const auto = autoSwitchView(status);
   const notify = notifySwitchView(status);
   const lines = [`⚙️ 設定(${fmtDate(today)})`, `自動予約: ${auto.on ? 'ON' : 'OFF'} / ${auto.detail}`, `空き通知カード: ${notify.on ? 'ON' : 'OFF'} / ${notify.detail}`];
   lines.push(`除外日: ${dates.length ? dates.map((d) => fmtDate(d.date)).join('、') : 'なし'}`);
   lines.push(`除外枠: ${slots.length ? slots.map((s) => `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`).join('、') : 'なし'}`);
-  const allowed = penaltyDays.filter((d) => d.allowed);
-  lines.push(`ペナルティ期間でも予約する日: ${allowed.length ? allowed.map((d) => fmtDate(d.date)).join('、') : 'なし'}`);
+  lines.push(`対象に追加した枠: ${allowSlots.length ? allowSlots.map(fmtSlot).join('、') : 'なし'}`);
   lines.push(`切り替えは「${AUTO_ON_TEXT}」「${AUTO_OFF_TEXT}」「${NOTIFY_ON_TEXT}」「${NOTIFY_OFF_TEXT}」`);
   return lines.join('\n');
+}
+
+// ---- 「➕ 対象枠を追加」で日時を選んだあとの、公園を選ぶカード(2026-10-25) ----
+// model = { date, start, end, penalty, parks: [{ park, name, data }] }。公園のボタンは postback(x|t|…)。押すと対象枠に入り、設定カードが返る
+export function buildParkPickFlex({ date, start, end, penalty, parks }) {
+  const when = `${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`;
+  const body = [
+    text(when, { size: 'lg', weight: 'bold', color: COLOR_TEXT, wrap: true }),
+    text('どのコートを対象にしますか？', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'sm' }),
+  ];
+  if (penalty) body.push(text('⚠ ペナルティ期間の枠です。取れたあとで取り消すとペナルティ 1 点が付きます', { size: 'xs', color: '#8A4B00', wrap: true, margin: 'md' }));
+  for (const p of parks) {
+    body.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'md',
+      backgroundColor: COLOR_HEADER_BG,
+      cornerRadius: 'xl',
+      paddingTop: '10px',
+      paddingBottom: '10px',
+      action: { type: 'postback', label: p.name, data: p.data, displayText: `${when} ${p.name} を対象に追加` },
+      contents: [text(p.name, { size: 'sm', weight: 'bold', color: '#FFFFFF', align: 'center' })],
+    });
+  }
+  body.push(text('やめるときは何も押さずにそのままで大丈夫です(ボタンは 1 時間で時間切れ)', { size: 'xs', color: COLOR_MUTED, wrap: true, margin: 'lg' }));
+  return {
+    type: 'flex',
+    altText: parkPickText({ date, start, end, penalty, parks }).slice(0, 400),
+    contents: {
+      type: 'bubble',
+      size: 'kilo',
+      header: { type: 'box', layout: 'horizontal', backgroundColor: COLOR_HEADER_BG, paddingAll: '14px', paddingStart: '16px', contents: [text('➕ 対象枠を追加', { color: '#FFFFFF', weight: 'bold', size: 'md' })] },
+      body: { type: 'box', layout: 'vertical', paddingAll: '16px', backgroundColor: '#FFFFFF', contents: body },
+    },
+  };
+}
+export function parkPickText({ date, start, end, penalty, parks }) {
+  return [`➕ 対象枠を追加: ${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`, `どのコートにしますか？(${parks.map((p) => p.name).join(' / ')})`, ...(penalty ? ['⚠ ペナルティ期間の枠です'] : []), 'このカードのボタンが使えないときは「せってい」からやり直してください'].join('\n');
 }
