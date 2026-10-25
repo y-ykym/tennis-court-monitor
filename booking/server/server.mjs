@@ -275,7 +275,10 @@ if (AUTO_MODE !== 'off') {
       },
       // 候補 1 件の予約実行(行列の中で呼ばれる)。手動と同じセッション扱いにして、reCAPTCHA v2 の /vnc も同じ仕組みで動くようにする
       book: async (c, { beforeApply }) => {
-        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour), vacant: c.count ?? null };
+        // 空き照会の面数(c.count)を vacant として渡せば高速経路は週データの再確認(約 10 秒)を飛ばせるが、渡さない(2026-10-25 の実測):
+        // サーバーは枠選択 Ajax でも確認画面でも空きを検証せず(送った akiNum が 1 以上なら空きでないセルでも選べて確認画面に到達した)、
+        // 空きの検証は最後の「予約」送信だけ。飛ばすと先に取られていた回に「予約」まで押しに行くことになり、その応答は未確認のため
+        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour) };
         const token = sign(payload, SECRET);
         const s = newSession(token, payload, 'auto');
         return runReserve(s, { reservationList: true, beforeApply });

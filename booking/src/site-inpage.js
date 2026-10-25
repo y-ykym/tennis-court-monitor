@@ -6,8 +6,10 @@
 //                                                              | { ok: false, status: 'auth_error'|'taken'|'error', message }
 //   slot.vacant / slot.tzoneNo(省略可): 空き照会で分かっている面数と時間帯番号。両方あれば週データ JSON(1 往復 約 10 秒)を取らず、
 //     その値で枠を選ぶ(フェーズ3 の自動予約。2026-10-25)。無ければ従来どおり週データで空きを確かめてから選ぶ(LINE の「よやく」)。
-//     サーバーは akiNum(面数)を検証せず入力 ±1 を返すだけなので、1 分前の照会の値でよい。空きでないセルは枠選択の Ajax が
-//     { selectNum: 0, selectState: 0, akiNum: 0 } で断る(実測)ので「先に取られた」はそこで分かる
+//     **ただし現在は使っていない(server.mjs は vacant を渡さない)**。実測(2026-10-25)で、サーバーは枠選択 Ajax でも確認画面でも
+//     空きを検証しないと分かったため(akiNum=0 を送ったときだけ { selectNum: 0, selectState: 0, akiNum: 0 } で断る。1 以上なら
+//     空きでないセルでも選べて確認画面に到達する)。飛ばすと先に取られていた回に「予約」送信まで進んでしまう。
+//     「予約」送信に対するサイトの応答が分かれば使える余地はある
 //   withList: true のとき、枠が選べた後に「予約の確認・取消」画面(prwha1000)を取って listHtml に入れて返す
 //   (フェーズ3: 予約する前にその利用日の予約件数を数えるため。Node 側で reservation-list.js の parseReservations に渡す。
 //    ログイン直後ではなく枠選択の後に取るのは、先に取られていた回に 1 往復(約 5 秒)を省くため。2026-10-25)
@@ -153,7 +155,7 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
       sel = {};
     }
     if (Number(sel.selectNum) !== 1) {
-      // 空きでないセルはサーバーが { selectNum: 0, selectState: 0, akiNum: 0 } で断る(2026-10-25 実測。週データを飛ばしたときの「先に取られた」判定)
+      // akiNum=0 で選ぼうとするとサーバーは { selectNum: 0, selectState: 0, akiNum: 0 } で断る(2026-10-25 実測。週データで面数 0 と分かった直後に起きうる)
       if (Number(sel.selectNum) === 0 && Number(sel.selectState) === 0 && Number(sel.akiNum) === 0) {
         return fail('taken', 'その枠は空きではありませんでした(枠の選択が断られました)');
       }

@@ -42,11 +42,14 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
 - **週 JSON は飛ばせる**: 枠選択 Ajax に `startTime`・`endTime(=開始+200)`・`tzoneNo`(時間帯で固定。reserve.js の HOUR_TO_TZ)・
   `akiNum`(照会時の面数)を渡せば通り、確認画面(`prwea1000.jsp`)に到達した。サーバーは `akiNum` を検証せず、応答の `akiNum` は
   入力 −1(選択)/+1(解除)を返すだけ(選択 3→2、解除 3→4 と返った)
-- **空きでないセル(`alt=予約あり`)を選ぶと** 枠選択 Ajax は `{"divFldFg":3,"selectNum":0,"selectState":0,"akiNum":0}` で断る
-  (エラー画面ではなく 200 の JSON)。「先に取られた」の判定はここでできる
+- **サーバーは枠選択 Ajax でも確認画面でも空きを検証しない**: 空きでないセル(`alt=予約あり`、面数 0)でも `akiNum=1` を送れば
+  `selectNum: 1` で選べ、確認画面(`prwea1000.jsp`)に到達した(19:35 の dry-run)。`akiNum=0` を送ったときだけ
+  `{"divFldFg":3,"selectNum":0,"selectState":0,"akiNum":0}` で断られる(19:12 の試行。これを「空きの検証」と誤解しかけた)。
+  空きの検証は最後の「予約」送信(`rsvWInstRsvApplyAction`)だけと考えられる。その応答は未確認(本物の予約になるので試していない)。
+  → **週 JSON の省略は見送り**(先に取られていた回に「予約」まで押しに行くことになるため)。実装(`slot.vacant`)は残すが server.mjs は渡さない
 - 確認画面からは `POST /web/rsvWOpeReservedApplyBackAction.do`(確認画面の hidden 一式)で週表示画面に戻れる(サイトの「キャンセル」と同じ)
 - ログアウトの `waitForNavigation`(load 待ち)は毎回 15 秒で時間切れになっていた(応答自体は 4.7 秒)。応答待ちに変更
-- 反映: `booking/src/site-inpage.js` は `slot.vacant`・`slot.tzoneNo` があれば週 JSON を取らず、予約一覧は枠選択の後に取る(先に取られていた回は取らない)
+- 反映: 予約一覧は枠選択の後に取る(先に取られていた回は取らない)。ログアウトは応答待ちだけ(3〜4 秒)。週 JSON は従来どおり取る
 
 ---
 
