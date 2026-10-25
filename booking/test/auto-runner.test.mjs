@@ -943,4 +943,13 @@ test('対象に追加した枠(2026-10-25): 平日の監視対象外の枠(大�
   const r3 = await h.runner.tick();
   assert.equal(r3.newSlots, 0);
   assert.deepEqual(h.runner.lastTargets().map((s) => `${s.facility} ${s.date} ${s.time}`), ['猿江恩賜公園 2026-09-15 19:00-21:00']);
+
+  // 状態ファイルが無い初回起動(既知の登録だけの回)で追加枠を受け取っても、印は消えず次の照会で取りに行く
+  const h3 = harness({ workerOverride: {}, exclusions: { dates: [], slots: [], allowSlots: [{ park: '1040', date: '2026-09-15', start: '19:00', end: '21:00', facility: '猿江恩賜公園' }] } });
+  h3.setSlots([slot('猿江恩賜公園', '2026-09-15', '19:00-21:00')]);
+  await h3.runner.tick(); // 初回: 猿江 19:00 は既知になる(この回は予約しない)
+  h3.advance(60_000);
+  assert.equal((await h3.runner.tick()).planned, 1, '既知だが追加枠なので新しい空きとして予約する');
+  await flush();
+  assert.deepEqual(h3.bookings, ['2026-09-15 1040 19 B']);
 });
