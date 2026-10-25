@@ -2,10 +2,15 @@
 // 高速経路(ブラウザ内版): サイトのトップページを開いたブラウザの「中」で、fetch を使って
 // ログイン → 空き検索 → 週データ → 枠の選択 まで進める。UI 操作(クリック・入力・描画待ち)を省いて速くする。
 //
-//   page.evaluate(inPageFlow, { slot, credentials, withList }) → { ok: true, applyFields, facility, vacant, listHtml? }
+//   page.evaluate(inPageFlow, { slot, credentials, withList }) → { ok: true, applyFields, facility, vacant, skippedWeek, listHtml? }
 //                                                              | { ok: false, status: 'auth_error'|'taken'|'error', message }
-//   withList: true のとき、ログイン直後に「予約の確認・取消」画面(prwha1000)を取って listHtml に入れて返す
-//   (フェーズ3: 予約する前にその利用日の予約件数を数えるため。Node 側で reservation-list.js の parseReservations に渡す)
+//   slot.vacant / slot.tzoneNo(省略可): 空き照会で分かっている面数と時間帯番号。両方あれば週データ JSON(1 往復 約 10 秒)を取らず、
+//     その値で枠を選ぶ(フェーズ3 の自動予約。2026-10-25)。無ければ従来どおり週データで空きを確かめてから選ぶ(LINE の「よやく」)。
+//     サーバーは akiNum(面数)を検証せず入力 ±1 を返すだけなので、1 分前の照会の値でよい。空きでないセルは枠選択の Ajax が
+//     { selectNum: 0, selectState: 0, akiNum: 0 } で断る(実測)ので「先に取られた」はそこで分かる
+//   withList: true のとき、枠が選べた後に「予約の確認・取消」画面(prwha1000)を取って listHtml に入れて返す
+//   (フェーズ3: 予約する前にその利用日の予約件数を数えるため。Node 側で reservation-list.js の parseReservations に渡す。
+//    ログイン直後ではなく枠選択の後に取るのは、先に取られていた回に 1 往復(約 5 秒)を省くため。2026-10-25)
 //
 // Node 側の HTTP ではなくブラウザ内で行う理由:
 //   Cloud Run では Node の HTTP とブラウザの通信が別の出口(IP)になり得て、予約サイトのロードバランサが
@@ -76,17 +81,6 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
     }
     if (!home.body.includes('gRsvWTransUserAttestationEndAction);')) return fail('error', `ログイン後の画面が想定外です (${pageId(home.body) || '不明'})`);
 
-    // 2.5 (フェーズ3)予約の確認・取消画面を取る(この人の予約一覧。件数の上限判定と、手放した枠の検出に使う)
-    let listHtml = null;
-    if (withList) {
-      const displayNo = hiddenValue(home.body, 'displayNo') || 'pawab2000';
-      const list = await req('/web/rsvWGetCancelRsvDataAction.do', { displayNo, displayNoFrm: displayNo });
-      if (pageId(list.body) !== 'prwha1000.jsp' && !list.body.includes('id="rsvacceptlist"')) {
-        return fail('error', `予約一覧画面が想定外です (${pageId(list.body) || '不明'})`);
-      }
-      listHtml = list.body;
-    }
-
     // 3. 空き検索(週表示画面。hidden 一式を控える)
     const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
       displayNo: 'pawab2000',
@@ -107,28 +101,35 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
     }
     const facility = decodeEntities(hiddenValue(week.body, 'selectBldName') || '') || slot.park;
 
-    // 4. 週データ JSON から対象セル(空き面数・終了時刻・時間帯番号)
-    let json;
-    try {
-      json = JSON.parse(
-        (await req('/web/rsvWOpeInstSrchVacantAjaxAction.do', { displayNo: 'prwrc2000', useDay: ymd, bldCd: slot.park, instCd, transVacantMode: '0', clearFlag: '0' })).body
-      );
-    } catch {
-      json = {};
-    }
-    if (!json.result) return fail('error', '週データが取得できませんでした(セッション未認識の可能性)');
+    // 4. 対象セル(空き面数・終了時刻・時間帯番号)。空き照会で分かっていれば週データ JSON(約 10 秒)は取らない
     let cell = null;
     let tzoneNo = null;
-    for (const row of json.result) {
-      for (const c of row.timeResult || []) {
-        if (String(c.useDay) === ymd && Number(c.startTime) === startTime) {
-          cell = c;
-          tzoneNo = row.tzoneNo;
+    const skippedWeek = slot.vacant != null && Number(slot.vacant) >= 1 && !!slot.tzoneNo;
+    if (skippedWeek) {
+      // 枠は 2 時間固定(終了 = 開始 + 2 時間)。時間帯番号は reserve.js の HOUR_TO_TZ
+      cell = { startTime, endTime: startTime + 200, rsvNum: Number(slot.vacant), selectNum: 0 };
+      tzoneNo = slot.tzoneNo;
+    } else {
+      let json;
+      try {
+        json = JSON.parse(
+          (await req('/web/rsvWOpeInstSrchVacantAjaxAction.do', { displayNo: 'prwrc2000', useDay: ymd, bldCd: slot.park, instCd, transVacantMode: '0', clearFlag: '0' })).body
+        );
+      } catch {
+        json = {};
+      }
+      if (!json.result) return fail('error', '週データが取得できませんでした(セッション未認識の可能性)');
+      for (const row of json.result) {
+        for (const c of row.timeResult || []) {
+          if (String(c.useDay) === ymd && Number(c.startTime) === startTime) {
+            cell = c;
+            tzoneNo = row.tzoneNo;
+          }
         }
       }
+      if (!cell) return fail('error', `対象の枠 ${ymd} ${slot.startHour}時 が週データにありません`);
+      if (cell.alt !== '空き' || Number(cell.rsvNum) < 1) return fail('taken', `その枠は空きではありませんでした(${cell.alt})`);
     }
-    if (!cell) return fail('error', `対象の枠 ${ymd} ${slot.startHour}時 が週データにありません`);
-    if (cell.alt !== '空き' || Number(cell.rsvNum) < 1) return fail('taken', `その枠は空きではありませんでした(${cell.alt})`);
 
     // 5. 枠の選択(setReserv() と同じ Ajax)
     let sel;
@@ -151,11 +152,28 @@ export async function inPageFlow({ slot, credentials, withList = false }) {
     } catch {
       sel = {};
     }
-    if (Number(sel.selectNum) !== 1) return fail('error', `枠の選択が反映されませんでした (${JSON.stringify(sel).slice(0, 120)})`);
+    if (Number(sel.selectNum) !== 1) {
+      // 空きでないセルはサーバーが { selectNum: 0, selectState: 0, akiNum: 0 } で断る(2026-10-25 実測。週データを飛ばしたときの「先に取られた」判定)
+      if (Number(sel.selectNum) === 0 && Number(sel.selectState) === 0 && Number(sel.akiNum) === 0) {
+        return fail('taken', 'その枠は空きではありませんでした(枠の選択が断られました)');
+      }
+      return fail('error', `枠の選択が反映されませんでした (${JSON.stringify(sel).slice(0, 120)})`);
+    }
+
+    // 6. (フェーズ3)予約の確認・取消画面を取る(この人の予約一覧。件数の上限判定と、手放した枠の検出に使う)。枠が選べた後に取る
+    let listHtml = null;
+    if (withList) {
+      const displayNo = hiddenValue(home.body, 'displayNo') || 'pawab2000';
+      const list = await req('/web/rsvWGetCancelRsvDataAction.do', { displayNo, displayNoFrm: displayNo });
+      if (pageId(list.body) !== 'prwha1000.jsp' && !list.body.includes('id="rsvacceptlist"')) {
+        return fail('error', `予約一覧画面が想定外です (${pageId(list.body) || '不明'})`);
+      }
+      listHtml = list.body;
+    }
 
     // 予約内容確認画面へ進む POST の値(checkSelect() が送るもの: 週表示画面の hidden 一式 + applyFlg=1)
     const applyFields = { ...hiddenFields(week.body), daystart: slot.date, applyFlg: '1', selectSize: String(sel.selectState ?? 1) };
-    return { ok: true, applyFields, facility, vacant: Number(cell.rsvNum), listHtml };
+    return { ok: true, applyFields, facility, vacant: Number(cell.rsvNum), skippedWeek, listHtml };
   } catch (e) {
     return fail('error', `ブラウザ内 fetch でエラー: ${e && e.message ? e.message : String(e)}`);
   }

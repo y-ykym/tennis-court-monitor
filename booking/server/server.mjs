@@ -175,7 +175,8 @@ async function runReserve(s, extra = {}) {
       }, 1000);
     });
 
-  const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2) };
+  // vacant は自動予約だけが持つ(空き照会で分かった面数。高速経路で週データの再確認を飛ばすのに使う)。手動の「よやく」には無い
+  const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2), vacant: payload.vacant ?? null };
   log(`予約フロー開始${s.kind === 'auto' ? '(自動予約)' : ''}: ${slotText(payload)} 予約者=${creds.label}`);
   const credentials = { userId: creds.userId, password: creds.password };
   const browserOptions = {
@@ -274,7 +275,7 @@ if (AUTO_MODE !== 'off') {
       },
       // 候補 1 件の予約実行(行列の中で呼ばれる)。手動と同じセッション扱いにして、reCAPTCHA v2 の /vnc も同じ仕組みで動くようにする
       book: async (c, { beforeApply }) => {
-        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour) };
+        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour), vacant: c.count ?? null };
         const token = sign(payload, SECRET);
         const s = newSession(token, payload, 'auto');
         return runReserve(s, { reservationList: true, beforeApply });
