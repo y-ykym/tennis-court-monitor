@@ -30,23 +30,24 @@
 //
 //   LINE:
 //     「せってい」→ 設定メニューのカード(自動予約・空き通知カードの ON/OFF ボタン、除外日・除外枠・対象に追加した枠の一覧と「解除」、
-//       フッターに「除外日を追加」= 日付ピッカー、「対象枠を追加」= 日時ピッカー → 公園を選ぶカード)。auto-flex.js。2026-09-25 まで合言葉は「じどう」
+//       見出しの右に「＋ 追加」= 日付ピッカー。対象枠はその後に時間帯とコートを選ぶカード)。auto-flex.js。2026-09-25 まで合言葉は「じどう」
 //     「じどうおふ」/「じどうおん」→ 自動予約の一時停止 / 再開(カードの「OFF にする」「ON にする」もこの合言葉を送る。KV auto_switch。Pi は heartbeat の応答で受け取り、次の照会から従う。
 //       停止中は Pi が mode='paused' を申告し、Actions は従来どおり全部通知する。Pi 側の .env が dry-run/off のときは LINE から ON にはできない)
 //     「つうちおふ」/「つうちおん」→ 空き通知カードを止める / 戻す(カードのボタンも同じ。KV notify_switch)。Actions は /auto/state の notifyEnabled、
 //       Pi は heartbeat の応答の notifyEnabled で受け取る。自動予約の結果カード・フェーズ4 の予告・「よやく」の返信は止めない
 //     postback 'x|a|-|<exp>.<sig>'(日を追加。params.date に選んだ日)/ 'x|d|YYYYMMDD|<exp>.<sig>'(除外日を解除)/
 //              'x|s|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(除外枠を解除)/
-//              'x|b|-|<exp>.<sig>'(対象枠を追加: 日時ピッカー。params.datetime に選んだ日時 → 公園を選ぶカードを返す)/
-//              'x|t|<公園コード>-<公園コード>…_YYYYMMDD_HHMM|<exp>.<sig>'(公園の選択を切り替えた。値は切り替え後の選択。無しは 0。カードを返すだけで KV には書かない)/
-//              'x|c|<公園コード>-…_YYYYMMDD_HHMM|<exp>.<sig>'(決定 = 選んだ公園ぶんの枠をまとめて対象に追加)/ 'x|u|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(対象枠を解除)。
+//              'x|b|-|<exp>.<sig>'(対象枠を追加: 日付ピッカー。params.date に選んだ日 → 時間帯とコートを選ぶカードを返す)/
+//              'x|t|<公園コード>-…_YYYYMMDD_<開始時>-<開始時>…|<exp>.<sig>'(時間帯かコートの選択を切り替えた。値は切り替え後の選択。無しは 0。
+//                カードを返すだけで KV には書かない)/ 'x|c|<同じ形>|<exp>.<sig>'(決定 = 選んだ時間帯 × コードの枠をまとめて対象に追加)/
+//              'x|u|<公園コード>_YYYYMMDD_HHMM|<exp>.<sig>'(対象枠を解除)。
 //              署名は cancel-token.js と同じ HMAC 先頭 16 バイト
 //     キャンセル成功時(index.js)→ addExcludedSlots() で除外枠に(LINE の返信より先に KV へ書く)
 //
 //   枠キーは lib/auto-rules.js と同じ "<公園コード>|<YYYY-MM-DD>|<HH:MM>"。過ぎた除外日・開始時刻を過ぎた除外枠は読むときに落とす
 // ============================================================
 import { PARK_NAMES, courtByTbCode, courtByFacility } from './courts.js';
-import { buildAutoSettingsFlex, autoSettingsText, buildParkPickFlex, parkPickText } from './auto-flex.js';
+import { buildAutoSettingsFlex, autoSettingsText, buildPickFlex, pickText } from './auto-flex.js';
 import { fetchTennisbearEvents } from './tennisbear.js';
 
 export const AUTO_COMMAND_TEXT = 'せってい'; // 2026-09-25 まで「じどう」
@@ -114,14 +115,20 @@ function addDaysIso(iso, days) {
 function isPenaltyPeriod(dateIso, todayIso) {
   return dateIso >= todayIso && dateIso <= addDaysIso(todayIso, PENALTY_DAYS);
 }
-// 日時ピッカーで選んだ時刻("HH:MM")を、その時刻を含む枠の開始時刻に丸める。9:00 より前は 9:00、21:00 以降は 19:00
-export function snapStartHHMM(hhmm) {
-  const [h] = String(hhmm).split(':').map(Number);
-  let hit = START_HOURS[0];
-  for (const sh of START_HOURS) if (h >= sh) hit = sh;
-  return `${String(hit).padStart(2, '0')}:00`;
-}
 const endOfStart = (start) => `${String(Number(start.slice(0, 2)) + 2).padStart(2, '0')}:00`;
+const hhmmOf = (hour) => `${String(hour).padStart(2, '0')}:00`;
+// 開始時(9, 11, …)の並びを「13:00〜19:00」「9:00〜11:00・15:00〜17:00」のように、続いている枠はまとめて表す(カードの注記用)
+export function hoursRangeText(hours) {
+  const sorted = [...new Set(hours)].sort((a, b) => a - b);
+  const parts = [];
+  for (let i = 0; i < sorted.length; ) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 2) j++;
+    parts.push(`${sorted[i]}:00〜${sorted[j] + 2}:00`);
+    i = j + 1;
+  }
+  return parts.join('・');
+}
 
 // ---- 枠キー(lib/auto-rules.js と同じ形式) ----
 export function parkCodeOf(facilityOrCode) {
@@ -502,32 +509,48 @@ export async function buildAutoSettingsReply(env, { now = Date.now(), note = nul
   const model = { status, dates, slots, allowSlots, addData, addSlotData, today, maxDate: addDaysIso(today, MAX_DAYS_AHEAD), note };
   return { flex: buildAutoSettingsFlex(model), text: autoSettingsText(model) };
 }
-// postback の値 "<公園コード>[-<公園コード>…]_YYYYMMDD_HHMM"(公園が無ければ "0")と枠の相互変換。解除(u)は公園 1 つ、選択(t)・決定(c)は複数
+// postback の値。解除(u)は 1 枠 "<公園コード>_YYYYMMDD_HHMM"。選択の切り替え(t)・決定(c)は "<公園コード>-…_YYYYMMDD_<開始時>-…"
+// (公園・時間帯とも無ければ "0"。開始時は 2 桁)。例 "1050-1160_20261026_13-15-17"
 const slotValueOf = (s) => `${s.park}_${s.date.replace(/-/g, '')}_${s.start.replace(':', '')}`;
-const pickValueOf = (parks, date, start) => slotValueOf({ park: parks.length ? [...parks].sort().join('-') : '0', date, start });
-// 戻り値 { parks: ['1040', …](知らない公園コードは落とす), date, start } | null
+const pickValueOf = (parks, hours, date) => `${parks.length ? [...parks].sort().join('-') : '0'}_${date.replace(/-/g, '')}_${hours.length ? [...hours].sort((a, b) => a - b).map((h) => String(h).padStart(2, '0')).join('-') : '0'}`;
+// 戻り値 { park, date, start } | null
 function parseSlotValue(value) {
-  const m = String(value).match(/^(0|\d{4}(?:-\d{4})*)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})$/);
+  const m = String(value).match(/^(\d{4})_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})$/);
+  if (!m || !PARK_NAMES[m[1]]) return null;
+  return { park: m[1], date: `${m[2]}-${m[3]}-${m[4]}`, start: `${m[5]}:${m[6]}` };
+}
+// 戻り値 { parks: ['1040', …], hours: [13, 15, …], date } | null。知らない公園コード・無い開始時は落とす
+function parsePickValue(value) {
+  const m = String(value).match(/^(0|\d{4}(?:-\d{4})*)_(\d{4})(\d{2})(\d{2})_(0|\d{2}(?:-\d{2})*)$/);
   if (!m) return null;
   const parks = m[1] === '0' ? [] : [...new Set(m[1].split('-'))].filter((p) => PARK_NAMES[p]);
-  return { parks, date: `${m[2]}-${m[3]}-${m[4]}`, start: `${m[5]}:${m[6]}` };
+  const hours = m[5] === '0' ? [] : [...new Set(m[5].split('-').map(Number))].filter((h) => START_HOURS.includes(h));
+  return { parks, hours, date: `${m[2]}-${m[3]}-${m[4]}` };
 }
-// 枠が指定できるものか(今日〜今日+MAX_DAYS_AHEAD の、まだ始まっていない 2 時間枠)
-function isPickableSlot({ date, start }, today, now) {
-  return START_HOURS.includes(Number(start.slice(0, 2))) && date >= today && date <= addDaysIso(today, MAX_DAYS_AHEAD) && jstDateTimeMs(date, start) > now;
-}
-// 公園を選ぶカード(複数選択。2026-10-25)。selected = いま選んでいる公園コード。各公園のボタンには「押した後の選択」を載せ、「決定」には今の選択を載せる
-async function buildParkPickReply(env, { date, start, selected, today, now }) {
+// 指定できる日か(今日〜今日+MAX_DAYS_AHEAD)
+const isPickableDate = (date, today) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= today && date <= addDaysIso(today, MAX_DAYS_AHEAD);
+// その日のうち、まだ始まっていない枠の開始時
+const futureHours = (date, now) => START_HOURS.filter((h) => jstDateTimeMs(date, hhmmOf(h)) > now);
+// 時間帯とコートを選ぶカード(複数選択。2026-10-25)。hours/parks = いま選んでいるもの。各行のボタンには「押した後の選択」を載せ、「決定」には今の選択を載せる
+async function buildPickReply(env, { date, hours, parks, today, now }) {
   const exp = Math.floor(now / 1000) + SETTINGS_BUTTON_TTL_SEC;
-  const parks = [];
-  for (const [park, name] of Object.entries(PARK_NAMES)) {
-    const on = selected.includes(park);
-    const next = on ? selected.filter((p) => p !== park) : [...selected, park];
-    parks.push({ park, name, selected: on, data: await signAutoData(env.BOOKING_SIGNING_SECRET, 't', pickValueOf(next, date, start), exp) });
+  const secret = env.BOOKING_SIGNING_SECRET;
+  const hourRows = [];
+  for (const h of futureHours(date, now)) {
+    const on = hours.includes(h);
+    const next = on ? hours.filter((x) => x !== h) : [...hours, h];
+    hourRows.push({ hour: h, label: `${h}:00〜${h + 2}:00`, selected: on, data: await signAutoData(secret, 't', pickValueOf(parks, next, date), exp) });
   }
-  const confirmData = selected.length ? await signAutoData(env.BOOKING_SIGNING_SECRET, 'c', pickValueOf(selected, date, start), exp) : null;
-  const model = { date, start, end: endOfStart(start), penalty: isPenaltyPeriod(date, today), parks, confirmData };
-  return { flex: buildParkPickFlex(model), text: parkPickText(model) };
+  const parkRows = [];
+  for (const [park, name] of Object.entries(PARK_NAMES)) {
+    const on = parks.includes(park);
+    const next = on ? parks.filter((p) => p !== park) : [...parks, park];
+    parkRows.push({ park, name, selected: on, data: await signAutoData(secret, 't', pickValueOf(next, hours, date), exp) });
+  }
+  const count = hours.length * parks.length;
+  const confirmData = count ? await signAutoData(secret, 'c', pickValueOf(parks, hours, date), exp) : null;
+  const model = { date, penalty: isPenaltyPeriod(date, today), hours: hourRows, parks: parkRows, count, confirmData };
+  return { flex: buildPickFlex(model), text: pickText(model) };
 }
 
 export const MSG_AUTO_EXPIRED = '時間切れです。「せってい」からやり直してください';
@@ -560,32 +583,38 @@ export async function handleAutoPostback(env, data, params, { now = Date.now() }
     note = `${fmt(iso)} の除外を解除しました(この日も自動予約の対象になります)`;
     console.log(`[auto] 除外日を解除: ${iso}`);
   } else if (t.kind === 'b') {
-    // 日時ピッカーで日時を選んだ → 枠の開始時刻に丸めて、公園を選ぶカードを返す(まだ KV には書かない)
-    const picked = String(params?.datetime || '');
-    const m = picked.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
-    if (!m || m[1] < today || m[1] > addDaysIso(today, MAX_DAYS_AHEAD)) return { text: MSG_AUTO_BAD_SLOT };
-    const date = m[1];
-    const start = snapStartHHMM(m[2]);
-    if (jstDateTimeMs(date, start) <= now) return { text: MSG_AUTO_BAD_SLOT };
-    console.log(`[auto] 対象枠の追加: ${date} ${start} の公園を選ぶカードを返す`);
-    return buildParkPickReply(env, { date, start, selected: [], today, now });
+    // 日付ピッカーで日を選んだ → 時間帯とコートを選ぶカードを返す(まだ KV には書かない)。その日の枠が全部始まっていれば断る
+    const date = String(params?.date || '');
+    if (!isPickableDate(date, today) || !futureHours(date, now).length) return { text: MSG_AUTO_BAD_SLOT };
+    console.log(`[auto] 対象枠の追加: ${date} の時間帯とコートを選ぶカードを返す`);
+    return buildPickReply(env, { date, hours: [], parks: [], today, now });
   } else if (t.kind === 't' || t.kind === 'c') {
-    // 公園の選択を切り替えた(t。カードを返すだけ)/ 決定(c。選んだ公園ぶんの枠をまとめて追加)。
-    // 古いカードから押して、その枠がもう始まっている・範囲外なら受け付けない
-    const s = parseSlotValue(t.value);
-    if (!s || !isPickableSlot(s, today, now)) return { text: MSG_AUTO_BAD_SLOT };
-    if (t.kind === 't') return buildParkPickReply(env, { date: s.date, start: s.start, selected: s.parks, today, now });
-    if (!s.parks.length) return { text: MSG_AUTO_BAD_SLOT };
-    for (const park of s.parks) await addAllowedSlot(env, { park, date: s.date, start: s.start }, now);
+    // 時間帯・コートの選択を切り替えた(t。カードを返すだけ)/ 決定(c。選んだ時間帯 × コートの枠をまとめて追加)。
+    // 古いカードから押して、もう始まった時間帯は落とす。日が範囲外・残る枠が無ければ受け付けない
+    const s = parsePickValue(t.value);
+    if (!s || !isPickableDate(s.date, today)) return { text: MSG_AUTO_BAD_SLOT };
+    const hours = s.hours.filter((h) => futureHours(s.date, now).includes(h));
+    if (t.kind === 't') {
+      if (!futureHours(s.date, now).length) return { text: MSG_AUTO_BAD_SLOT };
+      return buildPickReply(env, { date: s.date, hours, parks: s.parks, today, now });
+    }
+    if (!hours.length || !s.parks.length) return { text: MSG_AUTO_BAD_SLOT };
+    const added = [];
+    for (const park of s.parks) {
+      for (const h of hours) {
+        await addAllowedSlot(env, { park, date: s.date, start: hhmmOf(h) }, now);
+        added.push(`${park}|${s.date}|${hhmmOf(h)}`);
+      }
+    }
     const names = s.parks.map((p) => PARK_NAMES[p]).join('・');
-    note = `${fmt(s.date)} ${s.start.replace(/^0/, '')}〜${endOfStart(s.start).replace(/^0/, '')} ${names} を対象に追加しました(空きが出れば自動予約します${isPenaltyPeriod(s.date, today) ? '。ペナルティ期間なので、取り消すとペナルティ 1 点が付きます' : ''})`;
-    console.log(`[auto] 対象枠を追加: ${s.parks.map((p) => `${p}|${s.date}|${s.start}`).join(', ')}`);
+    note = `${fmt(s.date)} ${hoursRangeText(hours)} ${names} の ${added.length} 枠を対象に追加しました(空きが出れば自動予約します${isPenaltyPeriod(s.date, today) ? '。ペナルティ期間なので、取り消すとペナルティ 1 点が付きます' : ''})`;
+    console.log(`[auto] 対象枠を追加: ${added.join(', ')}`);
   } else if (t.kind === 'u') {
     const s = parseSlotValue(t.value);
-    if (!s || s.parks.length !== 1) return { text: MSG_AUTO_BAD_SLOT };
-    const key = `${s.parks[0]}|${s.date}|${s.start}`;
+    if (!s) return { text: MSG_AUTO_BAD_SLOT };
+    const key = `${s.park}|${s.date}|${s.start}`;
     await removeAllowedSlot(env, key, now);
-    note = `${fmt(s.date)} ${s.start.replace(/^0/, '')} ${PARK_NAMES[s.parks[0]]} を対象から外しました(普段の判定に戻ります)`;
+    note = `${fmt(s.date)} ${s.start.replace(/^0/, '')} ${PARK_NAMES[s.park]} を対象から外しました(普段の判定に戻ります)`;
     console.log(`[auto] 対象枠を解除: ${key}`);
   } else {
     const [park, ymd, hhmm] = t.value.split('_');

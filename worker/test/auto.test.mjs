@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import {
   handleAuto, verifyAutoRequest, pruneExclusions, addExcludedSlots, loadExclusions, autoStatus, signAutoData, verifyAutoData,
   buildAutoSettingsReply, handleAutoPostback, slotKeyOf, ALIVE_WITHIN_MS, MSG_AUTO_EXPIRED, MSG_AUTO_BAD_DATE, AUTO_COMMAND_TEXT,
-  MSG_AUTO_BAD_SLOT, START_HOURS, snapStartHHMM, addAllowedSlot, addExcludedDate,
+  MSG_AUTO_BAD_SLOT, START_HOURS, hoursRangeText, addAllowedSlot, addExcludedDate,
 } from '../src/auto.js';
 import { buildPostbackReply } from '../src/index.js';
 import { MSG_AUTO_UNAVAILABLE } from '../src/messages.js';
@@ -410,11 +410,11 @@ test('GET /auto/plans(2026-09-27): A・B の都の予約とテニスベアの予
   assert.deepEqual(buildPlans([], []), { plans: [], failed: [] });
 });
 
-test('対象に追加した枠(2026-10-25): 日時ピッカー(b)→ 公園を選ぶカード(t で切り替え・c で決定。複数可)で追加、カードに一覧と「解除」(u)。除外枠とは両立せず除外日とは両立する。過ぎた枠・範囲外は断る', async () => {
+test('対象に追加した枠(2026-10-25): 日付ピッカー(b)→ 時間帯とコートを選ぶカード(t で切り替え・c で決定。複数可)で追加、カードに一覧と「解除」(u)。除外枠とは両立せず除外日とは両立する。過ぎた枠・範囲外は断る', async () => {
   const env = envOf();
   env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
   assert.deepEqual(START_HOURS, [9, 11, 13, 15, 17, 19]);
-  assert.deepEqual(['14:30', '08:10', '21:00', '11:00', '19:59'].map(snapStartHHMM), ['13:00', '09:00', '19:00', '11:00', '19:00']);
+  assert.deepEqual([[13, 15, 17], [9, 13, 15, 19], [11], [17, 9]].map(hoursRangeText), ['13:00〜19:00', '9:00〜11:00・13:00〜17:00・19:00〜21:00', '11:00〜13:00', '9:00〜11:00・17:00〜19:00']);
 
   const pi = { mode: 'on', active: true, lastCycle: { at: NOW } };
   const r0 = await withPiStatus(pi, () => buildAutoSettingsReply(env, { now: NOW }));
@@ -422,72 +422,79 @@ test('対象に追加した枠(2026-10-25): 日時ピッカー(b)→ 公園を�
   assert.ok(t0.includes('対象に追加した枠'));
   assert.ok(!t0.some((s) => s.includes('ペナルティ期間でも予約する日')), '日単位の旧機能は消えている');
   const pickers = actions(r0.flex.contents).filter((a) => a.type === 'datetimepicker');
-  assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['＋ 追加', 'date'], ['＋ 追加', 'datetime']], '除外日・対象に追加した枠の見出しの右に「＋ 追加」');
+  assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['＋ 追加', 'date'], ['＋ 追加', 'date']], '除外日・対象に追加した枠の見出しの右に「＋ 追加」(どちらも日付ピッカー)');
   const add = pickers[1];
   assert.equal(actions(r0.flex.contents).filter((a) => a.type === 'message' && a.label.includes('更新')).length, 1, 'フッターは「更新」だけ');
   assert.ok(add.data.length <= 300);
   assert.equal((await verifyAutoData(SECRET, add.data, NOW)).kind, 'b');
   assert.match(r0.text, /対象に追加した枠: なし/);
 
-  // 9/16(水) 14:30 を選ぶ → 13:00 の枠に丸めて、公園を選ぶカード(公園ごとの切り替え、kind t。まだ何も選んでいないので「決定」は無い)。KV にはまだ書かない
-  const r1 = await buildPostbackReply(env, add.data, { now: NOW, params: { datetime: '2026-09-16T14:30' } });
+  // 9/16(水) を選ぶ → 時間帯 6 行とコート 3 行のカード(押すと切り替わる、kind t。まだ何も選んでいないので「決定」は無い)。KV にはまだ書かない
+  const r1 = await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-09-16' } });
   const t1 = texts(r1.flex.contents);
-  assert.ok(t1.some((s) => s.includes('9/16(水) 13:00〜15:00')));
+  assert.ok(t1.includes('9/16(水)'));
   assert.ok(t1.some((s) => s.includes('ペナルティ期間')), '+2 日なので警告');
-  const parks = actions(r1.flex.contents).filter((a) => a.type === 'postback');
-  assert.deepEqual(parks.map((a) => a.label), ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'], '「決定」はまだ無い');
-  const v = await verifyAutoData(SECRET, parks[1].data, NOW);
-  assert.deepEqual([v.kind, v.value], ['t', '1050_20260916_1300']);
-  assert.equal(parks[1].displayText, undefined, '切り替えはチャットに何も残さない');
+  const HOURS = ['9:00〜11:00', '11:00〜13:00', '13:00〜15:00', '15:00〜17:00', '17:00〜19:00', '19:00〜21:00'];
+  const PARKS = ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'];
+  const pb = (r) => actions(r.flex.contents).filter((a) => a.type === 'postback');
+  const acts1 = pb(r1);
+  assert.deepEqual(acts1.map((a) => a.label), [...HOURS, ...PARKS], '「決定」はまだ無い');
+  assert.deepEqual(await verifyAutoData(SECRET, acts1[2].data, NOW).then((x) => [x.kind, x.value]), ['t', '0_20260916_13']);
+  assert.equal(acts1[2].displayText, undefined, '切り替えはチャットに何も残さない');
   assert.deepEqual((await loadExclusions(env, NOW)).allowSlots, []);
-  assert.match(r1.text, /9\/16\(水\) 13:00〜15:00/);
+  assert.match(r1.text, /いま選んでいる: なし/);
 
-  // 亀戸を押す → 亀戸が ✓ のカード。もう一度亀戸を押すデータは選択なし(0)、大島を押すデータは 2 つ。「決定(1 コート)」が出る。まだ KV には書かない
-  const r2 = await buildPostbackReply(env, parks[1].data, { now: NOW });
-  assert.ok(texts(r2.flex.contents).includes('決定(1 コート)'));
-  const acts2 = actions(r2.flex.contents).filter((a) => a.type === 'postback');
-  assert.deepEqual(acts2.map((a) => a.label), ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園', '決定']);
-  assert.deepEqual((await Promise.all(acts2.map((a) => verifyAutoData(SECRET, a.data, NOW)))).map((x) => [x.kind, x.value]), [
-    ['t', '1040-1050_20260916_1300'],
-    ['t', '0_20260916_1300'],
-    ['t', '1050-1160_20260916_1300'],
-    ['c', '1050_20260916_1300'],
-  ]);
-  assert.match(r2.text, /いま選んでいる: 亀戸中央公園/);
+  // 13:00 を押す → 13:00 に ✓。コートが無いので「決定」はまだ無い。15:00 のデータは 13-15、亀戸のデータは 1050_…_13
+  const r2 = await buildPostbackReply(env, acts1[2].data, { now: NOW });
+  const acts2 = pb(r2);
+  assert.deepEqual(acts2.map((a) => a.label), [...HOURS, ...PARKS]);
+  assert.ok(texts(r2.flex.contents).includes('時間帯とコートを 1 つ以上ずつ選ぶと「決定」が出ます'));
+  assert.equal((await verifyAutoData(SECRET, acts2[3].data, NOW)).value, '0_20260916_13-15');
+  assert.equal((await verifyAutoData(SECRET, acts2[7].data, NOW)).value, '1050_20260916_13');
+  // 15:00 → 亀戸 → 大島 の順に押す → 「決定(4 枠)」(2 時間帯 × 2 コート)。まだ KV には書かない
+  const r3 = await buildPostbackReply(env, acts2[3].data, { now: NOW });
+  const r4 = await buildPostbackReply(env, pb(r3)[7].data, { now: NOW });
+  assert.ok(texts(r4.flex.contents).includes('決定(2 枠)'));
+  const r5 = await buildPostbackReply(env, pb(r4)[8].data, { now: NOW });
+  assert.ok(texts(r5.flex.contents).includes('決定(4 枠)'));
+  const acts5 = pb(r5);
+  assert.deepEqual(acts5.map((a) => a.label), [...HOURS, ...PARKS, '決定']);
+  const confirm = acts5[9];
+  assert.deepEqual(await verifyAutoData(SECRET, confirm.data, NOW).then((x) => [x.kind, x.value]), ['c', '1050-1160_20260916_13-15']);
+  assert.match(confirm.displayText, /13:00〜15:00・15:00〜17:00 亀戸中央公園・大島小松川公園 を対象に追加/);
+  assert.match(r5.text, /✓13:00〜15:00 ✓15:00〜17:00/);
+  assert.match(r5.text, /いま選んでいる: 4 枠/);
   assert.deepEqual((await loadExclusions(env, NOW)).allowSlots, []);
-  // 大島も押す → 2 つ ✓。亀戸を外すと 1 つに戻る
-  const r3 = await buildPostbackReply(env, acts2[2].data, { now: NOW });
-  assert.ok(texts(r3.flex.contents).includes('決定(2 コート)'));
-  const acts3 = actions(r3.flex.contents).filter((a) => a.type === 'postback');
-  assert.equal((await verifyAutoData(SECRET, acts3[1].data, NOW)).value, '1160_20260916_1300', '亀戸を外すと大島だけ');
-  assert.equal((await verifyAutoData(SECRET, acts3[3].data, NOW)).value, '1050-1160_20260916_1300');
-  assert.match(acts3[3].displayText, /亀戸中央公園・大島小松川公園 を対象に追加/);
-  // 亀戸を外す → 大島だけ(決定 1 コート)。さらに大島も外す → 選択なしで「決定」が消える
-  const r3b = await buildPostbackReply(env, acts3[1].data, { now: NOW });
-  assert.ok(texts(r3b.flex.contents).includes('決定(1 コート)'));
-  const r3c = await buildPostbackReply(env, actions(r3b.flex.contents).filter((a) => a.type === 'postback')[2].data, { now: NOW });
-  assert.ok(!texts(r3c.flex.contents).some((s) => s.startsWith('決定(')));
-  assert.ok(texts(r3c.flex.contents).includes('コートを 1 つ以上選ぶと「決定」が出ます'));
+  // 13:00 をもう一度押すと外れて「決定(2 枠)」。15:00 も外すと時間帯なしで「決定」が消える
+  const r6 = await buildPostbackReply(env, acts5[2].data, { now: NOW });
+  assert.ok(texts(r6.flex.contents).includes('決定(2 枠)'));
+  assert.equal((await verifyAutoData(SECRET, pb(r6)[9].data, NOW)).value, '1050-1160_20260916_15');
+  const r6b = await buildPostbackReply(env, pb(r6)[3].data, { now: NOW });
+  assert.ok(!texts(r6b.flex.contents).some((s) => s.startsWith('決定(')));
 
-  // 「決定」(亀戸・大島)→ KV の allowSlots に 2 枠入り、設定カードに一覧(⚠)と「解除」(u)。heartbeat / state でも返る
-  const r4 = await withPiStatus(pi, () => buildPostbackReply(env, acts3[3].data, { now: NOW }));
-  assert.ok(texts(r4.flex.contents).some((s) => s.includes('9/16(水) 13:00〜15:00 亀戸中央公園・大島小松川公園 を対象に追加しました') && s.includes('ペナルティ 1 点')));
-  const ex4 = await loadExclusions(env, NOW);
-  assert.deepEqual(ex4.allowSlots.map((s) => [slotKeyOf(s), s.end, s.facility]), [['1050|2026-09-16|13:00', '15:00', '亀戸中央公園'], ['1160|2026-09-16|13:00', '15:00', '大島小松川公園']]);
-  assert.ok(texts(r4.flex.contents).some((s) => s === '9/16(水) 13:00 亀戸中央公園'));
-  assert.equal(texts(r4.flex.contents).filter((s) => s === '⚠ 取消にペナルティ').length, 2, 'ペナルティ期間の枠は 2 行目に小さく ⚠');
-  const undoAll = actions(r4.flex.contents).filter((a) => a.type === 'postback' && a.label === '解除');
-  assert.equal(undoAll.length, 2, '除外日・除外枠は無いので「解除」は追加した 2 枠ぶん');
-  assert.deepEqual((await Promise.all(undoAll.map((a) => verifyAutoData(SECRET, a.data, NOW)))).map((x) => [x.kind, x.value]), [['u', '1050_20260916_1300'], ['u', '1160_20260916_1300']]);
-  assert.match(r4.text, /対象に追加した枠: 9\/16\(水\) 13:00 亀戸中央公園、9\/16\(水\) 13:00 大島小松川公園/);
+  // 「決定」(13:00・15:00 × 亀戸・大島)→ KV の allowSlots に 4 枠入り、設定カードに一覧(⚠)と「解除」(u)。heartbeat / state でも返る
+  const r7 = await withPiStatus(pi, () => buildPostbackReply(env, confirm.data, { now: NOW }));
+  assert.ok(texts(r7.flex.contents).some((s) => s.includes('9/16(水) 13:00〜17:00 亀戸中央公園・大島小松川公園 の 4 枠を対象に追加しました') && s.includes('ペナルティ 1 点')));
+  const KEYS4 = ['1050|2026-09-16|13:00', '1050|2026-09-16|15:00', '1160|2026-09-16|13:00', '1160|2026-09-16|15:00'];
+  const ex7 = await loadExclusions(env, NOW);
+  assert.deepEqual(ex7.allowSlots.map(slotKeyOf).sort(), KEYS4);
+  assert.deepEqual(ex7.allowSlots.map((s) => [s.end, s.facility]).sort(), [['15:00', '亀戸中央公園'], ['15:00', '大島小松川公園'], ['17:00', '亀戸中央公園'], ['17:00', '大島小松川公園']]);
+  assert.ok(texts(r7.flex.contents).some((s) => s === '9/16(水) 13:00 亀戸中央公園'));
+  assert.equal(texts(r7.flex.contents).filter((s) => s === '⚠ 取消にペナルティ').length, 4, 'ペナルティ期間の枠は 2 行目に小さく ⚠');
+  const undoAll = actions(r7.flex.contents).filter((a) => a.type === 'postback' && a.label === '解除');
+  assert.equal(undoAll.length, 4, '除外日・除外枠は無いので「解除」は追加した 4 枠ぶん');
+  const undoVals = await Promise.all(undoAll.map((a) => verifyAutoData(SECRET, a.data, NOW)));
+  assert.deepEqual(undoVals.map((x) => x.kind), ['u', 'u', 'u', 'u']);
+  assert.match(r7.text, /対象に追加した枠: 9\/16\(水\) 13:00 亀戸中央公園、/);
   const hb = await handleAuto(signed('POST', '/auto/heartbeat', { active: true }, NOW), env, ctx, { now: NOW });
-  assert.deepEqual((await hb.json()).allowSlots.map(slotKeyOf), ['1050|2026-09-16|13:00', '1160|2026-09-16|13:00']);
+  assert.deepEqual((await hb.json()).allowSlots.map(slotKeyOf).sort(), KEYS4);
   const st = await withPiStatus(pi, () => handleAuto(signed('GET', '/auto/state', undefined, NOW), env, ctx, { now: NOW }));
-  assert.deepEqual((await st.json()).allowSlots.map(slotKeyOf), ['1050|2026-09-16|13:00', '1160|2026-09-16|13:00']);
-  // 大島の「解除」→ 亀戸だけ残る(以降は亀戸 1 枠で続ける)
-  await withPiStatus(pi, () => buildPostbackReply(env, undoAll[1].data, { now: NOW }));
+  assert.deepEqual((await st.json()).allowSlots.map(slotKeyOf).sort(), KEYS4);
+  // 亀戸 13:00 以外の 3 つを「解除」→ 亀戸 13:00 だけ残る(以降はこの 1 枠で続ける)
+  const keep = undoVals.findIndex((x) => x.value === '1050_20260916_1300');
+  for (let k = 0; k < undoAll.length; k++) if (k !== keep) await withPiStatus(pi, () => buildPostbackReply(env, undoAll[k].data, { now: NOW }));
   assert.deepEqual((await loadExclusions(env, NOW)).allowSlots.map(slotKeyOf), ['1050|2026-09-16|13:00']);
-  const undo = undoAll;
+  const undo = [undoAll[keep]];
 
   // 同じ枠がキャンセルで除外枠になったら対象からは外れる。逆に対象に追加したら除外枠からは外れる。除外日とは両立する(その日は除外でも、この枠だけは取る)
   await addExcludedSlots(env, [{ park: '1050', date: '2026-09-16', start: '13:00' }], NOW);
@@ -501,25 +508,32 @@ test('対象に追加した枠(2026-10-25): 日時ピッカー(b)→ 公園を�
   assert.equal((await loadExclusions(env, NOW)).allowSlots.length, 1);
 
   // 「解除」→ 消える
-  const r5 = await withPiStatus(pi, () => buildPostbackReply(env, undo[0].data, { now: NOW }));
-  assert.ok(texts(r5.flex.contents).some((s) => s.includes('9/16(水) 13:00 亀戸中央公園 を対象から外しました')));
+  const r8 = await withPiStatus(pi, () => buildPostbackReply(env, undo[0].data, { now: NOW }));
+  assert.ok(texts(r8.flex.contents).some((s) => s.includes('9/16(水) 13:00 亀戸中央公園 を対象から外しました')));
   assert.deepEqual((await loadExclusions(env, NOW)).allowSlots, []);
 
-  // 断る: 丸めた枠がもう始まっている(今日 9:30 → 9:00 の枠。今は 10:00)・36 日先・日時なし。今日 11:00 は未来なので受け付ける
-  assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: { datetime: '2026-09-14T09:30' } }), { text: MSG_AUTO_BAD_SLOT });
-  assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: { datetime: '2026-10-20T09:00' } }), { text: MSG_AUTO_BAD_SLOT });
+  // 今日(9/14 10:00)を選ぶと、もう始まった 9:00 の行は出ない。36 日先・日なしは断る。今日の枠が全部始まっていれば(20:00)断る
+  const rToday = await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-09-14' } });
+  assert.deepEqual(pb(rToday).map((a) => a.label), [...HOURS.slice(1), ...PARKS]);
+  assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-10-20' } }), { text: MSG_AUTO_BAD_SLOT });
   assert.deepEqual(await buildPostbackReply(env, add.data, { now: NOW, params: null }), { text: MSG_AUTO_BAD_SLOT });
-  assert.match((await buildPostbackReply(env, add.data, { now: NOW, params: { datetime: '2026-09-14T11:00' } })).text, /9\/14\(月\) 11:00〜13:00/);
-  // 公園の切り替え・決定も同じ検査(古いカードから押した: 始まった枠)。知らない公園は落として扱い、残りが無ければ決定できない。期限切れは従来どおり
-  const stale = await signAutoData(SECRET, 't', '1050_20260914_0900', Math.floor(NOW / 1000) + 3600);
-  assert.deepEqual(await buildPostbackReply(env, stale, { now: NOW }), { text: MSG_AUTO_BAD_SLOT });
-  const staleC = await signAutoData(SECRET, 'c', '1050_20260914_0900', Math.floor(NOW / 1000) + 3600);
+  const evening = NOW + 10 * 3600 * 1000; // 9/14 20:00(add.data は 1 時間で切れるので、その時刻の署名で)
+  const addEvening = await signAutoData(SECRET, 'b', '-', Math.floor(evening / 1000) + 3600);
+  assert.deepEqual(await buildPostbackReply(env, addEvening, { now: evening, params: { date: '2026-09-14' } }), { text: MSG_AUTO_BAD_SLOT });
+  // 切り替え・決定も同じ検査(古いカードから押した: 始まった時間帯は落とす)。知らない公園は落として扱い、残りが無ければ決定できない。期限切れは従来どおり
+  const exp1h = Math.floor(NOW / 1000) + 3600;
+  const staleT = await signAutoData(SECRET, 't', '1050_20260914_09-11', exp1h);
+  const rStaleT = await buildPostbackReply(env, staleT, { now: NOW });
+  assert.ok(texts(rStaleT.flex.contents).includes('決定(1 枠)'), '9:00 は落ちて 11:00 × 亀戸の 1 枠');
+  const staleC = await signAutoData(SECRET, 'c', '1050_20260914_09', exp1h);
   assert.deepEqual(await buildPostbackReply(env, staleC, { now: NOW }), { text: MSG_AUTO_BAD_SLOT });
-  const badPark = await signAutoData(SECRET, 'c', '9999_20260916_1300', Math.floor(NOW / 1000) + 3600);
+  const badPark = await signAutoData(SECRET, 'c', '9999_20260916_13', exp1h);
   assert.deepEqual(await buildPostbackReply(env, badPark, { now: NOW }), { text: MSG_AUTO_BAD_SLOT });
-  const none = await signAutoData(SECRET, 'c', '0_20260916_1300', Math.floor(NOW / 1000) + 3600);
+  const none = await signAutoData(SECRET, 'c', '0_20260916_13', exp1h);
   assert.deepEqual(await buildPostbackReply(env, none, { now: NOW }), { text: MSG_AUTO_BAD_SLOT });
-  assert.deepEqual(await buildPostbackReply(env, parks[1].data, { now: NOW + 2 * 3600 * 1000 }), { text: MSG_AUTO_EXPIRED });
+  const badHour = await signAutoData(SECRET, 'c', '1050_20260916_10', exp1h);
+  assert.deepEqual(await buildPostbackReply(env, badHour, { now: NOW }), { text: MSG_AUTO_BAD_SLOT }, '10 時開始の枠は無い');
+  assert.deepEqual(await buildPostbackReply(env, confirm.data, { now: NOW + 2 * 3600 * 1000 }), { text: MSG_AUTO_EXPIRED });
 
   // 開始時刻を過ぎた枠は読むときに落ちる(Worker・lib とも)。古い形(allowDates だけ)の KV でも落ちない
   const raw = { dates: [], slots: [], allowSlots: [{ park: '1040', date: '2026-09-14', start: '09:00', end: '11:00', facility: '猿江恩賜公園' }, { park: '1040', date: '2026-09-14', start: '11:00', end: '13:00', facility: '猿江恩賜公園' }] };

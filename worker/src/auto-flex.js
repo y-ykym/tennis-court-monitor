@@ -31,7 +31,7 @@
 //   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
 //
-//   「対象に追加した枠」の「＋ 追加」で日時を選ぶと、公園を選ぶ小さいカード(buildParkPickFlex)が返り、公園を複数選んで「決定」で確定する
+//   「対象に追加した枠」の「＋ 追加」で日を選ぶと、時間帯とコートを選ぶカード(buildPickFlex)が返り、押して ✓ を付けて「決定」で確定する
 // ============================================================
 
 const COMMAND_TEXT = 'せってい';
@@ -198,8 +198,8 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
   // 対象に追加した枠(2026-10-25)。ペナルティ期間(今日〜+3 日)の枠は普段は自動予約しないが、ここに追加した枠だけは取りに行く。
-  // 「＋ 追加」は日時ピッカー(mode: datetime)。選ぶと params.datetime("YYYY-MM-DDThh:mm")が付いて返り、Worker が公園を選ぶカードを返す
-  const addSlotAction = addSlotData ? { type: 'datetimepicker', label: '＋ 追加', data: addSlotData, mode: 'datetime', initial: `${today}T09:00`, min: `${today}T00:00`, max: `${maxDate}T23:59` } : null;
+  // 「＋ 追加」は日付ピッカー。選ぶと params.date が付いて返り、Worker が時間帯とコートを選ぶカード(buildPickFlex)を返す
+  const addSlotAction = addSlotData ? { type: 'datetimepicker', label: '＋ 追加', data: addSlotData, mode: 'date', initial: today, min: today, max: maxDate } : null;
   body.push(heading('対象に追加した枠', 'ペナルティ期間でも、この枠だけは空きが出たら自動予約する(取消はペナルティ付き)', addSlotAction));
   if (allowSlots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
   allowSlots.slice(0, MAX_ROWS).forEach((s) => {
@@ -255,40 +255,41 @@ export function autoSettingsText({ status, dates, slots, allowSlots = [], today 
   return lines.join('\n');
 }
 
-// ---- 「対象に追加した枠」の「＋ 追加」で日時を選んだあとの、公園を選ぶカード(複数選択。2026-10-25) ----
-// model = { date, start, end, penalty, parks: [{ park, name, selected, data }], confirmData | null }
-//   公園の行は押すたびに選択が切り替わる(postback x|t|…。Worker がこのカードを選択を変えて返す。チャットには何も残さない)。
-//   選んだ行は濃紺に「✓」、選んでいない行は薄い枠。下の「決定」(postback x|c|…)で選んだ公園ぶんの枠をまとめて対象に入れる
-export function buildParkPickFlex({ date, start, end, penalty, parks, confirmData = null }) {
-  const when = `${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`;
-  const n = parks.filter((p) => p.selected).length;
+// ---- 「対象に追加した枠」の「＋ 追加」で日を選んだあとの、時間帯とコートを選ぶカード(複数選択。2026-10-25) ----
+// model = { date, penalty, hours: [{ hour, label, selected, data }](まだ始まっていない枠だけ), parks: [{ park, name, selected, data }], count, confirmData | null }
+//   行は押すたびに選択が切り替わる(postback x|t|…。Worker がこのカードを選択を変えて返す。チャットには何も残さない)。
+//   選んだ行は濃紺に「✓」、選んでいない行は薄い枠。下の「決定」(postback x|c|…)で 時間帯 × コート の枠をまとめて対象に入れる
+const toggleRow = (label, selected, data) => ({
+  type: 'box',
+  layout: 'horizontal',
+  margin: 'sm',
+  alignItems: 'center',
+  backgroundColor: selected ? COLOR_HEADER_BG : '#FFFFFF',
+  borderColor: selected ? COLOR_HEADER_BG : COLOR_LINE,
+  borderWidth: '1px',
+  cornerRadius: 'xl',
+  paddingTop: '8px',
+  paddingBottom: '8px',
+  paddingStart: '16px',
+  paddingEnd: '16px',
+  action: { type: 'postback', label, data },
+  contents: [
+    text(selected ? '✓' : '　', { size: 'sm', weight: 'bold', color: '#FFFFFF', flex: 0 }),
+    text(label, { size: 'sm', weight: 'bold', color: selected ? '#FFFFFF' : COLOR_TEXT, flex: 1, margin: 'md' }),
+  ],
+});
+export function buildPickFlex({ date, penalty, hours, parks, count, confirmData = null }) {
   const body = [
-    text(when, { size: 'lg', weight: 'bold', color: COLOR_TEXT, wrap: true }),
-    text('コートを選んで「決定」を押してください(複数可。もう一度押すと外れます)', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'sm' }),
+    text(fmtDate(date), { size: 'lg', weight: 'bold', color: COLOR_TEXT, wrap: true }),
+    text('時間帯とコートを押して選び(複数可。もう一度押すと外れます)、「決定」を押してください', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'sm' }),
   ];
-  if (penalty) body.push(text('⚠ ペナルティ期間の枠です。取れたあとで取り消すとペナルティ 1 点が付きます', { size: 'xs', color: '#8A4B00', wrap: true, margin: 'md' }));
-  for (const p of parks) {
-    body.push({
-      type: 'box',
-      layout: 'horizontal',
-      margin: 'md',
-      alignItems: 'center',
-      backgroundColor: p.selected ? COLOR_HEADER_BG : '#FFFFFF',
-      borderColor: p.selected ? COLOR_HEADER_BG : COLOR_LINE,
-      borderWidth: '1px',
-      cornerRadius: 'xl',
-      paddingTop: '10px',
-      paddingBottom: '10px',
-      paddingStart: '16px',
-      paddingEnd: '16px',
-      action: { type: 'postback', label: p.name, data: p.data },
-      contents: [
-        text(p.selected ? '✓' : '　', { size: 'sm', weight: 'bold', color: '#FFFFFF', flex: 0 }),
-        text(p.name, { size: 'sm', weight: 'bold', color: p.selected ? '#FFFFFF' : COLOR_TEXT, flex: 1, margin: 'md' }),
-      ],
-    });
-  }
+  if (penalty) body.push(text('⚠ ペナルティ期間の日です。取れたあとで取り消すとペナルティ 1 点が付きます', { size: 'xs', color: '#8A4B00', wrap: true, margin: 'md' }));
+  body.push(text('時間帯', { size: 'xs', weight: 'bold', color: COLOR_SUB, margin: 'lg' }));
+  for (const h of hours) body.push(toggleRow(h.label, h.selected, h.data));
+  body.push(text('コート', { size: 'xs', weight: 'bold', color: COLOR_SUB, margin: 'lg' }));
+  for (const p of parks) body.push(toggleRow(p.name, p.selected, p.data));
   if (confirmData) {
+    const sel = parks.filter((p) => p.selected).map((p) => p.name).join('・');
     body.push({
       type: 'box',
       layout: 'vertical',
@@ -297,16 +298,16 @@ export function buildParkPickFlex({ date, start, end, penalty, parks, confirmDat
       cornerRadius: 'xl',
       paddingTop: '12px',
       paddingBottom: '12px',
-      action: { type: 'postback', label: '決定', data: confirmData, displayText: `${when} ${parks.filter((p) => p.selected).map((p) => p.name).join('・')} を対象に追加` },
-      contents: [text(`決定(${n} コート)`, { size: 'md', weight: 'bold', color: '#FFFFFF', align: 'center' })],
+      action: { type: 'postback', label: '決定', data: confirmData, displayText: `${fmtDate(date)} ${hours.filter((h) => h.selected).map((h) => h.label).join('・')} ${sel} を対象に追加` },
+      contents: [text(`決定(${count} 枠)`, { size: 'md', weight: 'bold', color: '#FFFFFF', align: 'center' })],
     });
   } else {
-    body.push(text('コートを 1 つ以上選ぶと「決定」が出ます', { size: 'xs', color: COLOR_MUTED, wrap: true, margin: 'xl', align: 'center' }));
+    body.push(text('時間帯とコートを 1 つ以上ずつ選ぶと「決定」が出ます', { size: 'xs', color: COLOR_MUTED, wrap: true, margin: 'xl', align: 'center' }));
   }
   body.push(text('やめるときは何も押さずにそのままで大丈夫です(ボタンは 1 時間で時間切れ)', { size: 'xs', color: COLOR_MUTED, wrap: true, margin: 'lg' }));
   return {
     type: 'flex',
-    altText: parkPickText({ date, start, end, penalty, parks }).slice(0, 400),
+    altText: pickText({ date, penalty, hours, parks, count }).slice(0, 400),
     contents: {
       type: 'bubble',
       size: 'kilo',
@@ -315,13 +316,14 @@ export function buildParkPickFlex({ date, start, end, penalty, parks, confirmDat
     },
   };
 }
-export function parkPickText({ date, start, end, penalty, parks }) {
-  const sel = parks.filter((p) => p.selected).map((p) => p.name);
+export function pickText({ date, penalty, hours, parks, count }) {
+  const mark = (x, label) => `${x.selected ? '✓' : '・'}${label}`;
   return [
-    `➕ 対象枠を追加: ${fmtDate(date)} ${fmtTime(start)}〜${fmtTime(end)}`,
-    `コートを選んで「決定」(複数可): ${parks.map((p) => `${p.selected ? '✓' : '・'}${p.name}`).join(' ')}`,
-    `いま選んでいる: ${sel.length ? sel.join('・') : 'なし'}`,
-    ...(penalty ? ['⚠ ペナルティ期間の枠です'] : []),
+    `➕ 対象枠を追加: ${fmtDate(date)}`,
+    `時間帯(複数可): ${hours.map((h) => mark(h, h.label)).join(' ')}`,
+    `コート(複数可): ${parks.map((p) => mark(p, p.name)).join(' ')}`,
+    `いま選んでいる: ${count ? `${count} 枠` : 'なし'}`,
+    ...(penalty ? ['⚠ ペナルティ期間の日です'] : []),
     'このカードのボタンが使えないときは「せってい」からやり直してください',
   ].join('\n');
 }
