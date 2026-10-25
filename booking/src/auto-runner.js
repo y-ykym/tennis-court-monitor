@@ -5,7 +5,7 @@
 //   30 秒未満にはしない。「前回の開始から間隔ぶん後」に次を始め、照会自体が間隔を超えたときは MIN_GAP_MS だけ空けて次を始める):
 //     空き照会(lib/scrape.js。ログイン不要の JSON)→ 監視条件(lib/filter.js)→ 前回との差分 = 新しく出た空き
 //     → Worker に「生きている」合図(heartbeat)を送り、応答で除外日・除外枠を受け取る
-//     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り。ただし「せってい」で選んだ「ペナルティ期間でも予約する日」は対象)、
+//     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り。ただし「せってい」で 1 枠ずつ「対象に追加した枠」は対象)、
 //       利用日ごとに公園→時間帯の優先順に並べる
 //     → 候補を 1 件ずつ予約の行列(booking-queue.js)に入れる。行列は 1 件ずつ実行し、手動(LINE ボタン)を優先する
 //   各候補の実行(行列の中):
@@ -106,7 +106,7 @@ export function createAutoRunner({
   scrape, // async () => Slot[]
   queue, // booking-queue.js
   state, // auto-state.js
-  worker, // { heartbeat(payload) → Promise<{ dates, slots, allowDates? }>, addExcludedSlots(slots) → Promise, tennisbear?(person) → Promise<{ configured, events }>,
+  worker, // { heartbeat(payload) → Promise<{ dates, slots, allowSlots? }>, addExcludedSlots(slots) → Promise, tennisbear?(person) → Promise<{ configured, events }>,
   //         calendarSync?(person) → void(フェーズ11。予約成立の直後に Worker へ同期を頼む。結果は待たない) }
   book, // async (candidate, { credentials, beforeApply }) → reserve() の結果
   credentialsFor, // (person) → { userId, password, label } | null
@@ -123,7 +123,7 @@ export function createAutoRunner({
   const active = mode === 'on';
   let timer = null;
   let running = false;
-  let exclusions = null; // { dates, slots, allowDates, at }(allowDates = ペナルティ期間でも予約する日。2026-10-15)
+  let exclusions = null; // { dates, slots, allowSlots, at }(allowSlots = 「せってい」で対象に追加した枠。2026-10-25。10-15〜10-25 は日単位の allowDates)
   let remoteEnabled = true; // LINE の「じどうおふ」で false(Worker の応答で更新)
   let remoteNotify = true; // LINE の「つうちおふ」で false(予約直前に対象外になった枠の空き通知カードを送らない)
   const effectiveMode = () => (mode === 'on' && !remoteEnabled ? 'paused' : mode);
@@ -174,10 +174,10 @@ export function createAutoRunner({
         log(remoteNotify ? 'LINE の「つうちおん」で空き通知カードを再開します' : 'LINE の「つうちおふ」で空き通知カードを止めます(結果カードは送る)');
       }
       if (res && Array.isArray(res.dates) && Array.isArray(res.slots)) {
-        const allowDates = Array.isArray(res.allowDates) ? res.allowDates : [];
-        const changed = !exclusions || JSON.stringify([res.dates, res.slots.map(slotKey), allowDates]) !== JSON.stringify([exclusions.dates, exclusions.slots.map(slotKey), exclusions.allowDates]);
-        exclusions = { dates: res.dates, slots: res.slots, allowDates, at: now() };
-        if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件、ペナルティ期間でも予約する日 ${allowDates.length} 件`);
+        const allowSlots = Array.isArray(res.allowSlots) ? res.allowSlots : [];
+        const changed = !exclusions || JSON.stringify([res.dates, res.slots.map(slotKey), allowSlots.map(slotKey)]) !== JSON.stringify([exclusions.dates, exclusions.slots.map(slotKey), exclusions.allowSlots.map(slotKey)]);
+        exclusions = { dates: res.dates, slots: res.slots, allowSlots, at: now() };
+        if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件、対象に追加した枠 ${allowSlots.length} 件`);
       }
       return true;
     } catch (e) {
@@ -445,7 +445,7 @@ export function createAutoRunner({
           log(`キャンセルボタンの署名に失敗(ボタン無しで送ります): ${e.message}`);
         }
       }
-      // ペナルティ期間の日(「せってい」で予約する日に選んだ日)の成功カードには、取消にペナルティが付く旨を添える(2026-10-15)
+      // ペナルティ期間の枠(「せってい」で対象に追加した枠)の成功カードには、取消にペナルティが付く旨を添える(2026-10-15。10-25 に枠単位へ)
       const penalty = isPenaltyPeriod(c.date, today);
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData, penalty }), '自動予約の結果カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
