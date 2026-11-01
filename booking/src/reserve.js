@@ -621,10 +621,13 @@ export async function reserve(slot, credentials, options = {}) {
       if (resultId === 'prwea1000.jsp' && afterHuman) {
         return done('abandoned', '人間の操作が完了しないまま終了しました(予約はされていません)', { facility });
       }
-      const reason = lastAlert() || bodyText.slice(0, 200);
+      // 理由は alert > 画面の onload に埋め込まれた errorMsg/showAlert > 本文先頭 の順で採る(本文先頭は非表示モーダルの文言で当てにならない)
+      const embedded = siteErrorMessage(await page.content().catch(() => ''));
+      const reason = lastAlert() || embedded || bodyText.slice(0, 200);
       if (/reCAPTCHA|ロボット|不正なアクセス/i.test(reason)) return done('rejected', `サイトの認証(reCAPTCHA)で申込みが拒否されました: ${reason}`);
       if (/同じ利用日時|複数の予約|既に予約|2件まで/.test(reason)) return done('duplicate', `サイトが申込みを断りました: ${reason}`);
-      if (/空き|予約済|予約あり|他の利用者/.test(reason)) return done('taken', `先に予約された可能性があります: ${reason}`);
+      // 「施設予約に失敗しました」= 確認画面を出してから「予約」を押すまでの間に他の人の予約が成立した(一覧に無いことは上で確認済み)
+      if (/空き|予約済|予約あり|他の利用者|施設予約に失敗/.test(reason)) return done('taken', `先に予約された可能性があります: ${reason}`);
       return done('error', `完了画面に到達しませんでした (${resultId || '不明'}): ${reason}`);
     };
     return await classify(false);
@@ -662,6 +665,21 @@ export async function reserve(slot, credentials, options = {}) {
 }
 
 // 通知・ログ用の枠表記("亀戸中央公園 9/17(木) 15-17時" 相当は呼び出し側で公園名を足す)
+// 画面に埋め込まれたサイト側のエラー文言を読む。
+// サイトは失敗時に同じ画面を再表示し、<body onload="…errorMsg(&quot;文言&quot;, 0)…"> または showAlert(…) で文言を出す
+// (モーダル表示なので page.on('dialog') では拾えない)。本文(innerText)の先頭は全ページ共通の非表示モーダル
+// 「ご利用環境 × 対応ブラウザ …」なので、本文から理由を切り出すと誤る(2026-10-26 / 11-01 に「予約」後の
+// 「エラーが発生しました。(施設予約に失敗しました。)」= 先を越された が error と記録され、無駄にやり直していた)。
+// 戻り値: 文言(HTML エンティティと <BR> を戻したもの)。無ければ ''
+export function siteErrorMessage(html) {
+  const m = String(html || '').match(/(?:errorMsg|showAlert)\((?:&quot;|["'])(.{1,200}?)(?:&quot;|["'])\s*[,)]/);
+  if (!m) return '';
+  return m[1]
+    .replace(/&lt;BR\s*\/?&gt;|<BR\s*\/?>/gi, ' ')
+    .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ').trim();
+}
+
 export function slotLabel(slot) {
   const [, m, d] = slot.date.split('-').map(Number);
   return `${m}/${d} ${slot.startHour}-${Number(slot.startHour) + 2}時`;
