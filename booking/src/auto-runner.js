@@ -1,7 +1,7 @@
 // ============================================================
 // フェーズ3 自動予約の中核(Pi の予約支援サーバーの中で動く。server/server.mjs から起動)
 //
-//   定期的に(AUTO_BOOKING.POLL_INTERVAL_MS と POLL_SCHEDULE。9〜15 時と 18〜翌 1 時は 1 分、1〜7 時は 3 分、7〜9 時と 15〜18 時は 2 分。
+//   定期的に(AUTO_BOOKING.POLL_INTERVAL_MS と POLL_SCHEDULE。9〜15 時と 18〜翌 1 時は 1 分、1〜7 時は 3 分、7〜9 時は 2 分。
 //   30 秒未満にはしない。「前回の開始から間隔ぶん後」に次を始め、照会自体が間隔を超えたときは MIN_GAP_MS だけ空けて次を始める):
 //     空き照会(lib/scrape.js。ログイン不要の JSON)→ 監視条件(lib/filter.js)→ 前回との差分 = 新しく出た空き
 //     → Worker に「生きている」合図(heartbeat)を送り、応答で除外日・除外枠を受け取る
@@ -412,7 +412,8 @@ export function createAutoRunner({
     log(`自動予約 開始: ${describe(c)} 予約者=${creds.label}(${c.person})`);
     let result;
     try {
-      result = await book(c, { credentials: creds, beforeApply });
+      // stillVacant: 直近の照会にこの枠がまだあるか(server.mjs が、やり直しの前に見る。消えていればやり直さず taken。2026-11-01)
+      result = await book(c, { credentials: creds, beforeApply, stillVacant: () => lastTargets.some((s) => slotKey(s) === key) });
     } catch (e) {
       result = { status: 'error', message: e.message };
     }

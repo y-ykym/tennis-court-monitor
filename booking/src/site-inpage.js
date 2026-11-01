@@ -4,10 +4,13 @@
 //
 //   page.evaluate(inPageFlow, { slot, credentials, withList, prefetched }) → { ok: true, applyFields, facility, vacant, skippedWeek, skippedLoginPage, skippedSearch, listHtml? }
 //                                                                          | { ok: false, status: 'auth_error'|'taken'|'error', message }
-//   prefetched(省略可): 先に起こしてあるブラウザで prefetchInPage() が取っておいたもの { loginFields, loginRecaptcha, search: { park, instCd, facility, fields } }。
+//   prefetched(省略可): 先に起こしてあるブラウザで prefetchInPage() が取っておいたもの
+//     { loginFields, loginRecaptcha, search: { park, instCd, facility, fields }, searches: { [park]: 同 } }。
 //     loginFields があればログイン画面(1 往復 3〜4.5 秒)を飛ばしていきなりログインを送る(鍵 loginJKey は 9 分後も有効。2026-10-25 実測)。
-//     search.park が slot.park と同じなら検索(1 往復 4〜5.5 秒)も飛ばす(検索条件はセッションに残り、ログインをまたぐ。別の公園なら検索し直す。
-//     検索時の日付が今日でも先の日付の枠を選べる。2026-10-25 実測)
+//     searches[slot.park](または search.park が slot.park と同じ)があれば検索(1 往復 4〜5.5 秒)も飛ばす(検索時の日付が今日でも
+//     先の日付の枠を選べる。2026-10-25 実測)。検索条件はセッションに残りログインをまたぐが、サーバーは枠選択・確認画面で
+//     「セッションの最後の検索」を見ていない: 先取りを 1160 → 1040 の順にした後、1160 の hidden で検索を飛ばして
+//     大島小松川の確認画面に到達した(2026-11-01 実測)。なので 3 公園分を先取りしてどれでも飛ばせる
 //   slot.vacant / slot.tzoneNo(省略可): 空き照会で分かっている面数と時間帯番号。両方あれば週データ JSON(1 往復 約 10 秒)を取らず、
 //     その値で枠を選ぶ(フェーズ3 の自動予約。2026-10-25)。無ければ従来どおり週データで空きを確かめてから選ぶ(LINE の「よやく」)。
 //     **ただし現在は使っていない(server.mjs は vacant を渡さない)**。実測(2026-10-25)で、サーバーは枠選択 Ajax でも確認画面でも
@@ -97,15 +100,18 @@ export async function inPageFlow({ slot, credentials, withList = false, prefetch
     }
     if (!home.body.includes('gRsvWTransUserAttestationEndAction);')) return fail('error', `ログイン後の画面が想定外です (${pageId(home.body) || '不明'})`);
 
-    // 3. 空き検索(週表示画面。hidden 一式を控える)。同じ公園を先に検索してあれば飛ばす(検索条件はセッションに残っている)
+    // 3. 空き検索(週表示画面。hidden 一式を控える)。同じ公園を先に検索してあれば飛ばす(枠選択・確認画面に要るのは hidden 一式だけ。2026-11-01 実測)
     let instCd;
     let facility;
     let weekFields;
-    const skippedSearch = !!(prefetched && prefetched.search && prefetched.search.park === slot.park && prefetched.search.instCd && prefetched.search.fields);
+    const preSearch =
+      (prefetched && prefetched.searches && prefetched.searches[slot.park]) ||
+      (prefetched && prefetched.search && prefetched.search.park === slot.park ? prefetched.search : null);
+    const skippedSearch = !!(preSearch && preSearch.instCd && preSearch.fields);
     if (skippedSearch) {
-      instCd = prefetched.search.instCd;
-      facility = prefetched.search.facility || slot.park;
-      weekFields = prefetched.search.fields;
+      instCd = preSearch.instCd;
+      facility = preSearch.facility || slot.park;
+      weekFields = preSearch.fields;
     } else {
       const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
         displayNo: 'pawab2000',
@@ -238,13 +244,17 @@ export function submitApplyForm(fields) {
 }
 
 // 先に起こしてあるブラウザの中で、予約の手続きの最初の 2 往復を前もって済ませておく(src/browser-warmer.js が 8 分おきに呼ぶ。2026-10-25)。
-//   page.evaluate(prefetchInPage, { park, date }) → { ok, loginFields, loginRecaptcha, search: { park, instCd, facility, fields, date } | null, message }
-//   - 検索(park が空なら行わない): 検索条件がセッションに載り、ログインをまたいで残る。date は今日でよい(先の日付の枠も選べる)
+//   page.evaluate(prefetchInPage, { park, parks, date })
+//     → { ok, loginFields, loginRecaptcha, search: { park, instCd, facility, fields, date } | null, searches: { [park]: 同 }, message }
+//   - 検索(park も parks も空なら行わない): parks(複数)は順に検索して searches に公園ごとに入れる。search は最後に取れたもの
+//     (2026-11-01。サーバーは枠選択・確認画面で「セッションの最後の検索」を見ないので、どの公園の分でも検索を飛ばせる)。
+//     date は今日でよい(先の日付の枠も選べる)
 //   - ログイン画面: loginJKey を含む hidden 一式。9 分後も有効
 //   順番は 検索 → ログイン画面(実測した順)。ログインはしない。ブラウザで実行されるので自己完結
-export async function prefetchInPage({ park = null, date }) {
+export async function prefetchInPage({ park = null, parks = null, date }) {
   const dec = new TextDecoder('shift_jis');
-  const out = { ok: false, loginFields: null, loginRecaptcha: false, search: null, message: '' };
+  const out = { ok: false, loginFields: null, loginRecaptcha: false, search: null, searches: {}, message: '' };
+  const parkList = (Array.isArray(parks) && parks.length ? parks : park ? [park] : []).map((p) => String(p || '').trim()).filter(Boolean);
   async function req(path, form) {
     const res = await fetch(path, {
       method: 'POST',
@@ -271,7 +281,7 @@ export async function prefetchInPage({ park = null, date }) {
     return o;
   }
   try {
-    if (park) {
+    for (const p of parkList) {
       const week = await req('/web/rsvWOpeInstSrchVacantAction.do', {
         displayNo: 'pawab2000',
         daystarthome: date,
@@ -279,17 +289,18 @@ export async function prefetchInPage({ park = null, date }) {
         selectPpsClPpscd: '1000_1030',
         selectPpsClsCd: '1000',
         selectPpsCd: '1030',
-        selectAreaBcd: park,
+        selectAreaBcd: p,
         selectBldCd: '',
         selectIcd: '0',
         dayofweekClearFlg: '1',
         timezoneClearFlg: '1',
       });
       const instCd = hiddenValue(week.body, 'selectInstCd');
-      if (pageId(week.body) === 'prwrc2000.jsp' && hiddenValue(week.body, 'selectBldCd') === park && instCd) {
-        out.search = { park, instCd, facility: decodeEntities(hiddenValue(week.body, 'selectBldName') || '') || park, fields: hiddenFields(week.body), date };
+      if (pageId(week.body) === 'prwrc2000.jsp' && hiddenValue(week.body, 'selectBldCd') === p && instCd) {
+        out.search = { park: p, instCd, facility: decodeEntities(hiddenValue(week.body, 'selectBldName') || '') || p, fields: hiddenFields(week.body), date };
+        out.searches[p] = out.search;
       } else {
-        out.message += `検索結果画面が想定外 (${pageId(week.body) || '不明'}, 公園=${hiddenValue(week.body, 'selectBldCd')}) `;
+        out.message += `検索結果画面が想定外 (公園 ${p}: ${pageId(week.body) || '不明'}, 公園=${hiddenValue(week.body, 'selectBldCd')}) `;
       }
     }
     const loginPage = await req('/web/rsvWTransUserLoginAction.do', { displayNo: 'pawab2000', displayNoFrm: 'pawab2000' });

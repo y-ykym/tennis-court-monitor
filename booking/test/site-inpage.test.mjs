@@ -173,3 +173,34 @@ test('prefetchInPage: 公園が無ければログイン画面だけ。ログイ�
   assert.match(r.message, /ログイン画面が想定外/);
   assert.ok(r.search, '検索の方は取れている');
 });
+
+test('prefetchInPage: 複数の公園を順に検索して searches に公園ごとに入れる(search は最後の公園)。先取りした公園ならどれでも検索を飛ばせる(2026-11-01)', async () => {
+  const weekFor = (form) => (form.selectAreaBcd === '1040' ? WEEK_PAGE.replaceAll(PARK.code, '1040').replaceAll(PARK.name, 'SARUE') : WEEK_PAGE);
+  let calls = fakeFetch(defaultRespond({ '/web/rsvWOpeInstSrchVacantAction.do': weekFor }));
+  const pre = await prefetchInPage({ parks: [PARK.code, '1040'], date: '2026-10-25' });
+  assert.equal(pre.ok, true, pre.message);
+  assert.deepEqual(paths(calls), ['rsvWOpeInstSrchVacantAction', 'rsvWOpeInstSrchVacantAction', 'rsvWTransUserLoginAction']);
+  assert.deepEqual(calls.slice(0, 2).map((c) => c.form.selectAreaBcd), [PARK.code, '1040']);
+  assert.deepEqual(Object.keys(pre.searches).sort(), ['1040', PARK.code].sort());
+  assert.equal(pre.search.park, '1040', 'search は最後に取れた公園(従来の使い方との互換)');
+  assert.equal(pre.searches[PARK.code].fields.selectBldCd, PARK.code);
+  // 最後の検索が 1040 でも、先取りした PARK の分で検索を飛ばして枠選択へ
+  calls = fakeFetch(defaultRespond());
+  const r = await inPageFlow({ slot, credentials: creds, prefetched: { loginFields: LOGIN_FIELDS, loginRecaptcha: false, searches: pre.searches } });
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.skippedSearch, true);
+  assert.ok(!paths(calls).includes('rsvWOpeInstSrchVacantAction'));
+  assert.equal(r.applyFields.selectBldCd, PARK.code);
+  // 先取りに無い公園なら検索する
+  calls = fakeFetch(defaultRespond({ '/web/rsvWOpeInstSrchVacantAction.do': () => WEEK_PAGE.replaceAll(PARK.code, '1160') }));
+  const r2 = await inPageFlow({ slot: { ...slot, park: '1160' }, credentials: creds, prefetched: { loginFields: LOGIN_FIELDS, searches: pre.searches } });
+  assert.equal(r2.ok, true, r2.message);
+  assert.equal(r2.skippedSearch, false);
+  assert.ok(paths(calls).includes('rsvWOpeInstSrchVacantAction'));
+  // 1 公園だけ取れなかったときは、その公園だけ無い(ok は維持)
+  calls = fakeFetch(defaultRespond({ '/web/rsvWOpeInstSrchVacantAction.do': (form) => (form.selectAreaBcd === '1040' ? '<!-- pawfa1000.jsp --><html>error</html>' : undefined) }));
+  const pre2 = await prefetchInPage({ parks: [PARK.code, '1040'], date: '2026-10-25' });
+  assert.equal(pre2.ok, true);
+  assert.deepEqual(Object.keys(pre2.searches), [PARK.code]);
+  assert.match(pre2.message, /公園 1040/);
+});

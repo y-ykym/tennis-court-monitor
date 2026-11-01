@@ -28,7 +28,8 @@
 //   LOG_DIR                 サーバーのログを日付ごとに残す場所(例 /var/lib/booking/logs。無ければ docker logs だけ)
 //   NIGHT_HOLD=0            夜間(0:00〜8:00)の自動予約の成立カードを 8:00 にまとめて送る(src/morning-digest.js。既定 on)のをやめる
 //   DEBUG_DIR               失敗時のスクリーンショットと HTML の置き場(既定 /tmp/debug-out。volume に置くと作り直しても残る。7 日で削除)
-//   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード(既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う)
+//   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード。カンマ区切りで複数可(例 1160,1050,1040。2026-11-01 から)。
+//                           既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
 //   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)。WORKER_URL は自動予約の合図の宛先にも使う
@@ -108,7 +109,7 @@ function pruneDebugDir() {
   }
 }
 // 先に起こしたブラウザで、ログイン画面(鍵 loginJKey)と、最も出やすい公園の検索を前もって済ませておく(各 3〜5.5 秒の短縮。2026-10-25)
-const WARM_PRESEARCH_PARK = (process.env.WARM_PRESEARCH_PARK ?? '1040').trim() || null;
+const WARM_PRESEARCH_PARKS = (process.env.WARM_PRESEARCH_PARK ?? '1040').split(',').map((s) => s.trim()).filter(Boolean);
 // 結果を LINE に push する(両方あるとき)
 const LINE = { token: process.env.LINE_CHANNEL_ACCESS_TOKEN || '', to: process.env.LINE_USER_ID || '' };
 // LINE のカードに載せる、外(スマホ)から届く URL。玄関の Worker(固定 URL)を使う
@@ -189,7 +190,7 @@ const warmer = BROWSER_WARM
   ? createBrowserWarmer({
       launch: () => launchBrowserForReserve(launchOptions(), (m) => log(`  [warm] ${m}`)),
       topUrl: 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp',
-      prefetch: (b) => b.page.evaluate(prefetchInPage, { park: WARM_PRESEARCH_PARK, date: jstTodayIso() }),
+      prefetch: (b) => b.page.evaluate(prefetchInPage, { parks: WARM_PRESEARCH_PARKS, date: jstTodayIso() }),
       log: (m) => log(`[warm] ${m}`),
     })
   : null;
@@ -205,6 +206,10 @@ async function acquireWarmBrowser() {
 
 // 予約フロー本体(行列の中で呼ばれる)。extra は reserve() への追加オプション(自動予約の reservationList / beforeApply)
 async function runReserve(s, extra = {}) {
+  // stillVacant(自動予約のみ): 直近の空き照会にその枠がまだあれば true。false ならやり直し(高速経路 2 回目・UI 操作)を省いて taken で終える
+  // (2026-10-26 16:24: 高速経路 2 回が都サイトの一時エラーで失敗 → UI 操作のやり直し 90 秒の間に照会は「枠が消えた」を見ていた)
+  const { stillVacant, ...extraOptions } = extra;
+  const goneNow = () => typeof stillVacant === 'function' && stillVacant() === false;
   const { token, payload } = s;
   const creds = credentialsFor(payload.person);
   s.status = 'starting';
@@ -253,7 +258,7 @@ async function runReserve(s, extra = {}) {
     onChallenge: handoff,
     debugDir: DEBUG_DIR, // 失敗時のスクリーンショットと HTML(個人情報を含む。Pi の外に出さない)
     log: (m) => log(`  ${m}`),
-    ...extra,
+    ...extraOptions,
   };
   let result;
   try {
@@ -275,19 +280,30 @@ async function runReserve(s, extra = {}) {
       const firstError = result.message;
       const firstMs = result.elapsedMs;
       const firstApplySent = !!result.diag?.applySent;
-      log(`  高速経路の結果が error のため、高速経路でもう一度: ${result.message}`);
-      s.message = 'もう一度確かめています(高速経路)…';
-      const warm2 = await acquireWarmBrowser();
-      result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true, warm: warm2 });
-      result.diag = { ...(result.diag || {}), path: 'fast2', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
-      if (result.status === 'error' && !firstApplySent && !result.diag?.applySent) {
-        const secondError = result.message;
-        const secondMs = result.elapsedMs;
-        log(`  高速経路が 2 回とも error のためブラウザ方式でやり直し: ${result.message}`);
-        s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
-        const warm3 = await acquireWarmBrowser();
-        result = await reserve(slot, credentials, { ...browserOptions, warm: warm3 });
-        result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm3, elapsedMs: result.elapsedMs, firstError, firstMs, secondError, secondMs };
+      const goneMessage = 'その枠は空きではありませんでした(やり直す前の照会で消えていた)';
+      if (goneNow()) {
+        log(`  高速経路の結果が error だが、その後の空き照会で枠が消えているためやり直しません: ${result.message}`);
+        result = { status: 'taken', message: goneMessage, elapsedMs: result.elapsedMs, diag: { ...(result.diag || {}), firstError, firstMs, skippedRetry: 'gone' } };
+      } else {
+        log(`  高速経路の結果が error のため、高速経路でもう一度: ${result.message}`);
+        s.message = 'もう一度確かめています(高速経路)…';
+        const warm2 = await acquireWarmBrowser();
+        result = await reserve(slot, credentials, { ...browserOptions, fastInPage: true, warm: warm2 });
+        result.diag = { ...(result.diag || {}), path: 'fast2', warm: !!warm2, elapsedMs: result.elapsedMs, firstError, firstMs };
+        if (result.status === 'error' && !firstApplySent && !result.diag?.applySent) {
+          const secondError = result.message;
+          const secondMs = result.elapsedMs;
+          if (goneNow()) {
+            log(`  高速経路が 2 回とも error だが、その後の空き照会で枠が消えているため UI 操作ではやり直しません: ${result.message}`);
+            result = { status: 'taken', message: goneMessage, elapsedMs: result.elapsedMs, diag: { ...(result.diag || {}), secondError, secondMs, skippedRetry: 'gone' } };
+          } else {
+            log(`  高速経路が 2 回とも error のためブラウザ方式でやり直し: ${result.message}`);
+            s.message = 'ブラウザでログインして枠を選んでいます(やり直し)…';
+            const warm3 = await acquireWarmBrowser();
+            result = await reserve(slot, credentials, { ...browserOptions, warm: warm3 });
+            result.diag = { ...(result.diag || {}), path: 'ui', warm: !!warm3, elapsedMs: result.elapsedMs, firstError, firstMs, secondError, secondMs };
+          }
+        }
       }
     }
   } catch (e) {
@@ -363,14 +379,14 @@ if (AUTO_MODE !== 'off') {
         return c.userId && c.password ? c : null;
       },
       // 候補 1 件の予約実行(行列の中で呼ばれる)。手動と同じセッション扱いにして、reCAPTCHA v2 の /vnc も同じ仕組みで動くようにする
-      book: async (c, { beforeApply }) => {
+      book: async (c, { beforeApply, stillVacant }) => {
         // 空き照会の面数(c.count)を vacant として渡せば高速経路は週データの再確認(約 10 秒)を飛ばせるが、渡さない(2026-10-25 の実測):
         // サーバーは枠選択 Ajax でも確認画面でも空きを検証せず(送った akiNum が 1 以上なら空きでないセルでも選べて確認画面に到達した)、
         // 空きの検証は最後の「予約」送信だけ。飛ばすと先に取られていた回に「予約」まで押しに行くことになり、その応答は未確認のため
         const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour) };
         const token = sign(payload, SECRET);
         const s = newSession(token, payload, 'auto');
-        return runReserve(s, { reservationList: true, beforeApply });
+        return runReserve(s, { reservationList: true, beforeApply, stillVacant });
       },
       notify: async (message, what) => {
         if (!LINE.token || !LINE.to) return false;

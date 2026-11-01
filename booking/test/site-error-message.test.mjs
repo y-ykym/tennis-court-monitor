@@ -29,3 +29,8 @@ test('taken の判定: 「施設予約に失敗しました」は先を越され
   assert.match(reason, /空き|予約済|予約あり|他の利用者|施設予約に失敗/);
   assert.doesNotMatch(reason, /同じ利用日時|複数の予約|既に予約|2件まで/);
 });
+
+test('通常の確認画面にある空の errorMsg(&quot;&quot;, 0) は空文字(後ろの文字列を巻き込まない。2026-11-01 の実機で確認)', () => {
+  const html = '<body onload="javascript:msgHide();javascript:errorMsg(&quot;&quot;, 0);startInitTimer();"><div onclick="showConfirm(&quot;x&quot;, 0)"></div>';
+  assert.equal(siteErrorMessage(html), '');
+});

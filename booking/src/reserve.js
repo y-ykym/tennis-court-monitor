@@ -672,8 +672,9 @@ export async function reserve(slot, credentials, options = {}) {
 // 「エラーが発生しました。(施設予約に失敗しました。)」= 先を越された が error と記録され、無駄にやり直していた)。
 // 戻り値: 文言(HTML エンティティと <BR> を戻したもの)。無ければ ''
 export function siteErrorMessage(html) {
-  const m = String(html || '').match(/(?:errorMsg|showAlert)\((?:&quot;|["'])(.{1,200}?)(?:&quot;|["'])\s*[,)]/);
-  if (!m) return '';
+  // 文言の中に引用符は入らない前提で、引用符を含まない範囲だけを取る(通常の確認画面は errorMsg(&quot;&quot;, 0) と空なので '' になる)
+  const m = String(html || '').match(/(?:errorMsg|showAlert)\((?:&quot;|["'])((?:(?!&quot;)[^"'\n]){0,200})(?:&quot;|["'])\s*[,)]/);
+  if (!m || !m[1].trim()) return '';
   return m[1]
     .replace(/&lt;BR\s*\/?&gt;|<BR\s*\/?>/gi, ' ')
     .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')

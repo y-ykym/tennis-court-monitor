@@ -82,7 +82,7 @@ export function createBrowserWarmer({
       }
     }
   }
-  const prefetchSummary = (b) => (b.prefetched ? `、先取り: ログイン画面${b.prefetched.loginFields ? 'あり' : 'なし'}・検索${b.prefetched.search ? b.prefetched.search.park : 'なし'}` : '');
+  const prefetchSummary = (b) => (b.prefetched ? `、先取り: ログイン画面${b.prefetched.loginFields ? 'あり' : 'なし'}・検索${Object.keys(b.prefetched.searches || {}).join('/') || (b.prefetched.search ? b.prefetched.search.park : 'なし')}` : '');
 
   async function discard(b, why) {
     if (!b) return;

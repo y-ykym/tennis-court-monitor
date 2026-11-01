@@ -465,8 +465,8 @@ test('照会間隔(JST): 9〜15 時・18〜翌 1 時は 1 分、1〜7 時は 3 �
   assert.equal(pollIntervalAt(jst('2026-09-15', '08:59'), 60_000), 120_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '09:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '14:59'), 60_000), 60_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '15:00'), 60_000), 120_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '17:59'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '15:00'), 60_000), 60_000); // 2026-11-01 に 15〜18 時を 2 分 → 1 分
+  assert.equal(pollIntervalAt(jst('2026-09-15', '17:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '18:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '21:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '22:00'), 60_000), 60_000);
@@ -952,4 +952,29 @@ test('対象に追加した枠(2026-10-25): 平日の監視対象外の枠(大�
   assert.equal((await h3.runner.tick()).planned, 1, '既知だが追加枠なので新しい空きとして予約する');
   await flush();
   assert.deepEqual(h3.bookings, ['2026-09-15 1040 19 B']);
+});
+
+test('stillVacant(2026-11-01): book に渡す関数は、直近の照会にその枠がまだあれば true、消えていれば false。照会が失敗した回は直前の結果のまま', async () => {
+  let probe = null;
+  const h = harness({ book: async (c, { stillVacant }) => { probe = stillVacant; return { status: 'taken', message: 'x' }; } });
+  await h.runner.tick(); // 初回(既知の登録)
+  h.advance(60_000);
+  const ooshima = slot('大島小松川公園', '2026-09-27', '09:00-11:00'); // 日 → A
+  h.setSlots([ooshima]);
+  assert.equal((await h.runner.tick()).planned, 1);
+  await flush();
+  assert.equal(typeof probe, 'function');
+  assert.equal(probe(), true, '直近の照会にある');
+  h.advance(60_000);
+  h.setSlots([]);
+  await h.runner.tick();
+  assert.equal(probe(), false, '照会で消えた');
+  h.advance(60_000);
+  h.setSlots([ooshima]);
+  await h.runner.tick();
+  assert.equal(probe(), true, 'また見えたら true(taken の枠は再投入されないが判定は照会どおり)');
+  h.advance(60_000);
+  h.setSlots(new Error('offline'));
+  await h.runner.tick().catch(() => {});
+  assert.equal(probe(), true, '照会の失敗では「消えた」と判断しない');
 });
