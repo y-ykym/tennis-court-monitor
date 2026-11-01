@@ -469,12 +469,15 @@ test('照会間隔(JST): 9〜15 時・18〜翌 1 時は 1 分、1〜7 時は 3 �
   assert.equal(pollIntervalAt(jst('2026-09-15', '08:59'), 60_000), 120_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '09:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '14:59'), 60_000), 60_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '15:00'), 60_000), 60_000); // 2026-11-01 に 15〜18 時を 2 分 → 1 分
-  assert.equal(pollIntervalAt(jst('2026-09-15', '17:59'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '15:00'), 60_000), 120_000); // 2026-11-01: 一度 1 分にしたが、枠が長持ちする時間帯なので 2 分に戻した
+  assert.equal(pollIntervalAt(jst('2026-09-15', '17:59'), 60_000), 120_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '21:59'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '22:00'), 60_000), 30_000); // 2026-11-01: 主戦場の 22〜24 時は 30 秒(下限)
+  assert.equal(pollIntervalAt(jst('2026-09-15', '23:59'), 60_000), 30_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '18:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '21:59'), 60_000), 60_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '22:00'), 60_000), 60_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '23:59'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '22:00'), 60_000), 30_000); // 2026-11-01 に 22〜24 時は 30 秒
+  assert.equal(pollIntervalAt(jst('2026-09-15', '23:59'), 60_000), 30_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, []), 60_000, '設定が無ければ常に同じ');
 });
 
