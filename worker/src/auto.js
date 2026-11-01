@@ -279,13 +279,15 @@ export async function setNotifySwitch(env, enabled, now = Date.now()) {
 }
 
 // ---- Pi の生存(KV ではなく、登録済みの URL 越しに Pi の /auto/status を聞く) ----
-// 戻り値: { registered, reachable, alive, active, mode, lastSeenAt, startedAt, reason }
+// 戻り値: { registered, reachable, alive, active, mode, lastSeenAt, startedAt, consecutiveFailures, warm, reason }
 //   registered  Pi の URL 登録があるか(無ければ Pi・Docker・回線のどれかが止まっている)
 //   reachable   /auto/status が応答したか
 //   alive       reachable かつ照会ループが動いている(mode が on/dry-run で、最後の照会が ALIVE_WITHIN_MS 以内)
 //   active      alive かつ mode='on'(このときだけ Actions は対象期間の枠を通知しない)
+//   consecutiveFailures  空き照会の連続失敗回数(Pi の auto-check.sh が ⚠ を出すのと同じ値。毎時の監視が見る)
+//   warm        先に起こしてあるブラウザの状態 { state, failures }(同上)
 export async function autoStatus(env, now = Date.now(), { attempts = PROBE_ATTEMPTS, retryMs = PROBE_RETRY_MS } = {}) {
-  const base = { registered: false, reachable: false, alive: false, active: false, mode: null, lastSeenAt: null, startedAt: null, reason: '' };
+  const base = { registered: false, reachable: false, alive: false, active: false, mode: null, lastSeenAt: null, startedAt: null, consecutiveFailures: null, warm: null, reason: '' };
   const registered = await env.BOOKING_KV.get(KV_URL_KEY);
   if (!registered) return { ...base, reason: 'Pi からの URL 登録がありません' };
   let reason = '';
@@ -300,7 +302,18 @@ export async function autoStatus(env, now = Date.now(), { attempts = PROBE_ATTEM
         const lastSeenAt = typeof st.lastCycle?.at === 'number' ? st.lastCycle.at : null;
         const looping = mode === 'on' || mode === 'dry-run' || mode === 'paused';
         const alive = looping && lastSeenAt != null && now - lastSeenAt <= ALIVE_WITHIN_MS;
-        return { registered: true, reachable: true, alive, active: alive && mode === 'on', mode, lastSeenAt, startedAt: typeof st.startedAt === 'number' ? st.startedAt : null, reason: '' };
+        return {
+          registered: true,
+          reachable: true,
+          alive,
+          active: alive && mode === 'on',
+          mode,
+          lastSeenAt,
+          startedAt: typeof st.startedAt === 'number' ? st.startedAt : null,
+          consecutiveFailures: typeof st.consecutiveFailures === 'number' ? st.consecutiveFailures : null,
+          warm: st.warm && typeof st.warm === 'object' ? { state: st.warm.state ?? null, failures: typeof st.warm.failures === 'number' ? st.warm.failures : 0 } : null,
+          reason: '',
+        };
       }
     } catch (e) {
       reason = e.name === 'TimeoutError' ? 'タイムアウト' : e.message;

@@ -229,7 +229,7 @@ docker compose ps                                                      # 3 サ�
   ```
   pi-check.sh はサーバーの土台(ディスク・コンテナ・Tunnel・Worker 登録)だけを見る。作り直した booking コンテナの中で
   自動予約の照会が回り直したかは auto-check.sh でしか分からない(2026-10-01 の月次で気づいた)。
-  毎月 1 日 9:00 には LINE に点検のお知らせ(先月の LINE 通数と `./auto-check.sh`)が届く
+  `auto-check.sh` の判定材料(照会ループ・空き照会の連続失敗・ブラウザの起動)と LINE の通数は Worker が毎時見て、異常のときだけ LINE に ⚠️ を出す(`worker/src/monitor.js`。2026-11-01 まで毎月 1 日に手で確認するお知らせを送っていたのをやめた)
   自動更新の様子: `./pi-check.sh` の「OS の更新」欄 / `sudo unattended-upgrade --dry-run --debug`(何が対象か) / `less /var/log/unattended-upgrades/unattended-upgrades.log`
 - **状態確認**: `docker compose ps` / `docker compose logs -f booking` / `./pi-check.sh`
 - **止める**: `docker compose down`(Worker の登録は 5 分で消え、ボタンは「繋がりません」を案内)

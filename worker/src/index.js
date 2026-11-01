@@ -12,7 +12,7 @@
 //                                         日付・時刻・公園を照合 → 取消 POST(1回だけ)→ 結果を reply
 //   空き通知の「<呼び名>で予約」(postback, data='book|<署名トークン>') → 自宅 PC の /book を叩いて予約フローを開始
 //                                         → 「受け付けました」を reply(ブラウザは開かない。結果は PC が LINE にカードで push)
-//   Cron(1 時間ごと)                    → 自宅 PC の生存確認。止まっていたら LINE に 1 回知らせ、復帰も知らせる(src/monitor.js)
+//   Cron(1 時間ごと)                    → 自宅 PC の生存確認 + 自動予約が働いているか + LINE の通数。異常のときだけ LINE に 1 回知らせ、復帰も知らせる(src/monitor.js)
 //   Cron(毎月 1 日 9:00 JST)             → 手動メンテ(ブラウザのイメージ再ビルド)のお知らせを LINE に
 //   Cron(毎日 9:00 と 23:35 JST)         → 今日 23:59 までにキャンセルしないとペナルティ対象になる予約を
 //                                         キャンセルボタン付きのカードで知らせる(フェーズ4。src/penalty-alert.js)
@@ -70,7 +70,7 @@ import { buildReservationFlex, buildCancelConfirmFlex, buildCancelResultFlex, is
 import { signCancelToken, verifyCancelToken, penaltyApplies } from './cancel-token.js';
 import { attachWeather } from './weather.js';
 import { handleBooking, startBooking, BOOK_POSTBACK_PREFIX, MSG_BOOK, bookSlotText } from './booking.js';
-import { runMonitor, sendMaintenanceReminder, MAINTENANCE_CRON } from './monitor.js';
+import { runMonitor } from './monitor.js';
 import { handleAuto, addExcludedSlots, buildAutoSettingsReply, handleAutoPostback, handleAutoSwitchCommand, handleNotifySwitchCommand, AUTO_COMMAND_TEXT, AUTO_ON_TEXT, AUTO_OFF_TEXT, NOTIFY_ON_TEXT, NOTIFY_OFF_TEXT, AUTO_POSTBACK_PREFIX } from './auto.js';
 import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DEFAULT_PENALTY_DAYS } from './penalty-alert.js';
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
@@ -150,10 +150,6 @@ export default {
   async scheduled(event, env, ctx) {
     if (!env.BOOKING_KV || !env.LINE_CHANNEL_ACCESS_TOKEN || !env.LINE_GROUP_ID) {
       console.error('[monitor] BOOKING_KV / LINE_CHANNEL_ACCESS_TOKEN / LINE_GROUP_ID が未設定です');
-      return;
-    }
-    if (event.cron === MAINTENANCE_CRON) {
-      ctx.waitUntil(sendMaintenanceReminder(env).catch((e) => console.error(`[monitor] お知らせの送信に失敗: ${e.message}`)));
       return;
     }
     // フェーズ10: テニスベアの新着イベント(月・木 20:00)。A・B の予定と重なる・隣接するものは除いて push

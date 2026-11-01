@@ -6,9 +6,12 @@
 //             (2) あれば、その URL の /warmup がトンネル越しに応答するか(トンネルが死んでいないか)。
 //                 トンネルの数秒〜10 秒の切断や、コンテナの作り直し(20〜30 秒)で鳴らさないよう、20 秒おきに 4 回(約 1 分幅)試して
 //                 全部ダメなら失敗とする(2026-09-13 21:00 の初回は 10 秒幅でデプロイの瞬間に当たり誤報した)
+//             (3) 応答すれば、/auto/status で自動予約が働いているか(照会ループ・空き照会の連続失敗・ブラウザの起動。autoIssue())
+//             (4) LINE の今月の通数(無料枠 200 通に迫っていないか。fetchLineQuotaUsage())
+//             (3)(4) は 2026-11-01 まで毎月 1 日の LINE のお知らせで本人に手で確認してもらっていたもの。異常のときだけ知らせる形に置き換えた
 //   知らせ方: 失敗したら LINE グループに 1 回だけ「止まっています」を push(1 時間間隔なので初回で知らせる)。
 //             復帰したら「復帰しました」を 1 回 push。連続失敗中に毎回鳴らさない
-//   状態:     KV の monitor_state に { fails, alerted, since, autoAlerted, pending } を保存(Worker は毎回まっさらで起きるため)
+//   状態:     KV の monitor_state に { fails, alerted, since, autoAlerted, quotaWarnedMonth, pending } を保存(Worker は毎回まっさらで起きるため)
 //   順番:     **状態を保存してから送る**。逆(送ってから保存)にすると、
 //             (a) KV が書けないとき「知らせた」記録が残らず、毎時同じ警報を送り続ける
 //             (b) LINE が失敗すると例外で保存まで届かず、次の回も同じ判定をやり直し、停止時間が実態より長く出る
@@ -20,44 +23,21 @@
 import { pushText } from './line.js';
 import { autoStatus } from './auto.js';
 
-// 月初(1 日 9:00 JST = 0:00 UTC)に届く点検のお知らせ。cron は wrangler.toml [triggers] と index.js の scheduled() で振り分ける。
-// 2026-10-13 に「Chromium の手動更新」の手順をやめて点検だけにした: Pi のブラウザは Dockerfile の playwright:v1.62.1 で版が固定され、
-// `docker compose build --pull` を毎月しても同じ版が入り直すだけだったため。ブラウザの更新は定期には行わず、予約が動かなくなったときなどに本人が頼んだら Playwright の版を上げる(2026-10-13 本人決定。お知らせからも案内を外した)。
-// 1 日の朝は今月の通数がほぼ 0 なので、見てもらうのは「先月」の通数
-export const MAINTENANCE_CRON = '0 0 1 * *';
-export const MAINTENANCE_TEXT = [
-  '🛠 月初のお知らせ: 予約ボットの点検',
-  '① 先月の LINE の通数を確認(LINE Official Account Manager →「利用状況」)',
-  '無料枠は月 200 通。グループ宛なので通知 1 回で 2 通(「よやく」の返信は無料)',
-  '',
-  '② 自宅の Wi-Fi で Mac から Pi を点検:',
-  'ssh pi',
-  'cd ~/tennis-court-monitor/booking/pc && ./auto-check.sh',
-  '「✔ 動いている」が出れば OK',
-].join('\n');
+// LINE の通数の見張り(2026-11-01〜)。無料枠は月 200 通(グループ宛は 1 回で 2 通)。超えると月末まで push が全部 429 で止まり、
+// 空き通知も結果カードも黙って届かなくなる。今月の消費が QUOTA_WARN_AT に達したら、その月に 1 回だけ ⚠️ を送る(送った月を monitor_state に控える)。
+// 2026-10-31 までは毎月 1 日に「先月の通数を LINE Official Account Manager で確認」という手作業の案内を送っていた(10 月の実績 136 通)。
+// 通数の API が読めないとき(障害・権限)は今回は見ない(次の毎時に見直す。鳴らさない)
+export const QUOTA_LIMIT = 200;
+export const QUOTA_WARN_AT = 160;
+const LINE_QUOTA_URL = 'https://api.line.me/v2/bot/message/quota/consumption';
 
-// 二重起動よけ(KV)。Cloudflare は同じ Cron を同じ分に 2 回起動することがあり、1 日 0:00 UTC はまさに起きやすい時刻
-// (2026-09-28 9:00 にフェーズ4 の予告が 2 通届いた。penalty-alert.js と同じ考え方)。送った月 'YYYY-MM' を控え、同じ月なら送らない。
-// KV が無い・読めない・書けないときは従来どおり送る
-const KV_MAINT_KEY = 'maintenance_reminder_sent';
-const MAINT_TTL_SEC = 7 * 86400;
-
-export async function sendMaintenanceReminder(env, { push = pushText, now = Date.now() } = {}) {
-  const month = new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 7);
-  if (env.BOOKING_KV) {
-    try {
-      if ((await env.BOOKING_KV.get(KV_MAINT_KEY)) === month) {
-        console.log(`[monitor] 月初のお知らせは ${month} にもう送っています → Cloudflare の二重起動とみなして送信なし`);
-        return { sent: false, skipped: 'duplicate_run' };
-      }
-      await env.BOOKING_KV.put(KV_MAINT_KEY, month, { expirationTtl: MAINT_TTL_SEC });
-    } catch (e) {
-      console.error(`[monitor] 月初のお知らせの控えを読み書きできませんでした(チェックせずに送る): ${e.message}`);
-    }
-  }
-  await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, MAINTENANCE_TEXT);
-  console.log('[monitor] 月初のメンテのお知らせを LINE に送りました');
-  return { sent: true };
+// 今月の消費通数(LINE の月内の集計は UTC だが、1 日 9:00 JST の切り替わり以外は気にしなくてよい)
+export async function fetchLineQuotaUsage(accessToken) {
+  const res = await fetch(LINE_QUOTA_URL, { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = await res.json();
+  if (typeof j.totalUsage !== 'number') throw new Error('totalUsage がありません');
+  return j.totalUsage;
 }
 
 const KV_URL_KEY = 'booking_url'; // booking.js と同じキー
@@ -88,10 +68,33 @@ export async function probeBookingServer(env, { attempts = PROBE_ATTEMPTS, retry
   return { ok: false, reason: `${reason}(${attempts} 回試行)` };
 }
 
-// フェーズ3: 予約サーバー自体は生きているのに自動予約の照会ループが止まっているとき用。
-// Pi の /auto/status(トンネル越し)で mode が 'on' なのに、最後の照会がこれより古ければ知らせる(1 回だけ。復帰でも 1 回)。
-// 起動直後(startedAt から AUTO_STALL_MS 以内)は初回の照会前なので判定しない
+// フェーズ3: 予約サーバー自体は生きているのに自動予約が働いていないとき用。Pi の /auto/status(トンネル越し)を見て、
+// Pi の auto-check.sh が「✔ 動いている」と判定するのと同じ材料で、毎時こちらが判定する(2026-11-01 に (b)(c) を追加して、月初の手作業の点検をやめた):
+//   (a) 照会ループが止まっている: mode が 'on' なのに最後の照会が AUTO_STALL_MS より古い。起動直後(startedAt から AUTO_STALL_MS 以内)は初回の照会前なので見ない
+//   (b) 空き照会がずっと失敗している: consecutiveFailures が AUTO_FAIL_ALERT_AFTER 以上(Pi は 3 回目から間隔を 3→5→10→15 分と広げるので、
+//       6 回目はおよそ 20 分以上失敗が続いた状態。予約サイトのメンテナンス、仕様変更、回線の長い不調)。10/31 の回線不調では最大 5 回だった
+//   (c) ブラウザを先に起こせない: warm.failures が AUTO_WARM_ALERT_AFTER 以上(Chromium が起動できない。プロファイルの壊れなど。
+//       起こせないと予約は UI 経路でもやり直すが、毎回 40 秒ほど遅れて先を越されやすい)
+// どれかに当てはまったら 1 回だけ ⚠️(何が起きているかを書く)、全部消えたら ✅ を 1 回
 export const AUTO_STALL_MS = 15 * 60 * 1000;
+export const AUTO_FAIL_ALERT_AFTER = 6;
+export const AUTO_WARM_ALERT_AFTER = 3;
+
+// /auto/status の結果から「自動予約が働いていない理由」を 1 つ返す(無ければ null)
+export function autoIssue(auto, now) {
+  if (!auto.reachable) return null;
+  const justStarted = auto.startedAt != null && now - auto.startedAt < AUTO_STALL_MS;
+  if (auto.mode === 'on' && !justStarted && (auto.lastSeenAt == null || now - auto.lastSeenAt > AUTO_STALL_MS)) {
+    return { kind: 'stalled', text: `⚠️ 自動予約の空きチェックが止まっています(最後の合図: ${auto.lastSeenAt ? jst(auto.lastSeenAt) : '不明'})\n予約サーバー自体は動いています。空き通知は従来どおり全部届きます。Pi で docker compose logs booking を確認してください` };
+  }
+  if (auto.consecutiveFailures != null && auto.consecutiveFailures >= AUTO_FAIL_ALERT_AFTER) {
+    return { kind: 'scrape_failing', text: `⚠️ 自動予約の空きチェックが連続 ${auto.consecutiveFailures} 回失敗しています(予約サイトのメンテナンスか、サイトの変更か、自宅回線の不調)\n空き通知(Actions)が届いていればサイトは生きているので Pi 側の問題です。Pi で ./auto-check.sh を確認してください` };
+  }
+  if (auto.warm && auto.warm.failures >= AUTO_WARM_ALERT_AFTER) {
+    return { kind: 'browser_failing', text: `⚠️ 自動予約のブラウザが起動できません(${auto.warm.failures} 回連続)。空きが出ても予約が遅れるか失敗します\nPi で ./auto-check.sh と docker compose logs booking を確認してください` };
+  }
+  return null;
+}
 
 // 送れずに持ち越した知らせは、これより古ければ「遅れて届いた」と断り書きを付ける
 export const DELAYED_NOTE_MS = 30 * 60 * 1000;
@@ -106,30 +109,43 @@ const humanDuration = (ms) => {
 };
 
 // 確認して状態を更新し、必要なら LINE に知らせる。
-// 戻り値: { ok, fails, notified: 'down'|'up'|null, autoNotified: 'stalled'|'resumed'|null, sent, pending, saved }
-export async function runMonitor(env, { now = Date.now(), probe = probeBookingServer, push = pushText } = {}) {
+// 戻り値: { ok, fails, notified: 'down'|'up'|null, autoNotified: 'stalled'|'scrape_failing'|'browser_failing'|'resumed'|null, quotaNotified: number|null, sent, pending, saved }
+export async function runMonitor(env, { now = Date.now(), probe = probeBookingServer, status = autoStatus, quota = fetchLineQuotaUsage, push = pushText } = {}) {
   const prev = JSON.parse((await env.BOOKING_KV.get(KV_STATE_KEY)) || '{"fails":0,"alerted":false,"since":null}');
   const { ok, reason } = await probe(env);
-  const next = ok ? { fails: 0, alerted: false, since: null, autoAlerted: prev.autoAlerted || false } : { fails: prev.fails + 1, alerted: prev.alerted, since: prev.since ?? now, autoAlerted: prev.autoAlerted || false };
+  const carry = { autoAlerted: prev.autoAlerted || false, quotaWarnedMonth: prev.quotaWarnedMonth || null };
+  const next = ok ? { fails: 0, alerted: false, since: null, ...carry } : { fails: prev.fails + 1, alerted: prev.alerted, since: prev.since ?? now, ...carry };
   let notified = null;
   let autoNotified = null;
+  let quotaNotified = null;
   // 前回送れなかったぶんを先に積む(古すぎるものは捨てる)
   const queue = (Array.isArray(prev.pending) ? prev.pending : []).filter((m) => m && typeof m.text === 'string' && typeof m.at === 'number' && now - m.at < PENDING_MAX_AGE_MS);
 
-  // 自動予約の照会ループの見張り(予約サーバーが応答しているときだけ判定する。サーバーごと落ちていれば上の ⚠️ で分かる)
+  // 自動予約の見張り(予約サーバーが応答しているときだけ判定する。サーバーごと落ちていれば上の ⚠️ で分かる)
   if (ok) {
-    const auto = await autoStatus(env, now);
-    const justStarted = auto.startedAt != null && now - auto.startedAt < AUTO_STALL_MS;
-    const stalled = auto.reachable && auto.mode === 'on' && !justStarted && (auto.lastSeenAt == null || now - auto.lastSeenAt > AUTO_STALL_MS);
-    if (stalled && !prev.autoAlerted) {
+    const issue = autoIssue(await status(env, now), now);
+    if (issue && !prev.autoAlerted) {
       next.autoAlerted = true;
-      autoNotified = 'stalled';
-      queue.push({ at: now, text: `⚠️ 自動予約の空きチェックが止まっています(最後の合図: ${auto.lastSeenAt ? jst(auto.lastSeenAt) : '不明'})\n予約サーバー自体は動いています。空き通知は従来どおり全部届きます。Pi で docker compose logs booking を確認してください` });
-    } else if (!stalled && prev.autoAlerted) {
+      autoNotified = issue.kind;
+      queue.push({ at: now, text: issue.text });
+    } else if (!issue && prev.autoAlerted) {
       next.autoAlerted = false;
       autoNotified = 'resumed';
-      queue.push({ at: now, text: '✅ 自動予約の空きチェックが復帰しました' });
+      queue.push({ at: now, text: '✅ 自動予約が復帰しました(空きチェック・ブラウザとも正常)' });
     }
+  }
+
+  // LINE の通数の見張り(Pi が落ちていても見る)。その月に 1 回だけ
+  const month = new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 7);
+  try {
+    const usage = await quota(env.LINE_CHANNEL_ACCESS_TOKEN);
+    if (usage >= QUOTA_WARN_AT && prev.quotaWarnedMonth !== month) {
+      next.quotaWarnedMonth = month;
+      quotaNotified = usage;
+      queue.push({ at: now, text: `⚠️ 今月の LINE の通数が ${usage}/${QUOTA_LIMIT} 通です(無料枠。グループ宛は 1 回で 2 通)\n${QUOTA_LIMIT} 通に達すると月末まで空き通知・結果カード・この監視が全部止まります。翌月 1 日 9:00 に戻ります。減らすなら LINE で「つうちおふ」(空き通知カードを止める。自動予約は続く)` });
+    }
+  } catch (e) {
+    console.log(`[monitor] LINE の通数を読めませんでした(今回は見ない): ${e.message}`);
   }
 
   if (!ok && !prev.alerted && next.fails >= ALERT_AFTER_FAILS) {
@@ -150,7 +166,7 @@ export async function runMonitor(env, { now = Date.now(), probe = probeBookingSe
     await env.BOOKING_KV.put(KV_STATE_KEY, JSON.stringify(next));
   } catch (e) {
     console.log(`[monitor] ${ok ? 'ok' : `down(${next.fails}回目): ${reason}`} / 状態を保存できず、知らせ ${next.pending.length} 件は次回に持ち越し: ${e.message}`);
-    return { ok, fails: next.fails, notified: null, autoNotified: null, sent: 0, pending: next.pending.length, saved: false };
+    return { ok, fails: next.fails, notified: null, autoNotified: null, quotaNotified: null, sent: 0, pending: next.pending.length, saved: false };
   }
 
   // ② 送る。1 件でも失敗したら残りはまとめて持ち越す(通数上限や障害なら続けても同じ結果になる)
@@ -183,8 +199,8 @@ export async function runMonitor(env, { now = Date.now(), probe = probeBookingSe
 
   console.log(
     `[monitor] ${ok ? 'ok' : `down(${next.fails}回目): ${reason}`}` +
-      `${notified ? ` → ${notified}` : ''}${autoNotified ? ` / 自動予約 ${autoNotified}` : ''}` +
+      `${notified ? ` → ${notified}` : ''}${autoNotified ? ` / 自動予約 ${autoNotified}` : ''}${quotaNotified != null ? ` / LINE 通数 ${quotaNotified}` : ''}` +
       `${sent ? ` / LINE に ${sent} 件送信` : ''}${remaining.length ? ` / ${remaining.length} 件は次回に再送(${failure})` : ''}`
   );
-  return { ok, fails: next.fails, notified, autoNotified, sent, pending: next.pending.length, saved: true };
+  return { ok, fails: next.fails, notified, autoNotified, quotaNotified, sent, pending: next.pending.length, saved: true };
 }
