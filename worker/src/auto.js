@@ -63,7 +63,8 @@ export const KV_EXCLUSIONS = 'auto_exclusions';
 const KV_URL_KEY = 'booking_url'; // booking.js と同じ(Pi のトンネル URL)
 // Pi の最後の照会がこの時間以内なら「照会ループは生きている」扱い(lib/config.js の AUTO_BOOKING.ALIVE_WITHIN_MS と同じ値。
 // Pi は日中 1 分・深夜 3 分おきに照会するので、その間隔 + 照会の所要でも切れない 5 分)
-export const ALIVE_WITHIN_MS = 5 * 60 * 1000;
+// 2026-11-01: 2〜6 時の照会が 10 分間隔になったため 5 分 → 12 分(5 分のままだと深夜に Pi が死んだ扱いになり、Actions が全通知・毎時監視が警告する)
+export const ALIVE_WITHIN_MS = 12 * 60 * 1000;
 // Pi の /auto/status をトンネル越しに聞くときの再試行(瞬断対策)とタイムアウト
 export const PROBE_ATTEMPTS = 2;
 const PROBE_RETRY_MS = 1500;

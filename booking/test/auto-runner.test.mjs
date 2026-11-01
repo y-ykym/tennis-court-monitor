@@ -459,7 +459,11 @@ test('照会間隔(JST): 9〜15 時・18〜翌 1 時は 1 分、1〜7 時は 3 �
   assert.equal(pollIntervalAt(jst('2026-09-15', '00:00'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '00:59'), 60_000), 60_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '01:00'), 60_000), 180_000);
-  assert.equal(pollIntervalAt(jst('2026-09-15', '04:30'), 60_000), 180_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '01:59'), 60_000), 180_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '02:00'), 60_000), 600_000); // 2026-11-01 に 2〜6 時を 10 分(出現 0 件の時間帯)
+  assert.equal(pollIntervalAt(jst('2026-09-15', '04:30'), 60_000), 600_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '05:59'), 60_000), 600_000);
+  assert.equal(pollIntervalAt(jst('2026-09-15', '06:00'), 60_000), 180_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '06:59'), 60_000), 180_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '07:00'), 60_000), 120_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '08:59'), 60_000), 120_000);
