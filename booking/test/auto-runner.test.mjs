@@ -978,3 +978,14 @@ test('stillVacant(2026-11-01): book に渡す関数は、直近の照会にそ�
   await h.runner.tick().catch(() => {});
   assert.equal(probe(), true, '照会の失敗では「消えた」と判断しない');
 });
+
+test('候補には空き照会の面数(count)が付いて book に渡る(2026-11-01: server.mjs が vacant として高速経路に渡し、週データの再確認を飛ばす)', async () => {
+  const seen = [];
+  const h = harness({ book: async (c) => { seen.push(c.count); return { status: 'taken', message: 'x' }; } });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00', 3)]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(seen, [3]);
+});

@@ -386,8 +386,8 @@ export async function reserve(slot, credentials, options = {}) {
       // 先に起こしてあるブラウザが取っておいたログイン画面・検索(トップが新しいときだけ。読み直したらセッションが変わるので使わない)
       let prefetched = topFresh && warm?.prefetched ? warm.prefetched : null;
       if (prefetched?.search && prefetched.search.date !== jstTodayIso()) {
-        // 日付が変わった直後(0:00〜次の読み直し)は検索条件が前日のまま。ログイン画面の先取りだけ使い、検索はやり直す
-        prefetched = { ...prefetched, search: null };
+        // 日付が変わった直後(0:00〜次の読み直し)は検索条件が前日のまま。ログイン画面の先取りだけ使い、検索はやり直す(3 公園分 searches も)
+        prefetched = { ...prefetched, search: null, searches: null };
       }
       const r = await page.evaluate(inPageFlow, {
         slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour), vacant: Number.isFinite(vacant) && vacant >= 1 ? vacant : null, tzoneNo: tz },

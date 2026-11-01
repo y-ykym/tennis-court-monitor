@@ -249,8 +249,10 @@ async function runReserve(s, extra = {}) {
       }, 1000);
     });
 
-  // reserve() の slot.vacant(週データの再確認を飛ばす)は渡さない(2026-10-25 の判断。サーバーが選択時に空きを検証しないため)
-  const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2) };
+  // 自動予約は空き照会の面数(payload.vacant)を渡し、高速経路の週データの再確認(5〜10 秒)を飛ばす(2026-11-01。下の book のコメント)。
+  // 手動(LINE のボタン)は押すまでに時間がたっているので渡さず、週データで空きを確かめてから選ぶ
+  const vacant = s.kind === 'auto' && payload.vacant != null && Number(payload.vacant) >= 1 ? Number(payload.vacant) : null;
+  const slot = { park: payload.park, date: payload.date, startHour: Number(payload.startHour), people: Number(payload.people || 2), vacant };
   log(`予約フロー開始${s.kind === 'auto' ? '(自動予約)' : ''}: ${slotText(payload)} 予約者=${creds.label}`);
   const credentials = { userId: creds.userId, password: creds.password };
   const browserOptions = {
@@ -380,10 +382,13 @@ if (AUTO_MODE !== 'off') {
       },
       // 候補 1 件の予約実行(行列の中で呼ばれる)。手動と同じセッション扱いにして、reCAPTCHA v2 の /vnc も同じ仕組みで動くようにする
       book: async (c, { beforeApply, stillVacant }) => {
-        // 空き照会の面数(c.count)を vacant として渡せば高速経路は週データの再確認(約 10 秒)を飛ばせるが、渡さない(2026-10-25 の実測):
-        // サーバーは枠選択 Ajax でも確認画面でも空きを検証せず(送った akiNum が 1 以上なら空きでないセルでも選べて確認画面に到達した)、
-        // 空きの検証は最後の「予約」送信だけ。飛ばすと先に取られていた回に「予約」まで押しに行くことになり、その応答は未確認のため
-        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour) };
+        // 空き照会の面数(c.count)を vacant として渡し、高速経路の週データの再確認(5〜10 秒)を飛ばす(2026-11-01)。
+        // 2026-10-25 は渡さなかった: サーバーは枠選択 Ajax でも確認画面でも空きを検証せず(送った akiNum が 1 以上なら空きでないセルでも
+        // 選べて確認画面に到達)、空きの検証は最後の「予約」送信だけで、先に取られていた回に「予約」を押したときの応答が未確認だったため。
+        // 2026-10-26・11-01 の実例でその応答が分かった: 確認画面が再表示され onload に errorMsg「エラーが発生しました。(施設予約に失敗しました。)」。
+        // reserve.js はこれを taken にする(予約は入らず、ペナルティもない)。取られていた回は 20 秒 → 45 秒ほどかかるが、空いていた回が 5〜10 秒速くなる。
+        // ログインと週データの同時要求は不可(週データが空で返る。2026-11-01 実測 2 回)
+        const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour), vacant: Number(c.count) >= 1 ? Number(c.count) : null };
         const token = sign(payload, SECRET);
         const s = newSession(token, payload, 'auto');
         return runReserve(s, { reservationList: true, beforeApply, stillVacant });
