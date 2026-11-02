@@ -201,7 +201,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   // 追加枠(2026-10-25。11-03 に改名)。場所と時間を本人が指定した枠。ペナルティ期間・1 日 1 件の上限・場所の制約に関係なく取りに行く。
   // 「＋ 追加」は日付ピッカー。選ぶと params.date が付いて返り、Worker が時間帯とコートを選ぶカード(buildPickFlex)を返す
   const addSlotAction = addSlotData ? { type: 'datetimepicker', label: '＋ 追加', data: addSlotData, mode: 'date', initial: today, min: today, max: maxDate } : null;
-  body.push(heading('追加枠', '場所と時間を指定した枠。ペナルティ期間や 1 日 1 件の上限に関係なく、空きが出たら自動予約する(取消はペナルティ付き)', addSlotAction));
+  body.push(heading('追加枠', '場所と時間を指定した枠。ペナルティ期間や 1 日 1 件の上限に関係なく、空きが出たら自動予約する(取消はペナルティ付き)。同じ日に 1 件取れたら、その日の残りは消える', addSlotAction));
   if (allowSlots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
   // 日ごとにまとめる(2026-10-25 実機: 8 枠で「10/25(日) 17:00 猿江恩賜公園 / ⚠ 取消にペナルティ」が 8 回並び、公園名も折り返して読みにくかった)。
   // 日付の行に ⚠ を 1 回だけ、枠の行は「17:00〜19:00 猿江恩賜」と短く(「公園」を省く)。一覧は date → start の順に並んでいる

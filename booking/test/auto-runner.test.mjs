@@ -948,9 +948,10 @@ test('追加枠(2026-11-03): 場所と時間を本人が指定した枠なので
 test('追加枠(2026-10-25): 平日の監視対象外の枠(大島 17:00)も追加してあれば見て予約する。追加した時点で既に空いていた枠も、次の照会で取りに行く', async () => {
   // 9/14(月) 10:00。9/15(火)・9/16(水)は平日なので普段の監視対象は猿江 19:00 だけ(どちらもペナルティ期間)
   const allowOoshima = { park: '1160', date: '2026-09-16', start: '17:00', end: '19:00', facility: '大島小松川公園' };
-  // 同じ日時の猿江 17:00 も追加してある(取れたらこちらは消える)
+  // 同じ日時の猿江 17:00 と、同じ日の別の時間帯の猿江 9:00 も追加してある(取れたらどちらも消える。2026-11-03: 同じ日は 1 件取れたら残りの追加枠を全部消す)
   const allowSarue = { park: '1040', date: '2026-09-16', start: '17:00', end: '19:00', facility: '猿江恩賜公園' };
-  let ex = { dates: [], slots: [], allowSlots: [allowOoshima, allowSarue] };
+  const allowSarue9 = { park: '1040', date: '2026-09-16', start: '09:00', end: '11:00', facility: '猿江恩賜公園' };
+  let ex = { dates: [], slots: [], allowSlots: [allowOoshima, allowSarue, allowSarue9] };
   const h = harness({ workerOverride: {} });
   h.workerRef.heartbeat = async () => ex;
   // 猿江 9/15 19:00 は監視対象で、最初から空いている(初回で既知になる)
@@ -961,9 +962,10 @@ test('追加枠(2026-10-25): 平日の監視対象外の枠(大島 17:00)も追�
   assert.equal(r.planned, 1, '追加した大島 17:00 は平日でも監視対象になり予約する。亀戸 17:00 は監視対象外、猿江 9/15 19:00 は既知でペナルティ期間');
   await flush();
   assert.deepEqual(h.bookings, ['2026-09-16 1160 17 B']);
-  // 取れたら、同じ日時の追加枠(猿江 17:00 と取れた大島 17:00 自身)を Worker に消してもらう
-  assert.deepEqual(h.dropped, [{ date: '2026-09-16', start: '17:00' }]);
-  assert.ok(h.logs.some((l) => l.includes('同じ日時の追加枠を消します: 大島小松川公園・猿江恩賜公園 2026-09-16 17:00')));
+  // 取れたら、同じ日の追加枠(猿江 17:00・猿江 9:00 と取れた大島 17:00 自身)を Worker に消してもらう(日だけ渡す)
+  assert.deepEqual(h.dropped, [{ date: '2026-09-16' }]);
+  assert.ok(h.logs.some((l) => l.includes('同じ日の追加枠を全部消します: 17:00 大島小松川公園・17:00 猿江恩賜公園・09:00 猿江恩賜公園 (2026-09-16)')), h.logs.join('\n'));
+  assert.deepEqual(h.runner.exclusions().allowSlots, [], '手元の写しからも消える');
 
   // 運用中に「せってい」で猿江 9/15 19:00 を追加 → 既に空いていて既知だが、次の照会で「新しい空き」として予約しに行く
   ex = { dates: [], slots: [], allowSlots: [allowOoshima, { park: '1040', date: '2026-09-15', start: '19:00', end: '21:00', facility: '猿江恩賜公園' }] };
