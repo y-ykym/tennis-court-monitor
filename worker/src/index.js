@@ -28,7 +28,7 @@
 //   フェーズ11(src/calendar-sync.js): 毎時 0 分の Cron で、A・B の予定(都の予約 + テニスベアの確定参加)を各自の Google カレンダーへ同期
 //                          (追加・更新・削除。目印の無い予定には触らない)。Pi からの POST /auto/calendar-sync(予約成立の直後)と、
 //                          キャンセル完了直後の 1 件削除(removeCalendarEvent)も。認証はサービスアカウント(src/gcal.js)
-//   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠、対象に追加した枠)。その「解除」「＋ 追加」(除外日・対象枠)と、対象枠の時間帯・コートの切り替え・「決定」(postback 'x|…')。
+//   フェーズ3(src/auto.js): 「せってい」→ 設定メニューのカード(自動予約・空き通知の ON/OFF、除外日・除外枠、追加枠)。その「解除」「＋ 追加」(除外日・対象枠)と、対象枠の時間帯・コートの切り替え・「決定」(postback 'x|…')。
 //                          /auto/state /auto/heartbeat /auto/exclusions(Pi・Actions からの署名付き API)。
 //                          キャンセル成功時にその枠を除外枠として KV に記録する(LINE の返信より先に)
 //
@@ -539,7 +539,12 @@ async function handlePostback(env, replyToken, data, params) {
   const started = Date.now();
   const logouts = [];
   try {
-    const reply = await buildPostbackReply(env, data, { deferLogout: (fn) => logouts.push(fn), params });
+    const reply = await buildPostbackReply(env, data, {
+      deferLogout: (fn) => logouts.push(fn),
+      params,
+      // 「せってい」の追加枠で日を選んだとき、予約済みの時間帯を選べなくするために A・B の都の予約一覧を見る(2026-11-03。返信の時間を残して 20 秒で打ち切る)
+      fetchResults: () => fetchAllReservations(env, { budgetMs: EVENT_REPLY_SITE_BUDGET_MS, deferLogout: (fn) => logouts.push(fn) }),
+    });
     if (!reply) return; // 無視するべき postback(署名不正など)
     if (reply.flex) await replyFlexOrText(env, replyToken, reply.flex, reply.text);
     else await replyText(env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, reply.text);
@@ -554,12 +559,12 @@ async function handlePostback(env, replyToken, data, params) {
 
 // postback data から返信内容を決める。戻り値: { text } | { flex, text } | null(無視)
 //   params: LINE の postback.params(日付ピッカーで選んだ日 { date })。cancel: 取消の実行関数(テストで差し替える)
-export async function buildPostbackReply(env, data, { deferLogout, now = Date.now(), budgetMs = FETCH_BUDGET_MS, params = null, cancel = cancelReservation } = {}) {
+export async function buildPostbackReply(env, data, { deferLogout, now = Date.now(), budgetMs = FETCH_BUDGET_MS, params = null, cancel = cancelReservation, fetchResults = null } = {}) {
   if (data === POSTBACK_NO) return { text: MSG_CANCEL_DECLINED };
   // フェーズ3 「せってい」カードのボタン(除外日の追加・解除、除外枠の解除)
   if (data.startsWith(AUTO_POSTBACK_PREFIX)) {
     if (!env.BOOKING_SIGNING_SECRET || !env.BOOKING_KV) return { text: MSG_AUTO_UNAVAILABLE };
-    return handleAutoPostback(env, data, params, { now });
+    return handleAutoPostback(env, data, params, { now, fetchResults });
   }
   // 空き通知の予約ボタン(フェーズ2)。キャンセル機能の ON/OFF とは独立
   if (data.startsWith(BOOK_POSTBACK_PREFIX)) {

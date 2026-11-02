@@ -5,7 +5,7 @@
 //   30 秒未満にはしない。「前回の開始から間隔ぶん後」に次を始め、照会自体が間隔を超えたときは MIN_GAP_MS だけ空けて次を始める):
 //     空き照会(lib/scrape.js。ログイン不要の JSON)→ 監視条件(lib/filter.js)→ 前回との差分 = 新しく出た空き
 //     → Worker に「生きている」合図(heartbeat)を送り、応答で除外日・除外枠を受け取る
-//     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り。ただし「せってい」で 1 枠ずつ「対象に追加した枠」は対象)、
+//     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り。ただし「せってい」で 1 枠ずつ選んだ「追加枠」は対象。追加枠は 1 日の上限・場所の判定も掛けない)、
 //       利用日ごとに公園→時間帯の優先順に並べる
 //     → 候補を 1 件ずつ予約の行列(booking-queue.js)に入れる。行列は 1 件ずつ実行し、手動(LINE ボタン)を優先する
 //   各候補の実行(行列の中):
@@ -124,8 +124,8 @@ export function createAutoRunner({
   const active = mode === 'on';
   let timer = null;
   let running = false;
-  let exclusions = null; // { dates, slots, allowSlots, at }(allowSlots = 「せってい」で対象に追加した枠。2026-10-25。10-15〜10-25 は日単位の allowDates)
-  // 「対象に追加した枠」に新しく入った枠キー。次の照会で既知から外し、その時点で空いていれば「新しく出た空き」として予約しに行く
+  let exclusions = null; // { dates, slots, allowSlots, at }(allowSlots = 「せってい」の追加枠。2026-10-25。10-15〜10-25 は日単位の allowDates)
+  // 「追加枠」に新しく入った枠キー。次の照会で既知から外し、その時点で空いていれば「新しく出た空き」として予約しに行く
   // (追加した時点で既に空いている枠は、差分では「新しい」にならず取りに行かないため。2026-10-25)
   const freshAllowKeys = new Set();
   let remoteEnabled = true; // LINE の「じどうおふ」で false(Worker の応答で更新)
@@ -185,7 +185,7 @@ export function createAutoRunner({
         const before = new Set((exclusions?.allowSlots || []).map(slotKey));
         for (const k of allowSlots.map(slotKey)) if (!before.has(k)) freshAllowKeys.add(k);
         exclusions = { dates: res.dates, slots: res.slots, allowSlots, at: now() };
-        if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件、対象に追加した枠 ${allowSlots.length} 件`);
+        if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件、追加枠 ${allowSlots.length} 件`);
       }
       return true;
     } catch (e) {
@@ -221,18 +221,18 @@ export function createAutoRunner({
       }
       if (consecutiveFailures >= BACKOFF_AFTER) log(`空き照会が回復しました(連続失敗 ${consecutiveFailures} 回のあと)。通常の間隔に戻します`);
       consecutiveFailures = 0;
-      // 監視対象(平日は猿江 19:00 だけ・土日祝は全部。lib/filter.js)に加えて、「せってい」で対象に追加した枠はいつでも見る
+      // 監視対象(平日は猿江 19:00 だけ・土日祝は全部。lib/filter.js)に加えて、「せってい」の追加枠はいつでも見る
       // (平日の 17:00 や大島・亀戸は監視対象ではないため、これが無いと追加しても見てもらえない。2026-10-25)
       const allowKeys = new Set((exclusions?.allowSlots || []).map(slotKey));
       const targets = slots.filter((s) => isTargetSlot(s) || allowKeys.has(slotKey(s)));
       lastTargets = targets;
       const keys = targets.map(slotKey);
       const known = state.knownKeys();
-      // 「対象に追加した枠」に入ったばかりの枠を既知から外す → いま空いていれば下で「新しく出た空き」になる。
+      // 「追加枠」に入ったばかりの枠を既知から外す → いま空いていれば下で「新しく出た空き」になる。
       // 初回起動(既知の登録だけで予約しない回)では消さず、次の照会に持ち越す
       if (!state.needsBaseline()) {
         for (const k of freshAllowKeys) {
-          if (known.delete(k)) log(`対象に追加された枠がいま空いているので、新しい空きとして扱います: ${k}`);
+          if (known.delete(k)) log(`追加枠がいま空いているので、新しい空きとして扱います: ${k}`);
         }
         freshAllowKeys.clear();
       }
@@ -372,7 +372,11 @@ export function createAutoRunner({
       }
       return { status: 'skipped', message: again.reason, notified: true };
     }
-    const remaining = remainingFor(c.date);
+    // 追加枠(「せってい」で場所と時間を本人が指定した枠。again.allowed)は、1 日の上限・テニスベアの予定・接する別の場所の予約の判定を
+    // 掛けない(2026-11-03 本人指示)。時間が重なる都の予約だけは予約直前の一覧で見る(選ぶ時点で予約済みの時間は Worker が出さないので通常は当たらない)
+    const allowed = !!again.allowed;
+    if (allowed) log(`追加枠なので 1 日の上限・場所の判定は掛けません: ${describe(c)}`);
+    const remaining = allowed ? null : remainingFor(c.date);
     if (remaining != null && remaining <= 0) {
       log(`見送り: ${describe(c)} (${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため。ログインせず)`);
       attempt(c, 'capped', `${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため`);
@@ -380,7 +384,7 @@ export function createAutoRunner({
       return { status: 'capped' };
     }
     // 隣接の判定(その 1): テニスベアの予定。ログインの前に見て、隣の時間帯に別の場所の予定があれば見送る(ログインせず)
-    const tb = await tennisbearPlansFor(c.person);
+    const tb = allowed ? { configured: false, events: [], at: t } : await tennisbearPlansFor(c.person);
     if (!tb) {
       log(`見送り: ${describe(c)} (テニスベアの予定が取れず、隣の時間帯に別の場所の予定が無いか判定できないため。ログインせず)`);
       attempt(c, 'skipped_tennisbear', 'テニスベアの予定が取れないため');
@@ -401,11 +405,12 @@ export function createAutoRunner({
       const sameDay = reservations.filter((r) => r.date === c.date);
       listCount = sameDay.length;
       await detectReleased(c.person, reservations, today);
-      if (listCount >= AUTO_BOOKING.MAX_PER_DAY) {
+      if (!allowed && listCount >= AUTO_BOOKING.MAX_PER_DAY) {
         return { status: 'capped', message: `${c.date} は既に ${listCount} 件の予約があるため見送りました(手動分を含む)` };
       }
-      // 隣接の判定(その 2): 都の予約一覧。時間が重なる予約・隣の時間帯の別の公園の予約があれば見送る(上限が 1 件のうちは通常ここに来ないが、上限を戻したときのため)
-      const conflict = findPlaceConflict(c, sameDay);
+      // 隣接の判定(その 2): 都の予約一覧。時間が重なる予約・隣の時間帯の別の公園の予約があれば見送る(上限が 1 件のうちは通常ここに来ないが、上限を戻したときのため)。
+      // 追加枠は時間が重なる予約だけ見る
+      const conflict = findPlaceConflict(c, sameDay, { overlapOnly: allowed });
       if (conflict) return { status: 'conflict', message: conflict.reason };
       return null;
     };
@@ -418,7 +423,7 @@ export function createAutoRunner({
       result = { status: 'error', message: e.message };
     }
     const ok = result.status === 'success';
-    if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() });
+    if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() }); // 追加枠の成立で負になることがある(その日の普段の枠は capped)
     if (result.status === 'auth_error') {
       const first = !authFailedAt.has(c.person) || now() - authFailedAt.get(c.person) >= AUTH_PAUSE_MS;
       authFailedAt.set(c.person, now());
@@ -466,7 +471,7 @@ export function createAutoRunner({
           log(`キャンセルボタンの署名に失敗(ボタン無しで送ります): ${e.message}`);
         }
       }
-      // ペナルティ期間の枠(「せってい」で対象に追加した枠)の成功カードには、取消にペナルティが付く旨を添える(2026-10-15。10-25 に枠単位へ)
+      // ペナルティ期間の枠(「せってい」の追加枠)の成功カードには、取消にペナルティが付く旨を添える(2026-10-15。10-25 に枠単位へ)
       const penalty = isPenaltyPeriod(c.date, today);
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData, penalty }), '自動予約の成立カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
@@ -480,18 +485,18 @@ export function createAutoRunner({
 
   // その人のテニスベアの予定(隣接の判定用)。Worker の /auto/tennisbear を呼び、TB_PLANS_TTL_MS の間は使い回す。
   // 取れなければ直近 TB_PLANS_STALE_MAX_MS 以内の結果で代用し、それも無ければ null(呼び出し側は見送る)。
-  // 予約が取れた日時の「対象に追加した枠」を、公園を問わず消す(同じ時間に別のコートではできない。2026-10-25)。
+  // 予約が取れた日時の「追加枠」を、公園を問わず消す(同じ時間に別のコートではできない。2026-10-25)。
   // 手元の写しからも外し、Worker にも頼む(失敗しても次の heartbeat で写しは戻るだけ。Worker 側は残るので手で「解除」)
   async function dropAllowedSlotsAt(date, start) {
     const hit = (exclusions?.allowSlots || []).filter((a) => a.date === date && a.start === start);
     if (!hit.length) return;
     exclusions.allowSlots = exclusions.allowSlots.filter((a) => !(a.date === date && a.start === start));
-    log(`予約が取れたので同じ日時の対象枠を消します: ${hit.map((a) => a.facility || a.park).join('・')} ${date} ${start}`);
+    log(`予約が取れたので同じ日時の追加枠を消します: ${hit.map((a) => a.facility || a.park).join('・')} ${date} ${start}`);
     if (typeof worker.dropAllowedSlots !== 'function') return;
     try {
       await worker.dropAllowedSlots([{ date, start }]);
     } catch (e) {
-      log(`対象枠の削除を Worker に頼めませんでした(「せってい」で手で解除してください): ${e.message}`);
+      log(`追加枠の削除を Worker に頼めませんでした(「せってい」で手で解除してください): ${e.message}`);
     }
   }
 

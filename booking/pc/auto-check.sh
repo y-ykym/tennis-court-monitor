@@ -54,7 +54,7 @@ elif age_min >= 5: verdict = f'✖ 最後の照会が {age_min} 分前(5 分以�
 print(verdict)
 print(f"  mode={mode}  LINEスイッチ={'ON' if enabled else 'OFF'}  空き通知カード={'ON' if notify else 'OFF'}  起動 {jst(started)}({up_min} 分前)")
 print(f"  最後の照会: {jst(last_at)}({age_min} 分前、所要 {int(last_ms/1000)} 秒)" + (f'  エラー: {last_err}' if last_err else ''))
-print(f"  いま空いている監視対象: {len(s.get('targets') or [])} 件  除外一覧: 除外日 {ex.get('dates',0)}・除外枠 {ex.get('slots',0)}・対象に追加した枠 {ex.get('allowSlots',0)}(更新 {jst(ex.get('at') or 0)})  予約の行列: 実行中={q.get('running') or 'なし'} 待ち={len(q.get('waiting') or [])}")
+print(f"  いま空いている監視対象: {len(s.get('targets') or [])} 件  除外一覧: 除外日 {ex.get('dates',0)}・除外枠 {ex.get('slots',0)}・追加枠 {ex.get('allowSlots',0)}(更新 {jst(ex.get('at') or 0)})  予約の行列: 実行中={q.get('running') or 'なし'} 待ち={len(q.get('waiting') or [])}")
 nh = s.get('nightHold')
 if nh and nh.get('held'): print(f"  夜間に溜めている成立カード: {nh['held']} 件(8:00 にまとめて送る。次の送信 {jst(nh.get('nextFlushAt') or 0)})")
 w = s.get('warm')

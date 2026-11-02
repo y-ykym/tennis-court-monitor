@@ -203,6 +203,9 @@ test('隣接の判定(2026-09-24): 時間が重なる予定は場所を問わず
   // 時間が重なる(14-16)別の場所(都営以外 = 公園が分からない)
   const overlap = findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '14:00', end: '16:00', park: null, facility: '有明テニスの森' }]);
   assert.equal(overlap?.relation, 'overlap');
+  // overlapOnly(追加枠。2026-11-03): 接する別の場所の予定は見ず、重なる予定だけ見送り
+  assert.equal(findPlaceConflict(cand, [{ date: '2026-09-27', start: '11:00', end: '13:00', facility: '亀戸中央公園' }], { overlapOnly: true }), null);
+  assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '14:00', end: '16:00', park: null, facility: '有明テニスの森' }], { overlapOnly: true })?.relation, 'overlap');
   assert.match(overlap.reason, /時間が重なるテニスベアの予定/);
   // 時間が重なるなら同じ公園でも見送り(同時に 2 面はできない)
   assert.equal(findPlaceConflict(cand, [{ source: 'tennisbear', date: '2026-09-27', start: '13:00', end: '15:00', park: '1040', facility: '猿江恩賜公園' }])?.relation, 'overlap');
@@ -264,7 +267,7 @@ test('空き通知の絞り込み(2026-09-27): A・B の予定と時間が重な
   }
 });
 
-test('対象に追加した枠(2026-10-25): allowSlots の枠はペナルティ期間・締切後・除外日でも auto。除外枠だけ優先。掃除で始まった枠は落ちる', () => {
+test('追加枠(2026-10-25。11-03 までは「対象に追加した枠」): allowSlots の枠はペナルティ期間・締切後・除外日でも auto。除外枠だけ優先。掃除で始まった枠は落ちる', () => {
   const ex = {
     dates: ['2026-09-20'],
     slots: [{ park: '1040', date: '2026-09-17', start: '19:00' }],
@@ -278,14 +281,16 @@ test('対象に追加した枠(2026-10-25): allowSlots の枠はペナルティ�
   // 9/17(+3 日)の 9:00 は allowSlots にあるので対象。reason でペナルティ期間だと分かる。同じ日の別の枠は従来どおり penalty
   const c = classifySlot(slot('猿江恩賜公園', '2026-09-17', '09:00-11:00'), { today: TODAY, exclusions: ex });
   assert.equal(c.kind, 'auto');
-  assert.match(c.reason, /対象に追加した枠.*ペナルティ/);
+  assert.match(c.reason, /追加枠.*ペナルティ/);
+  assert.equal(c.allowed, true, 'Pi が 1 日の上限・場所の判定を掛けないための印(2026-11-03)');
+  assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-18', '09:00-11:00'), { today: TODAY, exclusions: ex }).allowed, undefined, '普段の枠には付かない');
   assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-17', '11:00-13:00'), { today: TODAY, exclusions: ex }).kind, 'penalty');
   // 除外枠と両方に入っていたら除外枠が勝つ(Worker 側で両立しないようにしているが、安全側)
   assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-17', '19:00-21:00'), { today: TODAY, exclusions: ex }).kind, 'excluded_slot');
   // 除外日でも、追加した枠は auto(その日は除外でもこの枠だけは取る)。同じ日の別の枠は excluded_date
   const d = classifySlot(slot('大島小松川公園', '2026-09-20', '09:00-11:00'), { today: TODAY, exclusions: ex });
   assert.equal(d.kind, 'auto');
-  assert.match(d.reason, /対象に追加した枠/);
+  assert.match(d.reason, /追加枠/);
   assert.doesNotMatch(d.reason, /ペナルティ/);
   assert.equal(classifySlot(slot('大島小松川公園', '2026-09-20', '11:00-13:00'), { today: TODAY, exclusions: ex }).kind, 'excluded_date');
   // +4 日の 23:35 以降(締切後)でも追加した枠は auto

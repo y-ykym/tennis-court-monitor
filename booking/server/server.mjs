@@ -320,9 +320,9 @@ async function runReserve(s, extra = {}) {
   // フェーズ11: 成立したら Worker にその人の Google カレンダーの同期を頼む(結果は待たない。自動予約は auto-runner が同じものを呼ぶ)
   if (s.kind === 'manual' && result.status === 'success') {
     requestCalendarSync(payload.person, 'booked');
-    // 手で取れた日時の「対象に追加した枠」も公園を問わず消す(同じ時間に別のコートではできない。自動予約は auto-runner が同じことをする)
+    // 手で取れた日時の「追加枠」も公園を問わず消す(同じ時間に別のコートではできない。自動予約は auto-runner が同じことをする)
     if (WORKER_URL && SECRET) {
-      dropAllowedSlots(WORKER_URL, SECRET, [{ date: payload.date, start: `${String(payload.startHour).padStart(2, '0')}:00` }]).catch((e) => log(`対象枠の削除を Worker に頼めませんでした: ${e.message}`));
+      dropAllowedSlots(WORKER_URL, SECRET, [{ date: payload.date, start: `${String(payload.startHour).padStart(2, '0')}:00` }]).catch((e) => log(`追加枠の削除を Worker に頼めませんでした: ${e.message}`));
     }
   }
   // 手動の結果は LINE にも送る(ボタンを押した本人以外にも分かるように)。自動予約のカードは auto-runner が送る
