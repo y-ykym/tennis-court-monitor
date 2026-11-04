@@ -45,7 +45,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
     }
   }
 
-  // 2. 監視条件(平日=猿江19時 / 土日祝=3公園全時間)で絞り込み
+  // 2. 監視条件(平日=猿江19時 / 土日祝=4公園全時間)で絞り込み
   const targets = filterTargetSlots(slots);
   console.log(`空き枠: サイト全体 ${slots.length}件 / 監視対象 ${targets.length}件`);
 

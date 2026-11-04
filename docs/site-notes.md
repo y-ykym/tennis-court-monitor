@@ -92,7 +92,8 @@ lib/scrape.js はこの方式で実装している(Playwright不使用。依存�
    - 利用日: `input#daystart-home` (`type=date`, name=`daystarthome`) — `YYYY-MM-DD` でfill可能
    - 種目: `select#purpose-home` — **テニス（人工芝）= value `1000_1030`**(テニス（ハード）は `1000_1020`)
    - 公園: `select#bname-home` — 種目選択のchangeイベント(`changePurpose()`)で有効化・選択肢投入されるので、目的のoptionが現れるまで待つこと
-     - **猿江恩賜公園 = `1040` / 亀戸中央公園 = `1050` / 大島小松川公園 = `1160`**(旧システムの05/06/24から変更されている)
+     - **猿江恩賜公園 = `1040` / 亀戸中央公園 = `1050` / 大島小松川公園 = `1160` / 木場公園 = `1060`**(旧システムの05/06/24から変更されている。木場は 2026-11-05 追加、施設コード `10600010`)
+     - 種目ごとの公園一覧は `POST /web/rsvWTransFavorite2InfoBuildAjaxAction.do`(`displayNo=prwre1000&selectPpsdCd=1000&selectPpsCd=1030&selectAreaCd=0`)の JSON `results[].bcd/bcdNm` で取れる(ログイン不要。2026-11-05 確認)
    - 検索ボタン: `button#btn-go` → `POST /web/rsvWOpeInstSrchVacantAction.do` へ画面遷移
 2. **空き状況画面(施設ごと)** `rsvWOpeInstSrchVacantAction.do`
    - 「１ヶ月空き表示」(`table#month-info`、初期は非表示・0行)と「１週間空き表示」(`table#week-info`)がある。**週表示は初期状態で展開済み**

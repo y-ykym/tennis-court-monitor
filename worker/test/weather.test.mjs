@@ -66,7 +66,7 @@ test('weather: 同じ格子点の地点は 1 つにまとめ、1 リクエスト
   const people = [
     {
       label: 'A',
-      // 大島小松川は都とテニスベアで同じ座標なので 1 つに畳まれる(要求は常に台帳の 3 公園ぶん)
+      // 大島小松川は都とテニスベアで同じ座標なので 1 つに畳まれる(要求は常に台帳の 4 公園ぶん)
       reservations: [
         { date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園' },
         { date: '2026-09-22', start: '19:00', end: '21:00', facility: '猿江恩賜公園' },
@@ -74,9 +74,9 @@ test('weather: 同じ格子点の地点は 1 つにまとめ、1 リクエスト
       tennisbear: { events: [{ source: 'tennisbear', placeCode: '0100010020', facility: '大島小松川公園Ａ', date: '2026-09-22', start: '19:00', end: '21:00' }] },
     },
   ];
-  await attachWeather(people, { fetchImpl: mkFetch([mkSeries(hours), mkSeries(hours), mkSeries(hours)], spy), today: '2026-09-18' });
+  await attachWeather(people, { fetchImpl: mkFetch([mkSeries(hours), mkSeries(hours), mkSeries(hours), mkSeries(hours)], spy), today: '2026-09-18' });
   assert.equal(spy.calls, 1, 'HTTP は 1 回');
-  assert.equal((spy.url.match(/35\./g) || []).length, 3, '台帳の 3 公園ぶんを常に要求する(キャッシュのキーを固定するため)');
+  assert.equal((spy.url.match(/35\./g) || []).length, 4, '台帳の 4 公園ぶんを常に要求する(キャッシュのキーを固定するため)');
   assert.ok(!spy.url.includes('35.69144,35.69144'), '同じ座標を 2 回並べない');
   assert.deepEqual(people[0].reservations[0].weather, { emoji: '☀️', label: '快晴', tempC: 21, pop: 10 });
   assert.deepEqual(people[0].tennisbear.events[0].weather, people[0].reservations[0].weather, '同じコートなら同じ天気');
@@ -96,7 +96,7 @@ test('weather: 16 日より先は「予報なし」、終了した予定と場�
   ];
   const hours = [['2026-09-22T19:00', 21, 10, 0], ['2026-09-22T20:00', 21, 10, 0]];
   await attachWeather(people, {
-    fetchImpl: mkFetch([mkSeries(hours), mkSeries(hours), mkSeries(hours)]),
+    fetchImpl: mkFetch([mkSeries(hours), mkSeries(hours), mkSeries(hours), mkSeries(hours)]),
     today: '2026-09-18',
   });
   const [ok, far, past, unknownPlace] = people[0].reservations;

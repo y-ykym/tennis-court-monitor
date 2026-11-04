@@ -45,7 +45,7 @@ test('振り分け: 除外枠 > ペナルティ > 除外日 > 対象', () => {
   assert.equal(classifySlot(slot('猿江恩賜公園', '2026-09-17', '19:00-21:00'), { today: TODAY, exclusions: ex }).kind, 'penalty');
   assert.equal(classifySlot(slot('大島小松川公園', '2026-09-27', '09:00-11:00'), { today: TODAY, exclusions: ex }).kind, 'excluded_date');
   assert.equal(classifySlot(slot('大島小松川公園', '2026-09-27', '13:00-15:00'), { today: TODAY, exclusions: ex }).kind, 'excluded_slot');
-  assert.equal(classifySlot(slot('木場公園', '2026-09-27', '13:00-15:00'), { today: TODAY, exclusions: ex }).kind, 'unknown_park');
+  assert.equal(classifySlot(slot('日比谷公園', '2026-09-27', '13:00-15:00'), { today: TODAY, exclusions: ex }).kind, 'unknown_park');
 });
 
 test('並べ替え: 日付 → 公園の優先順(大島 > 猿江 > 亀戸)→ 時間帯(11 > 9 > 15 > 13 > 17 > 19)', () => {

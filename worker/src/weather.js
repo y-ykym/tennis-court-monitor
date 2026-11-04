@@ -156,9 +156,9 @@ export async function attachWeather(people, { fetchImpl = fetch, today, signal, 
   }
   if (targets.length === 0) return;
 
-  // 台帳の 3 公園は予約の有無にかかわらず常に要求する。URL(= キャッシュのキー)が
+  // 台帳の 4 公園は予約の有無にかかわらず常に要求する。URL(= キャッシュのキー)が
   // 予約のある公園の組み合わせで変わらなくなり、30 分のキャッシュがほぼ必ず当たる。
-  // 3 地点でも 1 リクエストなので取得のコストは変わらない
+  // 4 地点でも 1 リクエストなので取得のコストは変わらない
   const points = COURTS.map((c) => ({ lat: c.lat, lng: c.lng }));
   const seen = new Set(points.map(keyOf));
   for (const { at } of targets) {

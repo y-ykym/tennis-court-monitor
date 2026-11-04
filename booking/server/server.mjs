@@ -87,7 +87,7 @@ const HANDOFF_TIMEOUT_MS = 8 * 60 * 1000;
 const DONE_KEEP_MS = 10 * 60 * 1000;
 // noVNC クライアント(npm の lib は CommonJS なので、esbuild でブラウザ用 ESM に束ねたもの。npm run build:novnc)
 const NOVNC_BUNDLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public', 'rfb.js');
-const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園' };
+const PARK_NAMES = { 1040: '猿江恩賜公園', 1050: '亀戸中央公園', 1160: '大島小松川公園', 1060: '木場公園' };
 // ブラウザプロファイル(Cookie 等)の置き場所。PROFILE_LOCAL=1 のとき docker volume として持ち越す
 const PROFILE_DIR = '/tmp/profile';
 const PROFILE_LOCAL = process.env.PROFILE_LOCAL === '1';

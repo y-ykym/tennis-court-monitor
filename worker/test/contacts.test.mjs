@@ -22,12 +22,12 @@ function actions(node, out = []) {
   return out;
 }
 
-test('contacts: 台帳の 3 公園すべてに電話番号がある(03-XXXX-XXXX)', () => {
-  assert.equal(COURTS.length, 3);
+test('contacts: 台帳の 4 公園すべてに電話番号がある(03-XXXX-XXXX)', () => {
+  assert.equal(COURTS.length, 4);
   for (const c of COURTS) assert.match(c.phone, /^03-\d{4}-\d{4}$/, `${c.name} の電話番号`);
   assert.deepEqual(
     contactRows().map((r) => r.name),
-    ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園']
+    ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園', '木場公園']
   );
 });
 

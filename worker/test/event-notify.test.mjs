@@ -130,15 +130,15 @@ function nodes(node, pred, out = []) {
 const texts = (node) => nodes(node, (n) => n.type === 'text' && typeof n.text === 'string').map((n) => n.text);
 const uris = (node) => nodes(node, (n) => n.action?.type === 'uri').map((n) => n.action.uri);
 
-test('events: 合言葉・Cron・対象コート(6 か所。テニスベアの place.code)', () => {
+test('events: 合言葉・Cron・対象コート(7 か所。テニスベアの place.code)', () => {
   assert.equal(EVENT_COMMAND_TEXT, 'いべんと');
   assert.equal(EVENT_NOTIFY_CRON, '0 11 * * 1,4'); // 月・木 20:00 JST
-  assert.equal(EVENT_PLACES.length, 6);
+  assert.equal(EVENT_PLACES.length, 7);
   assert.deepEqual(
     EVENT_PLACES.map((p) => p.name),
-    ['大横川親水公園テニスコート', '錦糸公園テニスコート', '猿江恩賜公園', '亀戸中央公園', '大島小松川公園Ａ', '荒川・砂町庭球場']
+    ['大横川親水公園テニスコート', '錦糸公園テニスコート', '猿江恩賜公園', '亀戸中央公園', '大島小松川公園Ａ', '木場公園', '荒川・砂町庭球場']
   );
-  assert.equal(new Set(EVENT_PLACES.map((p) => p.code)).size, 6);
+  assert.equal(new Set(EVENT_PLACES.map((p) => p.code)).size, 7);
   assert.equal(ADJACENT_MINUTES, 60);
 });
 

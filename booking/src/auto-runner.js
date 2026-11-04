@@ -580,8 +580,8 @@ export function createAutoRunner({
 }
 
 // 空き照会の関数を作る。MOCK_SLOTS_FILE があればファイルを読む(dry-run の確認用)。
-// 実サイトは既定で「公園 × 週 = 12 本のセッションを持ち続け、毎回は週の JSON だけを 12 本同時に取る」
-// (lib/scrape.js の createPersistentScraper。1 回の照会 約 50 秒 → 約 10 秒、通信 18 → 12 回。2026-10-25)。
+// 実サイトは既定で「公園 × 週 = 16 本のセッションを持ち続け、毎回は週の JSON だけを全部同時に取る」
+// (lib/scrape.js の createPersistentScraper。3 公園のとき 1 回の照会 約 50 秒 → 約 10 秒、通信 18 → 12 回。2026-10-25。4 公園は 24 → 16 回)。
 // AUTO_SCRAPE_WEEKS=0 で従来の「公園ごとに新しいセッションで 4 週を順番に取る」に戻す(AUTO_SCRAPE_CONCURRENCY 公園を同時、既定 3)
 export function createScraper({
   mockFile = process.env.MOCK_SLOTS_FILE,

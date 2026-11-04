@@ -67,6 +67,7 @@ export const EVENT_PLACES = [
   { code: '0100010008', name: '猿江恩賜公園', short: '猿江', bg: '#E0E7FF', fg: '#3730A3' },
   { code: '0100010009', name: '亀戸中央公園', short: '亀戸', bg: '#FEF3C7', fg: '#92400E' },
   { code: '0100010020', name: '大島小松川公園Ａ', short: '大島小松川', bg: '#CCFBF1', fg: '#115E59' },
+  { code: '0100010010', name: '木場公園', short: '木場', bg: '#FFEDD5', fg: '#9A3412' }, // 2026-11-05 追加
   { code: '0100130006', name: '荒川・砂町庭球場', short: '荒川砂町', bg: '#DCFCE7', fg: '#166534' },
 ];
 export const LEVEL_ID = 4; // 初中級。サイトと同じく「募集レベルの範囲に 4 を含む」

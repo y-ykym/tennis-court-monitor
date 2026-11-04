@@ -435,7 +435,7 @@ test('追加枠(2026-10-25): 日付ピッカー(b)→ 時間帯とコートを�
   assert.ok(t1.includes('9/16(水)'));
   assert.ok(t1.some((s) => s.includes('ペナルティ期間')), '+2 日なので警告');
   const HOURS = ['9:00〜11:00', '11:00〜13:00', '13:00〜15:00', '15:00〜17:00', '17:00〜19:00', '19:00〜21:00'];
-  const PARKS = ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'];
+  const PARKS = ['猿江恩賜公園', '亀戸中央公園', '木場公園', '大島小松川公園']; // 公園コードの昇順(1040・1050・1060・1160)
   const pb = (r) => actions(r.flex.contents).filter((a) => a.type === 'postback');
   const acts1 = pb(r1);
   assert.deepEqual(acts1.map((a) => a.label), [...HOURS, ...PARKS], '「決定」はまだ無い');
@@ -455,11 +455,11 @@ test('追加枠(2026-10-25): 日付ピッカー(b)→ 時間帯とコートを�
   const r3 = await buildPostbackReply(env, acts2[3].data, { now: NOW });
   const r4 = await buildPostbackReply(env, pb(r3)[7].data, { now: NOW });
   assert.ok(texts(r4.flex.contents).includes('決定(2 枠)'));
-  const r5 = await buildPostbackReply(env, pb(r4)[8].data, { now: NOW });
+  const r5 = await buildPostbackReply(env, pb(r4)[9].data, { now: NOW }); // [9] = 大島(木場が [8] に入った。2026-11-05)
   assert.ok(texts(r5.flex.contents).includes('決定(4 枠)'));
   const acts5 = pb(r5);
   assert.deepEqual(acts5.map((a) => a.label), [...HOURS, ...PARKS, '決定']);
-  const confirm = acts5[9];
+  const confirm = acts5[10];
   assert.deepEqual(await verifyAutoData(SECRET, confirm.data, NOW).then((x) => [x.kind, x.value]), ['c', '1050-1160_20260916_13-15_0']);
   assert.match(confirm.displayText, /13:00〜15:00・15:00〜17:00 亀戸中央公園・大島小松川公園 を追加枠に/);
   assert.match(r5.text, /✓13:00〜15:00 ✓15:00〜17:00/);
@@ -468,7 +468,7 @@ test('追加枠(2026-10-25): 日付ピッカー(b)→ 時間帯とコートを�
   // 13:00 をもう一度押すと外れて「決定(2 枠)」。15:00 も外すと時間帯なしで「決定」が消える
   const r6 = await buildPostbackReply(env, acts5[2].data, { now: NOW });
   assert.ok(texts(r6.flex.contents).includes('決定(2 枠)'));
-  assert.equal((await verifyAutoData(SECRET, pb(r6)[9].data, NOW)).value, '1050-1160_20260916_15_0');
+  assert.equal((await verifyAutoData(SECRET, pb(r6)[10].data, NOW)).value, '1050-1160_20260916_15_0');
   const r6b = await buildPostbackReply(env, pb(r6)[3].data, { now: NOW });
   assert.ok(!texts(r6b.flex.contents).some((s) => s.startsWith('決定(')));
 
@@ -569,7 +569,7 @@ test('追加枠(2026-11-03): 日を選ぶと A・B の都の予約一覧を見�
   assert.equal(t1.filter((x) => x === '予約済み').length, 2, '13:00 と 17:00 の行は「予約済み」');
   assert.ok(t1.includes('13:00〜15:00') && t1.includes('17:00〜19:00'), '行自体は出す(押せない)');
   const HOURS_OPEN = ['9:00〜11:00', '11:00〜13:00', '15:00〜17:00', '19:00〜21:00'];
-  const PARKS = ['猿江恩賜公園', '亀戸中央公園', '大島小松川公園'];
+  const PARKS = ['猿江恩賜公園', '亀戸中央公園', '木場公園', '大島小松川公園']; // 公園コードの昇順(1040・1050・1060・1160)
   assert.deepEqual(pb(r1).map((a) => a.label), [...HOURS_OPEN, ...PARKS], '予約済みの時間帯にはボタンが無い');
   assert.match(r1.text, /×13:00〜15:00\(予約済み\)/);
   assert.ok(!t1.some((x) => x.includes('取れなかった')), '全員分取れたので注意は無い');
