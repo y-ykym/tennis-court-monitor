@@ -8,6 +8,7 @@
 //     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り。ただし「せってい」で 1 枠ずつ選んだ「追加枠」は対象。追加枠は 1 日の上限・場所の判定も掛けない)、
 //       利用日ごとに公園→時間帯の優先順に並べる
 //     → 候補を 1 件ずつ予約の行列(booking-queue.js)に入れる。行列は 1 件ずつ実行し、手動(LINE ボタン)を優先する
+//     → 一時エラー(error)で終わった枠が ERROR_RETRY_AFTER_MS(5 分)後もまだ空いていれば、同じ流れで再挑戦する(ERROR_RETRY_MAX=2 回まで。2026-11-06)
 //   各候補の実行(行列の中):
 //     まず「いま」の時刻で対象かどうかをもう一度判定する(要件 #11。23:59 に見つけて 00:01 に実行すると +3 日 = ペナルティ期間になる。
 //     +4 日の枠は 23:35 以降は自動予約しない)。対象外になっていたら予約せず、Pi 自身が従来の空き通知カード(予約ボタン付き)を送る
@@ -56,6 +57,12 @@ const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, isP
 const EXCLUSIONS_MAX_AGE_MS = 30 * 60 * 1000;
 // これらの結果の枠は同じ枠が「新しく出た」扱いになっても再投入しない
 const NO_RETRY_STATUSES = new Set(['queued', 'running', 'success']);
+// error(都サイトの一時エラー・タイムアウト)で終わった枠が、そのあとも空いたまま見えていれば、これだけ経ってから再挑戦する。回数は ERROR_RETRY_MAX まで
+// (2026-11-06。11/5 12:46 の大島は「予約」押下後 90 秒無応答で error になった後、34 分も空いたままだったのに二度と挑戦しなかった。
+//  記録のある 3 週間で同じ取りこぼしが 3 回(6 分・34 分・95 分)。押した直後のやり直しは server.mjs が二重予約よけで止めているが、
+//  数分後の再挑戦は予約直前の一覧(beforeApply)で入っていないことを確かめてから押すので安全)
+export const ERROR_RETRY_AFTER_MS = 5 * 60 * 1000;
+export const ERROR_RETRY_MAX = 2;
 // 照会が間隔より長くかかったとき、次の照会までに最低これだけ空ける
 export const MIN_GAP_MS = 15 * 1000;
 // 「その日は既に上限まで予約がある」という記憶の有効時間。過ぎたら次の候補でまた一覧を見て数える。
@@ -243,6 +250,17 @@ export function createAutoRunner({
       }
       const newSlots = state.needsBaseline() ? [] : targets.filter((s) => !known.has(slotKey(s)));
       const baseline = state.needsBaseline();
+      // error で終わってから ERROR_RETRY_AFTER_MS 経っても空いたまま見えている枠は、もう一度候補にする(ERROR_RETRY_MAX 回まで)
+      const retrySlots = baseline
+        ? []
+        : targets.filter((s) => {
+            const k = slotKey(s);
+            if (known.has(k) && !newSlots.includes(s)) {
+              const a = state.attemptInfo(k);
+              return a && a.status === 'error' && (a.errors || 0) <= ERROR_RETRY_MAX && started - a.at >= ERROR_RETRY_AFTER_MS;
+            }
+            return false;
+          });
       // 記録: 消えた枠(前回まで見えていて今回無い)と、新しく出た枠
       if (!baseline) {
         const nowKeys = new Set(keys);
@@ -263,24 +281,30 @@ export function createAutoRunner({
       await heartbeat();
       state.save();
       // 動いていることが分かるよう毎回 1 行(1 日 1,440 行程度。docker のログ上限 10MB×3 に収まる)
-      log(`照会: 監視対象 ${targets.length} 件(全体 ${slots.length} 件)、新規 ${newSlots.length} 件、所要 ${Math.round(lastCycle.ms / 1000)} 秒`);
+      log(`照会: 監視対象 ${targets.length} 件(全体 ${slots.length} 件)、新規 ${newSlots.length} 件${retrySlots.length ? `、再挑戦 ${retrySlots.length} 件` : ''}、所要 ${Math.round(lastCycle.ms / 1000)} 秒`);
 
       if (baseline) {
         log(`初回起動: いま見えている監視対象 ${targets.length} 件を既知として登録しました(この分は予約しません)`);
         return { baseline: true, known: targets.length };
       }
-      if (newSlots.length === 0) return { newSlots: 0 };
-      log(`新しい空き ${newSlots.length} 件: ${newSlots.map(describe).join(' / ')}`);
+      if (newSlots.length === 0 && retrySlots.length === 0) return { newSlots: 0 };
+      if (newSlots.length) log(`新しい空き ${newSlots.length} 件: ${newSlots.map(describe).join(' / ')}`);
+      for (const s of retrySlots) {
+        const a = state.attemptInfo(slotKey(s));
+        log(`再挑戦: ${describe(s)} (${Math.round((started - a.at) / 60000)} 分前に一時エラーで失敗したがまだ空いている。${a.errors} 回目の失敗後、再挑戦は ${ERROR_RETRY_MAX} 回まで)`);
+        event('retry', { key: slotKey(s), facility: s.facility, date: s.date, time: s.time, errors: a.errors, sinceErrorMs: started - a.at });
+      }
+      const candidates = [...newSlots, ...retrySlots];
 
       const ex = usableExclusions();
       if (!ex) {
-        for (const s of newSlots) {
+        for (const s of candidates) {
           log(`  見送り: ${describe(s)} (Worker から除外一覧が取れていないため)`);
           event('skipped', { key: slotKey(s), kind: 'no_exclusions', reason: 'Worker から除外一覧が取れていない' });
         }
         return { newSlots: newSlots.length, planned: 0, reason: 'no_exclusions' };
       }
-      const { byDate, skipped } = planAutoBooking(newSlots, { now: started, exclusions: ex });
+      const { byDate, skipped } = planAutoBooking(candidates, { now: started, exclusions: ex });
       for (const s of skipped) {
         log(`  見送り: ${describe(s.slot)} (${s.reason}${s.kind === 'penalty' || s.kind === 'deadline' ? '。通知は Actions が行う' : s.kind === 'excluded_date' || s.kind === 'excluded_slot' ? '。通知もしない' : ''})`);
         event('skipped', { key: slotKey(s.slot), kind: s.kind, reason: s.reason });

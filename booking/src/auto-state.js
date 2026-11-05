@@ -2,7 +2,8 @@
 // フェーズ3 自動予約の Pi 側の状態(docker volume /var/lib/booking/auto-state.json)。Actions の state.json とは別物。
 //
 //   known     : 前回の照会で見えていた監視対象の枠キー(差分 = 「新しく出た空き」の検出用)
-//   attempted : 枠キー → { status, at }。同じ枠を二重に試さない(queued/running/success は再投入しない)
+//   attempted : 枠キー → { status, at, errors }。同じ枠を二重に試さない(queued/running/success は再投入しない)
+//               errors = その枠が error(一時的な失敗)で終わった回数。空いたまま残っていれば数分後に再挑戦する回数の上限に使う(2026-11-06)
 //               queued/running は起動時に消す(行列はメモリ上なので再起動で消えている。残すと同じ枠が空いても二度と試さない。2026-10-25)
 //   seen      : 枠キー → { at, facility, date, time, baseline }。いま見えている枠が初めて見えた時刻(消えたときの記録用。2026-10-11)
 //   own       : 自分(この Pi)が自動予約した枠 [{ key, person, id, date, start, end, park, facility, at }]。
@@ -63,8 +64,10 @@ export function createAutoState({ file, now = Date.now, staleMs = DEFAULT_STALE_
     },
     seenInfo: (key) => data.seen[key] || null,
     attemptStatus: (key) => data.attempted[key]?.status ?? null,
+    attemptInfo: (key) => (data.attempted[key] ? { ...data.attempted[key] } : null),
     markAttempt(key, status) {
-      data.attempted[key] = { status, at: now() };
+      const errors = (data.attempted[key]?.errors || 0) + (status === 'error' ? 1 : 0);
+      data.attempted[key] = { status, at: now(), errors };
     },
     addOwn(entry) {
       data.own = data.own.filter((o) => o.key !== entry.key);
