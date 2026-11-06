@@ -24,8 +24,9 @@
 // ============================================================
 import { COURTS } from './courts.js';
 
-// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)
-export const CONTACT_COMMAND_TEXT = 'きゃんせる';
+// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)。定義は commands.js
+import { CONTACT_COMMAND_TEXT } from './commands.js';
+export { CONTACT_COMMAND_TEXT };
 
 export const MSG_CONTACT_FAILED = '連絡先を表示できませんでした';
 

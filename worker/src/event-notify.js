@@ -52,8 +52,9 @@ import { pushMessages } from './line.js';
 import { formatTime, jstTodayIso } from './format.js';
 import { bubbleBytes, MAX_BUBBLE_BYTES, MAX_CAROUSEL_BYTES } from './flex.js';
 
-// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)
-export const EVENT_COMMAND_TEXT = 'いべんと';
+// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)。定義は commands.js
+import { EVENT_COMMAND_TEXT } from './commands.js';
+export { EVENT_COMMAND_TEXT };
 // 月・木 20:00 JST(= 11:00 UTC)。wrangler.toml [triggers] と index.js の scheduled() で振り分ける
 export const EVENT_NOTIFY_CRON = '0 11 * * 1,4';
 export const KV_STATE_KEY = 'tb_event_notify';

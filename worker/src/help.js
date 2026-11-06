@@ -33,8 +33,9 @@ import { CARD_COMMAND_TEXT } from './card.js';
 import { CONTACT_COMMAND_TEXT } from './contacts.js';
 import { EVENT_COMMAND_TEXT } from './event-notify.js';
 
-// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)
-export const HELP_COMMAND_TEXT = 'へるぷ';
+// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)。定義は commands.js
+import { HELP_COMMAND_TEXT } from './commands.js';
+export { HELP_COMMAND_TEXT };
 
 export const MSG_HELP_FAILED = '使い方を表示できませんでした';
 
@@ -110,7 +111,7 @@ export function buildHelpFlex(rows = helpRows()) {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE, margin: 'md' });
     body.push(helpRow(r, { first: i === 0 }));
   });
-  body.push(text('行をタップすると、その合言葉が送られます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
+  body.push(text('行をタップすると、その合言葉が送られます。メッセージの下に並ぶボタンからも送れます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
   return {
     type: 'flex',
     altText: helpText(rows).slice(0, 400),

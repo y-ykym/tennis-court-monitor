@@ -51,7 +51,8 @@ import { PARK_NAMES, courtByTbCode, courtByFacility } from './courts.js';
 import { buildAutoSettingsFlex, autoSettingsText, buildPickFlex, pickText } from './auto-flex.js';
 import { fetchTennisbearEvents } from './tennisbear.js';
 
-export const AUTO_COMMAND_TEXT = 'せってい'; // 2026-09-25 まで「じどう」
+import { AUTO_COMMAND_TEXT } from './commands.js'; // 合言葉の定義は commands.js(2026-09-25 まで「じどう」)
+export { AUTO_COMMAND_TEXT };
 export const AUTO_ON_TEXT = 'じどうおん';
 export const AUTO_OFF_TEXT = 'じどうおふ';
 export const KV_SWITCH = 'auto_switch'; // { enabled: boolean, at }。無ければ有効

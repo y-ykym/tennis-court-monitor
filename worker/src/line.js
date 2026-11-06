@@ -5,11 +5,13 @@
 // (crypto.subtle / fetch / TextEncoder / btoa)だけを使う。
 // ============================================================
 
+import { COMMAND_TEXT, commandTexts, withQuickReply } from './commands.js';
+
 const LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
 const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
 
-// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)
-export const COMMAND_TEXT = 'よやく';
+// グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)。定義は commands.js
+export { COMMAND_TEXT };
 
 function toBase64(bytes) {
   let bin = '';
@@ -51,7 +53,9 @@ export async function verifySignature(channelSecret, rawBody, signatureHeader) {
 
 // Webhook本文(JSON文字列)から「対象グループで合言葉(texts のいずれか)と送られたテキストメッセージ」だけを返す。
 // それ以外(参加イベント・他グループ・個人チャット・別の文言)は全て無視する。
+// texts の各合言葉には別名(クイックリプライのボタンが送る「予約の一覧」など。commands.js)も自動で含める
 export function pickTextCommandEvents(rawBody, groupId, texts) {
+  const accepted = texts.flatMap(commandTexts);
   let payload;
   try {
     payload = JSON.parse(rawBody);
@@ -66,7 +70,7 @@ export function pickTextCommandEvents(rawBody, groupId, texts) {
       ev.source?.type === 'group' &&
       ev.source.groupId === groupId &&
       typeof ev.message.text === 'string' &&
-      texts.includes(ev.message.text.trim()) &&
+      accepted.includes(ev.message.text.trim()) &&
       typeof ev.replyToken === 'string'
   );
 }
@@ -98,8 +102,10 @@ export function pickPostbackEvents(rawBody, groupId) {
 
 // reply API でメッセージ(最大5件)を返す(replyToken は受信から1分以内・1回限り)。
 // 失敗時は例外(呼び出し側でログに出して握りつぶす。LINEには200を返す必要があるため)。
-// 例外には status を持たせ、400(メッセージ形式の不備)ならテキストで再送する判断に使う
+// 例外には status を持たせ、400(メッセージ形式の不備)ならテキストで再送する判断に使う。
+// 最後のメッセージにはクイックリプライ(合言葉のボタン列。commands.js)を付けて送る
 export async function replyMessages(accessToken, replyToken, messages) {
+  messages = withQuickReply(messages);
   const res = await fetch(LINE_REPLY_URL, {
     method: 'POST',
     headers: {
@@ -122,8 +128,9 @@ export function replyText(accessToken, replyToken, text) {
 
 // push API でメッセージ(最大5件)を送る(replyToken 不要。Cron からの監視通知などボットが自発的に送るとき)。
 // reply と違い push は LINE の通数を消費する(グループ宛は 1 回で人数分)。例外には status を持たせ、
-// 400(メッセージ形式の不備)ならテキストで送り直す判断に使う
+// 400(メッセージ形式の不備)ならテキストで送り直す判断に使う。最後のメッセージにはクイックリプライを付けて送る
 export async function pushMessages(accessToken, to, messages) {
+  messages = withQuickReply(messages);
   const res = await fetch(LINE_PUSH_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },

@@ -21,8 +21,9 @@
 //   URL が漏れてもカードが見えるだけで、ログインにはパスワードが必要。利用者番号そのものは
 //   受付で相手に見せる値なので、サイトのカード画面を見せるのと同じ range のリスクに留まる。
 // ============================================================
-// グループで受け付ける合言葉(flex.js にも同じ文字列を直書きしている。循環 import を避けるため)
-export const CARD_COMMAND_TEXT = 'うけつけ';
+// グループで受け付ける合言葉(定義は commands.js。flex.js にも同じ文字列を直書きしている。循環 import を避けるため)
+import { CARD_COMMAND_TEXT } from './commands.js';
+export { CARD_COMMAND_TEXT };
 
 const CARD_PATH = /^\/card\/([AB])\.png$/;
 const SIG_BYTES = 16;

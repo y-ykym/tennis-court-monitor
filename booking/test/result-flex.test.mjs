@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildChallengeFlex, buildResultFlex } from '../src/result-flex.js';
+import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
 
 const slot = { park: '1050', date: '2026-09-30', startHour: 13, people: 2 };
 const bytes = (m) => Buffer.byteLength(JSON.stringify(m.contents), 'utf8');
@@ -64,4 +64,20 @@ test('結果カード(自動予約・ペナルティ期間の日): 取消にペ�
   assert.equal(text.includes('ペナルティなしで取り消せるのは今日'), false);
   assert.equal(text.includes('"type":"postback"'), false);
   assert.ok(bytes(m) < 10000);
+});
+
+test('pushResult: 送る本文の最後のメッセージにクイックリプライ(合言葉のボタン列)が付く', async () => {
+  const realFetch = globalThis.fetch;
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => { bodies.push(JSON.parse(init.body)); return new Response('{}', { status: 200 }); };
+  try {
+    await pushResult({ type: 'text', text: 'a' }, { token: 't', to: 'G' });
+    await pushResult([{ type: 'text', text: '1' }, { type: 'text', text: '2' }], { token: 't', to: 'G' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(bodies[0].messages[0].quickReply.items.length, 6);
+  assert.equal(bodies[0].messages[0].quickReply.items[0].action.text, '予約の一覧');
+  assert.equal(bodies[1].messages[0].quickReply, undefined);
+  assert.equal(bodies[1].messages[1].quickReply.items.length, 6);
 });

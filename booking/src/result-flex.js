@@ -10,6 +10,11 @@
 //   pushResult(message, { token, to })                                              → LINE push(失敗時は例外)
 // ============================================================
 
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { withQuickReply } = require('../../lib/quick-reply.js'); // 合言葉のボタン列(クイックリプライ)
+
 const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 const DOW = ['日', '月', '火', '水', '木', '金', '土'];
 // 「よやく」コマンド(worker/src/line.js の COMMAND_TEXT と同じ文言)。メッセージアクションで送ると Worker が予約一覧を返す
@@ -228,13 +233,15 @@ export function buildChallengeFlex({ slot, facility, label = '', url, minutes = 
 // 自宅回線は数秒の瞬断が多く、1 回の fetch が "fetch failed" で落ちることがある(2026-09-13 に予約成功の結果カードが届かなかった)。
 // 通信エラーと 5xx は間を置いて最大 retries 回やり直す。4xx(形式不備・認証)はやり直しても無駄なので即エラー
 export async function pushResult(message, { token, to }, { retries = 3, delayMs = 3000 } = {}) {
+  // 最後のメッセージにクイックリプライ(合言葉のボタン列。lib/quick-reply.js)を付ける
+  const messages = withQuickReply(Array.isArray(message) ? message : [message]);
   let lastError;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await fetch('https://api.line.me/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ to, messages: Array.isArray(message) ? message : [message] }), // 配列なら 1 回の push に複数件(最大 5。夜間のまとめ送り)
+        body: JSON.stringify({ to, messages }), // 配列なら 1 回の push に複数件(最大 5。夜間のまとめ送り)
         signal: AbortSignal.timeout(10000),
       });
       if (res.ok) return;
