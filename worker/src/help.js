@@ -34,7 +34,7 @@ import { CONTACT_COMMAND_TEXT } from './contacts.js';
 import { EVENT_COMMAND_TEXT } from './event-notify.js';
 
 // グループで受け付ける合言葉(前後の空白を除いた本文との完全一致)。定義は commands.js
-import { HELP_COMMAND_TEXT } from './commands.js';
+import { HELP_COMMAND_TEXT, commandTexts } from './commands.js';
 export { HELP_COMMAND_TEXT };
 
 export const MSG_HELP_FAILED = '使い方を表示できませんでした';
@@ -50,21 +50,23 @@ const COLOR_PILL_FG = '#1F2A44';
 
 const text = (str, extra = {}) => ({ type: 'text', text: String(str), ...extra });
 
-// カードに載せる合言葉の一覧(表示順)。keyword は各モジュールの定数そのもの
+// カードに載せる合言葉の一覧(表示順)。keyword は各モジュールの定数そのもの(ひらがな)、
+//   label は枡に出す言葉(クイックリプライのボタンが送る別名と同じ。2026-11-06 からこちらを表に出す。commands.js の alias)。
 //   title: したいこと(1 語)。desc: 補足(1〜2 文)。読む人は家族・仲間なので、仕組みの用語(除外枠など)は使わない。
 //   ON/OFF の打ち込み合言葉(じどうおん など)は載せない(設定カードのボタンで押せる。2026-09-25 本人決定)
+const withLabel = (row) => ({ ...row, label: commandTexts(row.keyword)[1] ?? row.keyword });
 export function helpRows() {
   return [
-    { keyword: COMMAND_TEXT, title: '予約の一覧', desc: '都営コートとテニスベアの予定を日付順に。天気も出ます。キャンセルもここから' },
+    { keyword: COMMAND_TEXT, title: '予定を見る', desc: '都営コートとテニスベアの予定を日付順に。天気も出ます。キャンセルもここから' },
     { keyword: EVENT_COMMAND_TEXT, title: 'イベントを探す', desc: '近くのコートの土日祝・初中級の練習会や大会。予定と重なるものは除いて、月・木の夜に新着も届きます' },
-    { keyword: AUTO_COMMAND_TEXT, title: '設定', desc: '自動予約と空き通知を止める・戻す。予約したくない日を決める' },
+    { keyword: AUTO_COMMAND_TEXT, title: '自動予約と空き通知', desc: '自動予約と空き通知を止める・戻す。予約したくない日を決める' },
     { keyword: CARD_COMMAND_TEXT, title: '受付で見せるカード', desc: '利用者カードの画像を人数分' },
     { keyword: CONTACT_COMMAND_TEXT, title: '電話でキャンセル', desc: '都営コートの電話番号。タップでかかります' },
     { keyword: HELP_COMMAND_TEXT, title: 'この一覧', desc: '合言葉と、送ると何が返るか' },
-  ];
+  ].map(withLabel);
 }
 
-// 合言葉の枡の幅。一番長い「きゃんせる」(5 文字)が収まる幅に全行そろえ、右の説明の頭を縦に揃える
+// 合言葉の枡の幅。一番長い「予約の一覧」「受付カード」(5 文字)が収まる幅に全行そろえ、右の説明の頭を縦に揃える
 const PILL_WIDTH = '92px';
 
 // 合言葉を薄い枡に入れて出す(設定カードの pill と同じ見え方)。幅は固定・中央寄せ
@@ -83,7 +85,7 @@ function keywordPill(keyword) {
   };
 }
 
-function helpRow({ keyword, title, desc }, { first }) {
+function helpRow({ label, title, desc }, { first }) {
   const right = [
     text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT, wrap: true }),
     text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' }),
@@ -95,10 +97,10 @@ function helpRow({ keyword, title, desc }, { first }) {
     paddingTop: '4px',
     paddingBottom: '4px',
     spacing: 'md',
-    // 行のどこを押してもその合言葉がグループに送られる(そのまま bot が反応する)
-    action: { type: 'message', label: keyword, text: keyword },
+    // 行のどこを押してもその言葉(別名)がグループに送られる(そのまま bot が反応する)
+    action: { type: 'message', label, text: label },
     contents: [
-      { type: 'box', layout: 'vertical', flex: 0, width: PILL_WIDTH, contents: [keywordPill(keyword)] },
+      { type: 'box', layout: 'vertical', flex: 0, width: PILL_WIDTH, contents: [keywordPill(label)] },
       { type: 'box', layout: 'vertical', flex: 1, contents: right },
     ],
   };
@@ -111,7 +113,7 @@ export function buildHelpFlex(rows = helpRows()) {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE, margin: 'md' });
     body.push(helpRow(r, { first: i === 0 }));
   });
-  body.push(text('行をタップすると、その合言葉が送られます。メッセージの下に並ぶボタンからも送れます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
+  body.push(text('行をタップすると、その言葉が送られます。メッセージの下に並ぶボタンでも同じです。打ち込むなら ひらがな(よやく・いべんと・せってい・うけつけ・きゃんせる・へるぷ)でも届きます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
   return {
     type: 'flex',
     altText: helpText(rows).slice(0, 400),
@@ -135,9 +137,9 @@ export function buildHelpFlex(rows = helpRows()) {
   };
 }
 
-// テキスト版(Flex が 400 で弾かれたときの再送と altText)。1 合言葉 1 行
+// テキスト版(Flex が 400 で弾かれたときの再送と altText)。1 合言葉 1 行(別名とひらがなの両方)
 export function helpText(rows = helpRows()) {
-  return ['📖 使い方(グループで送る合言葉)', ...rows.map((r) => `${r.keyword}: ${r.title}`)].join('\n');
+  return ['📖 使い方(グループで送る合言葉)', ...rows.map((r) => `${r.label}(${r.keyword}): ${r.title}`)].join('\n');
 }
 
 // 「へるぷ」への返信。予約サイトにも KV にも行かない
