@@ -8,7 +8,7 @@
 //   GET  /book                       **廃止(2026-09-25)**。かつては「URL を開いただけで予約開始」だったが、LINE のリンク先読みロボット
 //                                  (User-Agent line-poker)がトークに残っていた古い署名 URL を開いて勝手に予約が成立した(亀戸 9/30 13:00)。
 //                                  今のカードは全部 postback なので、この入口は案内画面(410)だけ返し、PC へは中継しない
-//   GET  /status /result /vnc /abort /novnc/rfb.js, WS /websockify
+//   GET  /status /result /vnc /novnc/rfb.js, POST /abort, WS /websockify
 //                                  PC の noVNC 画面・API・WebSocket を中継(reCAPTCHA の「確認が必要です」カードのボタンが /vnc を開く)。
 //                                  スマホは常にこの Worker(固定 URL)だけと通信し、
 //                                  quick tunnel の一時エラー(Cloudflare 1033 等)は Worker 側で数回やり直して吸収する。
@@ -154,8 +154,9 @@ export async function handleBooking(request, env, ctx) {
 
   const registered = await env.BOOKING_KV.get(KV_KEY);
 
+  // 登録の有無だけ返す。ホスト名は返さない(2026-11-06: 認証なしで誰でも見られる入口なので、Pi のトンネル URL を知られて直接叩かれないように)
   if (p === '/booking/status') {
-    return Response.json({ registered: !!registered, host: registered ? new URL(registered).hostname : null });
+    return Response.json({ registered: !!registered });
   }
 
   if (p === '/warmup') {

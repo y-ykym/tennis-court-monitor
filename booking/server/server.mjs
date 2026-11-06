@@ -12,7 +12,7 @@
 //                        人間がチェック → 画像問題 → 再度「予約」を行う。準備前に開いたら「準備中」を返して数秒後に再読み込み
 //   WS  /websockify?token=…  noVNC と x11vnc(localhost:5900)の橋渡し(websockify 相当を Node で実装)
 //   GET /result?token=…  結果画面(noVNC 画面が完了を検知して遷移する)
-//   GET /abort?token=…   人間が「やめる」を押した(予約せず終了)
+//   POST /abort?token=…  人間が「やめる」を押した(予約せず終了)。GET は中止せず結果画面へ(開いただけで止まらないように。2026-11-06)
 //   GET /warmup          監視・生存確認の空叩き
 //   GET /healthz
 //   GET /auto/status     フェーズ3 自動予約の状態(mode・行列・最終照会・起動時刻)。Pi 自身の確認用と、Worker が生存判定に使う(トンネル越し)
@@ -477,7 +477,7 @@ function vncPage(token, s) {
   #screen{position:fixed;top:44px;left:0;right:0;bottom:0}
   #hint{position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,.7);color:#fff;font-size:.8rem;padding:8px 12px;line-height:1.5;z-index:10}
 </style></head><body>
-<div id="bar"><b>${esc(slotText(s.payload))}</b><span class="st" id="st">接続中…</span><a href="/abort?token=${encodeURIComponent(token)}">やめる</a></div>
+<div id="bar"><b>${esc(slotText(s.payload))}</b><span class="st" id="st">接続中…</span><a href="#" id="abort">やめる</a></div>
 <div id="screen"></div>
 <div id="hint">「予約」は押しました。<b>チェックボックス</b>を押し、画像問題が出たら解いてから、もう一度<b>「予約」</b>を押してください。完了画面になると自動で結果に進みます。</div>
 <script type="module">
@@ -488,6 +488,10 @@ function vncPage(token, s) {
   const proto=location.protocol==='https:'?'wss':'ws';
   const url=proto+'://'+location.host+'/websockify?token='+encodeURIComponent(token);
   const rfb=new RFB(document.getElementById('screen'),url,{credentials:{password:${JSON.stringify(VNC_PASSWORD)}}});
+  // 「やめる」は POST(リンクを開いただけでは中止にならないように)。終わったら結果画面へ
+  document.getElementById('abort').addEventListener('click',async(e)=>{e.preventDefault();
+    try{await fetch('/abort?token='+encodeURIComponent(token),{method:'POST'});}catch(e){}
+    location.replace('/result?token='+encodeURIComponent(token));});
   rfb.scaleViewport=true; rfb.resizeSession=false; rfb.showDotCursor=true; rfb.background='#111';
   const st=document.getElementById('st');
   rfb.addEventListener('connect',()=>{st.textContent='接続しました。画面を操作できます';});
@@ -600,7 +604,8 @@ const server = http.createServer((req, res) => {
   if (p === '/vnc') return send(res, 200, s.status === 'ready' ? vncPage(token, s) : s.status === 'done' ? resultPage(s) : preparingPage(s));
   if (p === '/result') return send(res, 200, s.status === 'done' ? resultPage(s) : preparingPage(s));
   if (p === '/abort') {
-    if (s.finish) s.finish('人間が中止');
+    // 中止は POST だけ。GET(リンクの先読みやブラウザの履歴など、開いただけ)では中止せず結果画面へ送る
+    if (req.method === 'POST' && s.finish) s.finish('人間が中止');
     res.writeHead(302, { location: `/result?token=${encodeURIComponent(token)}` });
     return res.end();
   }

@@ -183,7 +183,7 @@ docker compose logs -f registrar  # 「登録しました: xxxx.trycloudflare.co
 
 ```bash
 curl -s http://localhost:8080/warmup                                   # ok
-curl -s https://<WorkerのURL>/booking/status   # {"registered":true,"host":"....trycloudflare.com"}
+curl -s https://<WorkerのURL>/booking/status   # {"registered":true}(ホスト名は出さない)
 docker compose ps                                                      # 3 サービスが Up
 ```
 
