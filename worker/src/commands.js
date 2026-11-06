@@ -34,8 +34,9 @@ export const CARD_COMMAND_TEXT = byKey('card').text;
 export const CONTACT_COMMAND_TEXT = byKey('contacts').text;
 export const HELP_COMMAND_TEXT = byKey('help').text;
 
-// クイックリプライのボタン一覧(lib/quick-reply.js と同じ中身)
-export const QUICK_REPLY_BUTTONS = COMMANDS.map((c) => ({ label: c.label, text: c.text }));
+// クイックリプライのボタン一覧(lib/quick-reply.js と同じ中身)。並びはよく使う順(2026-11-06 本人決定)。へるぷカードの行の順とは別
+const QUICK_REPLY_ORDER = ['reservations', 'card', 'contacts', 'events', 'auto', 'help'];
+export const QUICK_REPLY_BUTTONS = QUICK_REPLY_ORDER.map((k) => ({ label: byKey(k).label, text: byKey(k).text }));
 
 export function buildQuickReply(buttons = QUICK_REPLY_BUTTONS) {
   return { items: buttons.map((b) => ({ type: 'action', action: { type: 'message', label: b.label, text: b.text } })) };

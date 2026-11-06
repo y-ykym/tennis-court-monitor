@@ -18,8 +18,8 @@ test('台帳: 合言葉・ボタン表示が重複せず、label は 20 文字�
   assert.deepEqual(helpRows().map((r) => r.keyword), COMMANDS.map((c) => c.text));
 });
 
-test('ボタンが送る文字はひらがなの合言葉そのもの', () => {
-  assert.deepEqual(QUICK_REPLY_BUTTONS.map((b) => b.text), ['よやく', 'いべんと', 'せってい', 'うけつけ', 'きゃんせる', 'へるぷ']);
+test('ボタンが送る文字はひらがなの合言葉そのもの。並びはよく使う順(2026-11-06 本人決定)', () => {
+  assert.deepEqual(QUICK_REPLY_BUTTONS.map((b) => b.text), ['よやく', 'うけつけ', 'きゃんせる', 'いべんと', 'せってい', 'へるぷ']);
 });
 
 test('withQuickReply: 最後のメッセージにだけ付け、元を変えない。空配列・付与済みはそのまま', () => {
