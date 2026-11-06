@@ -50,7 +50,8 @@ function fakeLaunch(opts = {}) {
           if (opts.holdGoto?.(b)) await opts.holdGoto(b); // 読み直しの途中を再現する(解放されるまで止まる)
           if (opts.failGoto?.(b)) throw new Error('goto failed');
         },
-        $: async () => (opts.noButton ? null : {}),
+        $: async () => (opts.noButton || opts.notice ? null : {}),
+        title: async () => (opts.notice ? '施設予約システムからのお知らせ' : 'トップ'),
       },
       setPhase: (p) => b.phases.push(p),
       close: async () => {
@@ -198,6 +199,22 @@ test('トップにログインボタンが無ければ(メンテナンス)失敗
   await flush();
   assert.equal(w.status().state, 'idle');
   assert.equal(launched[0].page.isClosed(), true);
+  await clock.advance(60 * 1000);
+  assert.equal(launched.length, 2);
+});
+
+test('トップが都サイトの「お知らせ」ページ(本物の障害)なら、起こし直しの待ちを最初から最大の 10 分にする', async () => {
+  const clock = fakeClock();
+  const logs = [];
+  const { launch, launched } = fakeLaunch({ notice: true });
+  const w = createBrowserWarmer({ launch, topUrl: TOP, now: clock.now, timers: clock.timers, log: (m) => logs.push(m) });
+  w.start();
+  await flush();
+  assert.equal(w.status().state, 'idle');
+  assert.equal(launched[0].page.isClosed(), true);
+  assert.ok(logs.at(-1).includes('都サイトがメンテナンス・障害中') && logs.at(-1).includes('600 秒後にやり直します'), logs.at(-1));
+  await clock.advance(9 * 60 * 1000);
+  assert.equal(launched.length, 1, '10 分経つまで起こさない');
   await clock.advance(60 * 1000);
   assert.equal(launched.length, 2);
 });

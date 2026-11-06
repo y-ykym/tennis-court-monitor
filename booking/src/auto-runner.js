@@ -39,6 +39,7 @@
 //   空き照会が連続で失敗(サイトのメンテナンス・長い障害): BACKOFF_AFTER 回目から次の照会までの間隔を BACKOFF_STEPS_MS の順に広げ、
 //     1 回成功したら通常の間隔に戻す(2026-09-27。定期メンテの時間帯の決め打ち lib/maintenance.js は撤去。
 //     旧システムの公表値「毎月 27 日 12:00〜28 日 8:45」で稼働中のサイトを 21 時間飛ばしたため。新システムに定期メンテの公表は無い)
+//     都サイトの「お知らせ」ページ(本物の障害・メンテナンス。lib/site-notice.js)が返ったときは 1 回目からすぐ広げる(2026-11-07)
 //
 //   ログには利用者番号・パスワード・鍵・Cookie を出さない。見送りの理由は必ず出す
 // ============================================================
@@ -219,10 +220,12 @@ export function createAutoRunner({
         slots = await scrape();
       } catch (e) {
         consecutiveFailures++;
+        // 都サイトの「お知らせ」ページ(本物の障害・メンテナンス。lib/site-notice.js)なら、3 回待たずにすぐ間隔を広げる
+        if (e.siteNotice && consecutiveFailures < BACKOFF_AFTER) consecutiveFailures = BACKOFF_AFTER;
         const backoff = backoffIntervalMs(consecutiveFailures, 0);
-        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます(メンテナンスか長い障害の可能性)` : ''}`);
+        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます${e.siteNotice ? '(都サイトが止まっている間は公園を変えても無駄なため)' : '(メンテナンスか長い障害の可能性)'}` : ''}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
-        event('poll_failed', { consecutive: consecutiveFailures, message: e.message });
+        event('poll_failed', { consecutive: consecutiveFailures, message: e.message, ...(e.siteNotice ? { siteNotice: true } : {}) });
         await heartbeat();
         return { skipped: 'scrape_failed', consecutiveFailures };
       }

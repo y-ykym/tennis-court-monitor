@@ -1104,3 +1104,33 @@ test('再挑戦(2026-11-06): 一時エラーの後、枠が消えてまた現れ
   assert.equal(n, 2);
   assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'success');
 });
+
+test('都サイトの「お知らせ」ページ(siteNotice)なら 1 回目の失敗からすぐ間隔を広げ、成功で戻す', async () => {
+  let fail = true;
+  const logs = [];
+  const runner = createAutoRunner({
+    mode: 'on',
+    scrape: async () => {
+      if (!fail) return [];
+      const e = new Error('猿江恩賜公園 の取得に失敗: 都サイトがメンテナンス・障害中(「施設予約システムからのお知らせ」ページが返った): トップページ');
+      e.siteNotice = true;
+      throw e;
+    },
+    queue: createBookingQueue(),
+    state: createAutoState({ file: tmpFile() }),
+    worker: { heartbeat: async () => ({ dates: [], slots: [] }), addExcludedSlots: async () => {} },
+    book: async () => ({}),
+    credentialsFor: () => null,
+    log: (m) => logs.push(m),
+  });
+  const failLine = () => logs.filter((m) => m.includes('空き照会に失敗')).at(-1) || '';
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 3 });
+  assert.ok(failLine().includes('次の照会まで 3 分空けます(都サイトが止まっている間は公園を変えても無駄なため)'), failLine());
+  assert.equal(backoffIntervalMs(runner.consecutiveFailures(), 60000), 3 * 60000);
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 4 });
+  assert.ok(failLine().includes('次の照会まで 5 分空けます'), failLine());
+  fail = false;
+  await runner.tick();
+  assert.equal(runner.consecutiveFailures(), 0);
+  assert.ok(logs.some((m) => m.includes('空き照会が回復しました')), logs.join('\n'));
+});

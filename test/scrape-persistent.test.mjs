@@ -197,3 +197,21 @@ test('一部のセッションの用意だけが失敗する場合は、従来�
   assert.equal(slots.length, 4);
   assert.equal(scrape.stats().sessions, 4);
 });
+
+test('トップが都サイトの「お知らせ」ページ(本物の障害)なら、公園を変えてやり直さず、目印付きで照会全体を失敗にする', async () => {
+  const site = fakeSite();
+  const orig = site.createSession;
+  const NOTICE = '<html><head><title>施設予約システムからのお知らせ</title></head><body>現在、ご指定のページはアクセスできません。</body></html>';
+  site.createSession = () => {
+    const req = orig();
+    return async (pathname, form) => (pathname === '/web/index.jsp' ? NOTICE : req(pathname, form));
+  };
+  const { scrape } = make(site);
+  await assert.rejects(scrape(), (e) => {
+    assert.equal(e.siteNotice, true, '呼び出し側がすぐ間隔を広げられる目印');
+    assert.match(e.message, /の取得に失敗: 都サイトがメンテナンス・障害中/);
+    return true;
+  });
+  assert.equal(scrape.stats().sessions, 0);
+  assert.ok(site.calls.top <= 3, `トップへの通信は打ち切りの 3 回まで(実際 ${site.calls.top} 回)`);
+});

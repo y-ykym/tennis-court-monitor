@@ -25,6 +25,11 @@
 // 予約の行列は直列なので、同時に使われる bundle は常に 1 つ。
 // ============================================================
 
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { isSiteNoticePage, siteNoticeError } = require('../../lib/site-notice.js');
+
 export function createBrowserWarmer({
   launch,
   topUrl,
@@ -63,7 +68,12 @@ export function createBrowserWarmer({
   async function loadTop(b) {
     b.setPhase('top');
     await b.page.goto(topUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    if (!(await b.page.$('[onclick*="gRsvWTransUserLoginAction"]'))) throw new Error('トップページにログインボタンがありません(メンテナンス中の可能性)');
+    if (!(await b.page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
+      // 本物の障害・メンテナンスの応答(お知らせページ)なら、起こし直しの間隔を最初から最大にする(下の catch)
+      const title = typeof b.page.title === 'function' ? await b.page.title().catch(() => '') : '';
+      if (isSiteNoticePage(title)) throw siteNoticeError('トップページ');
+      throw new Error('トップページにログインボタンがありません(メンテナンス中の可能性)');
+    }
     b.topLoadedAt = now();
     b.prefetched = null;
     if (prefetch) {
@@ -118,7 +128,8 @@ export function createBrowserWarmer({
         failures++;
         await discard(b);
         state = 'idle';
-        const wait = retryDelay();
+        // 都サイトが止まっている(お知らせページ)間は 1 分おきに起こしても無駄なので、待ちを最初から最大にする
+        const wait = e.siteNotice ? maxRetryMs : retryDelay();
         log(`先に起こせませんでした(${failures} 回目): ${e.message.split('\n')[0]}。${busy ? '予約が終わってから' : `${Math.round(wait / 1000)} 秒後に`}やり直します`);
         if (!stopped && !busy) schedule(prepare, wait);
       } finally {
