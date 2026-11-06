@@ -5,7 +5,7 @@
 // (crypto.subtle / fetch / TextEncoder / btoa)だけを使う。
 // ============================================================
 
-import { COMMAND_TEXT, commandTexts, withQuickReply } from './commands.js';
+import { COMMAND_TEXT, withQuickReply } from './commands.js';
 
 const LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
 const LINE_PUSH_URL = 'https://api.line.me/v2/bot/message/push';
@@ -53,9 +53,7 @@ export async function verifySignature(channelSecret, rawBody, signatureHeader) {
 
 // Webhook本文(JSON文字列)から「対象グループで合言葉(texts のいずれか)と送られたテキストメッセージ」だけを返す。
 // それ以外(参加イベント・他グループ・個人チャット・別の文言)は全て無視する。
-// texts の各合言葉には別名(クイックリプライのボタンが送る「予約の一覧」など。commands.js)も自動で含める
 export function pickTextCommandEvents(rawBody, groupId, texts) {
-  const accepted = texts.flatMap(commandTexts);
   let payload;
   try {
     payload = JSON.parse(rawBody);
@@ -70,7 +68,7 @@ export function pickTextCommandEvents(rawBody, groupId, texts) {
       ev.source?.type === 'group' &&
       ev.source.groupId === groupId &&
       typeof ev.message.text === 'string' &&
-      accepted.includes(ev.message.text.trim()) &&
+      texts.includes(ev.message.text.trim()) &&
       typeof ev.replyToken === 'string'
   );
 }

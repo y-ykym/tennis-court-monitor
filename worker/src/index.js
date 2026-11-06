@@ -76,7 +76,6 @@ import { runPenaltyAlert, PENALTY_ALERT_CRONS, DEADLINE_CRON, endOfJstDaySec, DE
 import { CARD_COMMAND_TEXT, buildCardReply, handleCardImage, MSG_CARD_FAILED } from './card.js';
 import { CONTACT_COMMAND_TEXT, buildContactReply, MSG_CONTACT_FAILED } from './contacts.js';
 import { HELP_COMMAND_TEXT, buildHelpReply, MSG_HELP_FAILED } from './help.js';
-import { canonicalCommand } from './commands.js';
 import { EVENT_COMMAND_TEXT, EVENT_NOTIFY_CRON, buildEventReply, runEventNotify, MSG_EVENT_FAILED } from './event-notify.js';
 import { runCalendarSync, removeCalendarEvent, siteKey } from './calendar-sync.js';
 import { MSG_CANCEL_EXPIRED, MSG_CANCEL_NOT_FOUND, MSG_CANCEL_MISMATCH, MSG_CANCEL_DECLINED, MSG_CANCEL_DISABLED, MSG_AUTO_UNAVAILABLE } from './messages.js';
@@ -216,7 +215,7 @@ async function handleWebhook(request, env, ctx) {
     ctx.waitUntil(replyReservations(env, ev.replyToken));
   }
   for (const ev of autoCommands) {
-    ctx.waitUntil(replyAutoSettings(env, ev.replyToken, canonicalCommand(ev.message.text.trim()))); // 別名「設定」→「せってい」
+    ctx.waitUntil(replyAutoSettings(env, ev.replyToken, ev.message.text.trim()));
   }
   // フェーズ7: バーコード画像の URL に自分自身の origin が必要なので、Webhook を受けた URL から取る
   for (const ev of cardCommands) {

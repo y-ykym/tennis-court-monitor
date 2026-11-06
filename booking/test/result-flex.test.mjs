@@ -77,7 +77,7 @@ test('pushResult: 送る本文の最後のメッセージにクイックリプ�
     globalThis.fetch = realFetch;
   }
   assert.equal(bodies[0].messages[0].quickReply.items.length, 6);
-  assert.equal(bodies[0].messages[0].quickReply.items[0].action.text, '予約の一覧');
+  assert.equal(bodies[0].messages[0].quickReply.items[0].action.text, 'よやく');
   assert.equal(bodies[1].messages[0].quickReply, undefined);
   assert.equal(bodies[1].messages[1].quickReply.items.length, 6);
 });

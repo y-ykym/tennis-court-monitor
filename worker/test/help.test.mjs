@@ -43,13 +43,12 @@ test('help: カードに合言葉と説明が全部載り、行ごとに message
   const t = texts(flex.contents);
   assert.ok(t.includes('📖 使い方'));
   for (const r of helpRows()) {
-    assert.ok(t.includes(r.label), `${r.label} が載っている`);
+    assert.ok(t.includes(r.keyword), `${r.keyword} が載っている`);
     assert.ok(t.includes(r.title), `${r.title} が載っている`);
     assert.ok(t.includes(r.desc), `${r.keyword} の説明が載っている`);
   }
   const acts = actions(flex.contents);
-  assert.deepEqual(acts.map((a) => a.text), helpRows().map((r) => r.label));
-  assert.deepEqual(acts.map((a) => a.text), ['予約の一覧', 'イベント', '設定', '受付カード', '電話番号', '使い方']);
+  assert.deepEqual(acts.map((a) => a.text), helpRows().map((r) => r.keyword));
   assert.ok(acts.every((a) => a.type === 'message' && a.label === a.text));
   assert.equal(flex.contents.footer, undefined, 'フッターのボタンは置かない');
   assert.ok(flex.altText.length <= 400);
@@ -59,7 +58,7 @@ test('help: カードに合言葉と説明が全部載り、行ごとに message
 test('help: テキスト版は 1 合言葉 1 行', () => {
   const lines = helpText().split('\n');
   assert.equal(lines[0], '📖 使い方(グループで送る合言葉)');
-  assert.deepEqual(lines.slice(1), helpRows().map((r) => `${r.label}(${r.keyword}): ${r.title}`));
+  assert.deepEqual(lines.slice(1), helpRows().map((r) => `${r.keyword}: ${r.title}`));
   const reply = buildHelpReply();
   assert.equal(reply.flex.type, 'flex');
   assert.equal(reply.text, helpText());

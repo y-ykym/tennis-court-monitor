@@ -2,15 +2,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { COMMANDS, COMMAND_TEXT, AUTO_COMMAND_TEXT, commandTexts, canonicalCommand, QUICK_REPLY_BUTTONS, buildQuickReply, withQuickReply } from '../src/commands.js';
-import { pickTextCommandEvents, replyMessages, pushMessages } from '../src/line.js';
+import { COMMANDS, QUICK_REPLY_BUTTONS, buildQuickReply, withQuickReply } from '../src/commands.js';
+import { replyMessages, pushMessages } from '../src/line.js';
 import { helpRows } from '../src/help.js';
 
 const require = createRequire(import.meta.url);
 const libQuickReply = require('../../lib/quick-reply.js');
 
-test('台帳: 合言葉・別名・ボタン表示が重複せず、label は 20 文字以内', () => {
-  const all = COMMANDS.flatMap((c) => [c.text, c.alias]);
+test('台帳: 合言葉・ボタン表示が重複せず、label は 20 文字以内', () => {
+  const all = COMMANDS.flatMap((c) => [c.text, c.label]);
   assert.equal(new Set(all).size, all.length);
   for (const c of COMMANDS) assert.ok([...c.label].length <= 20, c.label);
   assert.equal(COMMANDS.length, 6);
@@ -18,19 +18,8 @@ test('台帳: 合言葉・別名・ボタン表示が重複せず、label は 20
   assert.deepEqual(helpRows().map((r) => r.keyword), COMMANDS.map((c) => c.text));
 });
 
-test('commandTexts / canonicalCommand: 別名を受け付け、従来の合言葉に戻す', () => {
-  assert.deepEqual(commandTexts(COMMAND_TEXT), ['よやく', '予約の一覧']);
-  assert.deepEqual(commandTexts('じどうおん'), ['じどうおん']); // 台帳に無いものはそのまま
-  assert.equal(canonicalCommand('設定'), AUTO_COMMAND_TEXT);
-  assert.equal(canonicalCommand('せってい'), 'せってい');
-  assert.equal(canonicalCommand('じどうおふ'), 'じどうおふ');
-});
-
-test('pickTextCommandEvents: ボタンが送る別名(予約の一覧)でも拾う', () => {
-  const ev = (text) => ({ type: 'message', replyToken: 'rt', source: { type: 'group', groupId: 'G' }, message: { type: 'text', text } });
-  const raw = JSON.stringify({ events: [ev('予約の一覧'), ev('よやく'), ev(' 設定 '), ev('予約')] });
-  assert.equal(pickTextCommandEvents(raw, 'G', [COMMAND_TEXT]).length, 2);
-  assert.equal(pickTextCommandEvents(raw, 'G', [AUTO_COMMAND_TEXT]).length, 1);
+test('ボタンが送る文字はひらがなの合言葉そのもの', () => {
+  assert.deepEqual(QUICK_REPLY_BUTTONS.map((b) => b.text), ['よやく', 'いべんと', 'せってい', 'うけつけ', 'きゃんせる', 'へるぷ']);
 });
 
 test('withQuickReply: 最後のメッセージにだけ付け、元を変えない。空配列・付与済みはそのまま', () => {
@@ -38,18 +27,11 @@ test('withQuickReply: 最後のメッセージにだけ付け、元を変えな�
   const out = withQuickReply(msgs);
   assert.equal(out[0].quickReply, undefined);
   assert.equal(out[1].quickReply.items.length, 6);
-  assert.deepEqual(out[1].quickReply.items[0], { type: 'action', action: { type: 'message', label: '📅 予約の一覧', text: '予約の一覧' } });
+  assert.deepEqual(out[1].quickReply.items[0], { type: 'action', action: { type: 'message', label: '📅 予約の一覧', text: 'よやく' } });
   assert.equal(msgs[1].quickReply, undefined); // 元は変えない
   assert.deepEqual(withQuickReply([]), []);
   const own = [{ type: 'text', text: 'x', quickReply: { items: [] } }];
   assert.deepEqual(withQuickReply(own), own);
-});
-
-test('ボタンが送る文字は全て合言葉として受け付けられる', () => {
-  for (const b of QUICK_REPLY_BUTTONS) {
-    const canon = canonicalCommand(b.text);
-    assert.ok(COMMANDS.some((c) => c.text === canon), b.text);
-  }
 });
 
 test('lib/quick-reply.js(Pi・Actions 用)は Worker と同じボタン一覧', () => {
