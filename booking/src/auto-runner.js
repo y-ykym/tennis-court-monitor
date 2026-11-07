@@ -8,7 +8,8 @@
 //     → lib/auto-rules.js で振り分け(ペナルティ期間・除外日・除外枠は見送り。ただし「せってい」で 1 枠ずつ選んだ「追加枠」は対象。追加枠は 1 日の上限・場所の判定も掛けない)、
 //       利用日ごとに公園→時間帯の優先順に並べる
 //     → 候補を 1 件ずつ予約の行列(booking-queue.js)に入れる。行列は 1 件ずつ実行し、手動(LINE ボタン)を優先する
-//     → 一時エラー(error)で終わった枠が ERROR_RETRY_AFTER_MS(5 分)後もまだ空いていれば、同じ流れで再挑戦する(ERROR_RETRY_MAX=2 回まで。2026-11-06)
+//     → 一時エラー(error)で終わった枠は、直近の照会でまだ空いていれば待たずにその場でもう一度予約する(ERROR_RETRY_NOW_MAX=1 回。2026-11-08)
+//     → それでも error で終わった枠が ERROR_RETRY_AFTER_MS(5 分)後もまだ空いていれば、同じ流れで再挑戦する(ERROR_RETRY_MAX=2 回まで。2026-11-06)
 //   各候補の実行(行列の中):
 //     まず「いま」の時刻で対象かどうかをもう一度判定する(要件 #11。23:59 に見つけて 00:01 に実行すると +3 日 = ペナルティ期間になる。
 //     +4 日の枠は 23:35 以降は自動予約しない)。対象外になっていたら予約せず、Pi 自身が従来の空き通知カード(予約ボタン付き)を送る
@@ -64,6 +65,12 @@ const NO_RETRY_STATUSES = new Set(['queued', 'running', 'success']);
 //  数分後の再挑戦は予約直前の一覧(beforeApply)で入っていないことを確かめてから押すので安全)
 export const ERROR_RETRY_AFTER_MS = 5 * 60 * 1000;
 export const ERROR_RETRY_MAX = 2;
+// error で終わった直後に、待たずにその場でやり直す回数(2026-11-08 本人指示)。
+// 直近 1 週間の失敗 3 件は全部「予約」押下後に都サイトが応答しなかったもの(90 秒無応答・pawfa1000 のデータ通信エラー・確認画面のまま)で、
+// 空きは 179 件中 119 件が 2 分以内に消えるため、5 分後の再挑戦では大半が間に合わない。error は予約が入っていない
+// (reserve.js が押した後の error では予約一覧で未成立を確かめて error にしている)ので、やり直しの前に一覧を見直す処理は入れない。
+// 直近の照会で枠が消えていれば taken 相当なのでやり直さない
+export const ERROR_RETRY_NOW_MAX = 1;
 // 照会が間隔より長くかかったとき、次の照会までに最低これだけ空ける
 export const MIN_GAP_MS = 15 * 1000;
 // 「その日は既に上限まで予約がある」という記憶の有効時間。過ぎたら次の候補でまた一覧を見て数える。
@@ -442,12 +449,28 @@ export function createAutoRunner({
       return null;
     };
     log(`自動予約 開始: ${describe(c)} 予約者=${creds.label}(${c.person})`);
-    let result;
-    try {
-      // stillVacant: 直近の照会にこの枠がまだあるか(server.mjs が、やり直しの前に見る。消えていればやり直さず taken。2026-11-01)
-      result = await book(c, { credentials: creds, beforeApply, stillVacant: () => lastTargets.some((s) => slotKey(s) === key) });
-    } catch (e) {
-      result = { status: 'error', message: e.message };
+    // stillVacant: 直近の照会にこの枠がまだあるか(server.mjs が、やり直しの前に見る。消えていればやり直さず taken。2026-11-01)
+    const stillVacant = () => lastTargets.some((s) => slotKey(s) === key);
+    const bookOnce = async () => {
+      try {
+        return await book(c, { credentials: creds, beforeApply, stillVacant });
+      } catch (e) {
+        return { status: 'error', message: e.message };
+      }
+    };
+    let result = await bookOnce();
+    // 一時エラー(error)なら、直近の照会でまだ空いているうちに待たずにもう一度(ERROR_RETRY_NOW_MAX 回。2026-11-08)。
+    // 5 分後の再挑戦(tick 側)は、これでも error だったときのために残す
+    for (let n = 1; result.status === 'error' && n <= ERROR_RETRY_NOW_MAX; n++) {
+      if (!stillVacant()) {
+        log(`  一時エラーの直後だが、その後の空き照会で枠が消えているためその場ではやり直しません: ${result.message || ''}`.trimEnd());
+        break;
+      }
+      log(`  一時エラーのためその場でもう一度予約します(${n}/${ERROR_RETRY_NOW_MAX} 回目): ${result.message || ''}`.trimEnd());
+      event('retry_now', { key, n, firstError: result.message, firstMs: result.elapsedMs });
+      const first = result;
+      result = await bookOnce();
+      result.diag = { ...(result.diag || {}), retryNow: n, firstError: first.message, firstMs: first.elapsedMs, firstDiag: first.diag };
     }
     const ok = result.status === 'success';
     if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() }); // 追加枠の成立で負になることがある(その日の普段の枠は capped)

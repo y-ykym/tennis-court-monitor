@@ -186,7 +186,7 @@ test('1 日の上限: 一覧で既にその日に予約(手動分)があれば�
 });
 
 test('失敗カード: ログインできない・reCAPTCHA 拒否は送る(放置すると自動予約が止まる)。先に取られた・断られた・サイトのエラーは送らない', async () => {
-  const statuses = ['auth_error', 'rejected', 'error', 'taken', 'duplicate'];
+  const statuses = ['auth_error', 'rejected', 'error', 'error' /* error 直後のその場のやり直し(2026-11-08) */, 'taken', 'duplicate'];
   let i = 0;
   const h = harness({ book: async () => ({ status: statuses[i++], message: 'x' }) });
   await h.runner.tick();
@@ -200,7 +200,7 @@ test('失敗カード: ログインできない・reCAPTCHA 拒否は送る(放�
   ]);
   await h.runner.tick();
   await flush();
-  assert.equal(i, 5);
+  assert.equal(i, 6);
   const reasons = h.notified.map((x) => JSON.stringify(x.m.contents.body));
   assert.equal(reasons.length, 2);
   assert.match(reasons[0], /ログインできませんでした/);
@@ -1048,19 +1048,20 @@ test('再挑戦(2026-11-06): 一時エラー(error)で終わった枠が 5 分�
   h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-25', '19:00-21:00')]); // 火=B error / 金=B taken
   await h.runner.tick();
   await flush();
-  assert.deepEqual(results, ['2026-09-25 19', '2026-09-29 19']);
+  // error の枠は、その場のやり直し(2026-11-08)で毎回 2 回呼ばれる
+  assert.deepEqual(results, ['2026-09-25 19', '2026-09-29 19', '2026-09-29 19']);
   assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'error');
   assert.equal(h.state.attemptInfo('1040|2026-09-29|19:00').errors, 1);
   // 4 分後: まだ再挑戦しない
   h.advance(4 * 60_000);
   await h.runner.tick();
   await flush();
-  assert.equal(results.length, 2, '5 分経つまでは再挑戦しない');
+  assert.equal(results.length, 3, '5 分経つまでは再挑戦しない');
   // 5 分後: 1 回目の再挑戦(taken の枠は再挑戦しない)
   h.advance(60_000);
   await h.runner.tick();
   await flush();
-  assert.deepEqual(results, ['2026-09-25 19', '2026-09-29 19', '2026-09-29 19']);
+  assert.deepEqual(results, ['2026-09-25 19', '2026-09-29 19', '2026-09-29 19', '2026-09-29 19', '2026-09-29 19']);
   assert.ok(h.logs.some((l) => l.includes('再挑戦: 2026-09-29 19:00-21:00 猿江恩賜公園') && l.includes('5 分前')), h.logs.filter((l) => l.includes('再挑戦')).join('\n'));
   assert.ok(h.logs.some((l) => l.includes('再挑戦 1 件')), '要約ログに再挑戦の件数が出る');
   assert.equal(h.state.attemptInfo('1040|2026-09-29|19:00').errors, 2);
@@ -1068,13 +1069,13 @@ test('再挑戦(2026-11-06): 一時エラー(error)で終わった枠が 5 分�
   h.advance(5 * 60_000);
   await h.runner.tick();
   await flush();
-  assert.equal(results.length, 4);
+  assert.equal(results.length, 7);
   assert.equal(h.state.attemptInfo('1040|2026-09-29|19:00').errors, 3);
   // さらに 5 分後: もう再挑戦しない
   h.advance(5 * 60_000);
   await h.runner.tick();
   await flush();
-  assert.equal(results.length, 4, '再挑戦は 2 回まで');
+  assert.equal(results.length, 7, '再挑戦は 2 回まで');
   assert.ok(!h.logs.some((l) => l.includes('結果カード') && l.includes('自動予約の結果カード')), 'error のカードは送らない');
 });
 
@@ -1133,4 +1134,88 @@ test('都サイトの「お知らせ」ページ(siteNotice)なら 1 回目の�
   await runner.tick();
   assert.equal(runner.consecutiveFailures(), 0);
   assert.ok(logs.some((m) => m.includes('空き照会が回復しました')), logs.join('\n'));
+});
+
+test('即やり直し(2026-11-08): 一時エラー(error)で終わった直後、枠がまだ空いていれば待たずにもう一度予約する(1 回)。2 回目が成功なら success', async () => {
+  const eventsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev-')), 'auto-events.jsonl');
+  const calls = [];
+  const h = harness({
+    eventsFile,
+    book: async (c, { beforeApply }) => {
+      const stop = await beforeApply({ reservations: [] });
+      if (stop) return stop;
+      calls.push(`${c.date} ${c.startHour}`);
+      return calls.length === 1 ? { status: 'error', message: 'タイムアウト', elapsedMs: 90_000 } : { status: 'success', reservationNo: 'R9', facility: c.facility, elapsedMs: 30_000 };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.deepEqual(calls, ['2026-09-29 19', '2026-09-29 19'], 'error の直後にその場でもう一度');
+  assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'success');
+  assert.equal(h.state.attemptInfo('1040|2026-09-29|19:00').errors, 0, '最終結果が success なら error の回数は増えない');
+  assert.ok(h.logs.some((l) => l.includes('一時エラーのためその場でもう一度予約します(1/1 回目)') && l.includes('タイムアウト')), h.logs.join('\n'));
+  const ev = readEvents(eventsFile);
+  const retry = ev.find((e) => e.type === 'retry_now');
+  assert.ok(retry && retry.key === '1040|2026-09-29|19:00' && retry.firstError === 'タイムアウト', JSON.stringify(ev));
+  const res = ev.filter((e) => e.type === 'result' && e.key === '1040|2026-09-29|19:00');
+  assert.equal(res.length, 1, '記録に残る result は最終結果の 1 件だけ');
+  assert.equal(res[0].status, 'success');
+  assert.equal(res[0].diag.retryNow, 1);
+  assert.equal(res[0].diag.firstError, 'タイムアウト');
+  assert.equal(h.notified.filter((n) => n.what === '自動予約の成立カード').length, 1, '成立カードは 1 通');
+});
+
+test('即やり直し(2026-11-08): 2 回とも error なら error で終わり(その場のやり直しは 1 回だけ)、5 分後の再挑戦はこれまでどおり動く', async () => {
+  const calls = [];
+  const h = harness({
+    book: async (c, { beforeApply }) => {
+      const stop = await beforeApply({ reservations: [] });
+      if (stop) return stop;
+      calls.push(`${c.date} ${c.startHour}`);
+      return { status: 'error', message: 'データ通信エラー' };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls.length, 2, 'その場のやり直しは 1 回だけ');
+  assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'error');
+  assert.equal(h.state.attemptInfo('1040|2026-09-29|19:00').errors, 1, 'その場のやり直しを含めて 1 回の error と数える');
+  assert.ok(!h.notified.some((n) => n.what === '自動予約の結果カード'), 'error のカードは送らない');
+  // 5 分後の再挑戦(こちらもその場のやり直し付きなので 2 回呼ばれる)
+  h.advance(5 * 60_000);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls.length, 4, '5 分後に再挑戦し、その中でもその場のやり直しを 1 回する');
+  assert.equal(h.state.attemptInfo('1040|2026-09-29|19:00').errors, 2);
+});
+
+test('即やり直し(2026-11-08): error の後の空き照会で枠が消えていれば、その場ではやり直さない', async () => {
+  const calls = [];
+  let h;
+  h = harness({
+    book: async (c, { beforeApply }) => {
+      const stop = await beforeApply({ reservations: [] });
+      if (stop) return stop;
+      calls.push(`${c.date} ${c.startHour}`);
+      // 予約の最中に行われた照会で枠が消えた
+      h.setSlots([]);
+      h.advance(60_000);
+      await h.runner.tick();
+      return { status: 'error', message: 'タイムアウト' };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls.length, 1, '枠が消えていればやり直さない');
+  assert.ok(h.logs.some((l) => l.includes('その後の空き照会で枠が消えているためその場ではやり直しません')), h.logs.join('\n'));
+  assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'error');
 });
