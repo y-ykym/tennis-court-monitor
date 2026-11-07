@@ -620,3 +620,14 @@ selectEventName / selectApplyNum / fieldCnt` に値を入れ、`availableTZoneNo
 通れば予約手続きの 枠選択 Ajax(3〜4.5 秒)と検索条件の先取りが不要になる。
 **ログインが要るので匿名では検証できない**。確認画面までは仮押さえにならない(§画面遷移)ので、本人ログインの dry-run(確認画面に到達したら
 `rsvWOpeReservedApplyBackAction` で戻る)で検証してから採用すること。`displayNo` を `prwrc1000` にしないと弾かれる可能性あり
+
+### 検証結果(2026-11-08 02:40、Pi のコンテナから素の HTTP で本人 A ログイン。予約は押していない): **通らなかった**
+- `doReserved` と同じ項目(`select*` 一式 + `availableTZoneNo/STime/ETime` + `displayNo=prwrc1000`)で `rsvWOpeReservedApplyAction.do` を叩くと、
+  **HTTP 200・`content-type: text/html;charset=ISO-8859-1`・本文 0 バイト**(サーバー側の例外に見える)。試した変種はどれも同じ:
+  ホームの hidden だけ / + `applyFlg=1` `selectSize=1` `displayNoFrm` / + referer・origin・accept ヘッダ / 一覧画面(`rsvWOpeUnreservedDailyAction`)を
+  開いてその form の全項目(hidden + `daystart`)を足す / その前に画面と同じ引数(`days=7, limit=5`)で一覧 Ajax を呼ぶ
+- 同じセッションで週表示の流れ(検索 → `setReserv` Ajax → `rsvWOpeReservedApplyAction`)は素の HTTP でも `prwea1000.jsp` に到達した(基準)。
+  → 一覧からの導線は、ブラウザが「こだわり検索」(`rsvWTranceKodawariAction` → `rsvWOpeKodawariSearchAction`)経由で作るセッション状態に
+  依存している可能性が高い。追うなら実ブラウザで prwrc1000 までの遷移と送信内容を DevTools で取ること。**いったん見送り**
+- 副産物: 深夜 02:40 の Pi からは、素の HTTP でログイン 0.8 秒・検索 0.4 秒・枠選択 Ajax 1.6 秒・確認画面 0.9 秒(ログインから確認画面まで約 4 秒)。
+  日中の高速経路(ブラウザ内 fetch)は枠選択まで 9〜16 秒なので、時間帯の差かブラウザの差かは未切り分け
