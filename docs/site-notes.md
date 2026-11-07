@@ -631,3 +631,26 @@ selectEventName / selectApplyNum / fieldCnt` に値を入れ、`availableTZoneNo
   依存している可能性が高い。追うなら実ブラウザで prwrc1000 までの遷移と送信内容を DevTools で取ること。**いったん見送り**
 - 副産物: 深夜 02:40 の Pi からは、素の HTTP でログイン 0.8 秒・検索 0.4 秒・枠選択 Ajax 1.6 秒・確認画面 0.9 秒(ログインから確認画面まで約 4 秒)。
   日中の高速経路(ブラウザ内 fetch)は枠選択まで 9〜16 秒なので、時間帯の差かブラウザの差かは未切り分け
+
+## 3. 素の HTTP で枠選択まで済ませ、Cookie をブラウザに渡して確認画面だけブラウザで開く(2026-11-08 02:30、Pi のコンテナで検証。予約は押していない)
+
+同じ時刻・同じ枠(猿江 11/30 9:00)で、今の高速経路(ブラウザ内 fetch。先起こし無し・別プロファイル)と素の HTTP を続けて計測:
+
+| 工程 | 高速経路(ブラウザ内 fetch) | 素の HTTP(Node fetch) |
+|---|---|---|
+| トップ | 0.8 秒 | 0.2 秒 |
+| ログイン〜枠選択 | 6.9 秒(週 JSON 込み) | ログイン 0.8 + 検索 0.5 + 枠選択 0.1 秒 |
+| 確認画面 POST | 1.1 秒 | 0.9 秒 |
+| **確認画面まで** | **10.0 秒** | **2.5 秒** |
+
+- **Cookie の引き継ぎは可能**: HTTP で ログイン → 検索 → 枠選択 Ajax まで済ませた Cookie(`JSESSIONID` のほか `FJNADDSPID` `KIOSK`)を
+  Playwright の `context.addCookies`(domain `kouen.sports.metro.tokyo.lg.jp`、path `/web`、secure、`JSESSIONID` は httpOnly、sameSite None)で渡し、
+  ブラウザから form 送信で `rsvWOpeReservedApplyAction.do` を POST すると **`prwea1000.jsp`(予約内容確認画面)に到達**した。
+  予約ボタン(`button#btn-go`)と reCAPTCHA の読み込みもあり。「キャンセル」(`rsvWOpeReservedApplyBackAction`)で戻れた。
+  開始から確認画面まで **3.8 秒**(ブラウザ起動 0.1 秒を含む。先起こし済みなら同程度)
+- §セッションの引き継ぎは不可 は「URL でのセッション指定」と「スマホのブラウザへ渡す」話で、同じ機械の Playwright に Cookie として渡すのは別(可能)
+- 設計案「HTTP 先行方式」: ログイン・検索・枠選択(・予約一覧)を Node の fetch で行い(2〜3 秒)、Cookie を先起こし済みのブラウザに入れて
+  確認画面 POST → 人数入力 → 「予約」(reCAPTCHA v3 はサイトの JS がブラウザで動く)。本番は 枠選択まで 9〜16 秒 + 確認画面 +5〜10 秒 なので、
+  「予約」押下までが 15〜27 秒 → 5〜8 秒 の見込み
+- 未検証のリスク: ログインをブラウザの外で済ませた状態で「予約」を押したときの reCAPTCHA v3 の点数(v2 の画像認証に回される可能性)。
+  先起こし済みの持ち越しプロファイルのブラウザに Cookie を入れれば閲覧履歴は保てる。error なら今の高速経路でやり直す作りにして、本番で確かめる
