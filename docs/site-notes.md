@@ -580,3 +580,43 @@ reserve.js をマウス移動・1文字ずつ入力・操作間の小休止を�
 `robots.txt` は不明なボット向けに `Disallow: /api/`。利用規約は 2026-09-17 に本人が確認済み(自動アクセスの禁止条項なし)。この Worker は週 2 回 + 手動の「いべんと」だけで、詳細は閲覧数を増やさない方を叩く。
 
 対象 6 コートの place.code: 大横川親水公園テニスコート `0100140006`(墨田区営)、錦糸公園テニスコート `0100140003`(墨田区営)、猿江恩賜公園 `0100010008`、亀戸中央公園 `0100010009`、大島小松川公園Ａ `0100010020`(都営)、荒川・砂町庭球場 `0100130006`(江東区営)。名前の似た別施設(亀戸庭球場 `0100130004`、GODAI 亀戸 `1100450001`、TOPインドアステージ亀戸)は対象外。
+
+---
+
+# 追加調査: 「空き状況画面(日付順)」の一覧 Ajax と、一覧からの予約導線 (2026-11-08 深夜、公開ページと JS の静的解析 + 匿名 HTTP で計測。予約は押していない)
+
+目的: 自動予約の勝率をさらに上げる手が都サイト側に残っていないかの調査。結論は 2 つ。
+
+## 1. 空き照会を 5〜10 秒 → 1〜2 秒にできる見込み: `rsvWOpeUnreservedSearchAjaxAction.do`
+
+トップの「こだわり検索」→「空き状況画面(日付順)」(`prwrc1000.jsp`。中身は `prwre1000.jsp`、一覧の描画は `js/prwrf1000.js`)が使う JSON API。
+**空いている枠だけ**を日付順に返す(週表示の JSON は 7 日 × 全セルを返すので重い)。
+
+- 前提: `GET /web/index.jsp` で Cookie を取るだけでよい(検索 POST は不要。Cookie 無しはエラー画面 `pawfa1000.jsp`)
+- `POST /web/rsvWOpeUnreservedSearchAjaxAction.do`
+  `displayNo=prwre1000` `daystart=YYYY-MM-DD` `days=28` `date=3` `offset=0` `limit=200` `selectPpsClPpscd=1000_1030`
+  `selectAreaBcd=<公園コード>`(`0` で全公園) `selectIcd=0` `dayofweekClearFlg=1` `timezoneClearFlg=1`
+  (画面の `formData` は `days:7, limit:5` で「もっと見る」で `offset` を進める。`days=60` でも返るのは予約できる期間まで = 翌月末)
+- 応答 `{ all, next, hitcnt, results[] }`。`results[]` の主な項目:
+  `useYmd`(20261109) `bcd`(公園コード) `bcdNm` `icd`(施設コード) `icdNm`(テニス（人工芝）) `sTime`/`eTime`(1100/1300)
+  `fieldCnt`(空き面数) `tZoneNo` `mediaFlg`(3 = 予約ボタンあり、2 = 予約不可「-」) `penaltyday`(3)
+  **連続した空きは 1 レコードにまとまる**: `timeZoneNos='20|30'` `sTimeZones='1100|1300'` `eTimeZones='1300|1500'`(面数はその並びで共通)。
+  同じ日時で面数が違う塊は別レコード(例 11/13: `1100|1300` ×1 面 と `1300` ×3 面 → 13:00 は計 4 面)。
+  → **`sTimeZones` を `|` で分けて `fieldCnt` を足し合わせると、週 JSON の `alt=空き` の `rsvNum` と完全に一致した**(猿江 11/9〜11/14 で検証)
+- 所要(Pi から、2026-11-08 02:00): トップ 0.18 秒、**1 公園 28 日分 0.3〜0.4 秒**(週 JSON は 1 週 5.6 秒 × 4 週)。
+  全公園(`selectAreaBcd=0`)は 557 件・4.7 秒(Mac)で、公園ごとに取る方が速い
+- **同じセッションで同時に投げると週 JSON と同じく 0 バイト(`application/octet-stream`)**になる。公園ごとに別セッションにするか、1 本ずつ順に(4 公園で 1.5 秒)
+- 未確認: **当日の枠が一覧に出るか**(02:00 時点では全公園とも当日の空きが無く判定できず。週 JSON でも当日は全部予約あり)。
+  自動予約の対象は +4 日以降なので通常は関係ないが、「追加枠」は当日もあり得るので、当日の空きがある時間帯に `days=1` で確かめること
+- 未確認: 「セッション未認識のまま 200」の症状がこの API でも出るか(週 JSON では公園未指定の応答になる)。`results` の `bcd` が頼んだ公園かを検証すること
+
+## 2. 一覧から「予約」を押すと、枠選択 Ajax を飛ばして確認画面に行く(`doReserved`、未検証)
+
+`prwrf1000.js` の各行の「予約」ボタンは `doReserved(ymd, bcd, icd, tzone, stime, etime, ppsdcd, ppscd, ...)`:
+form1 の `selectUseYmd / selectBldCd / selectInstCd / selectPpsCd / selectPpsClsCd / selectStimeZoneNo / selectEtimeZoneNo / selectStime / selectEtime /
+selectEventName / selectApplyNum / fieldCnt` に値を入れ、`availableTZoneNo / availableSTime / availableETime`(連続枠の候補。`|` 区切りを分けて複数 hidden)を足し、
+`displayNo = displayNoSub(prwrc1000)` にして **`POST /web/rsvWOpeReservedApplyAction.do`** → 予約内容確認画面(`prwea1000.jsp`)。
+週表示の流れ(検索 → `setReserv` Ajax で選択 → `rsvWOpeReservedApplyAction`)と違い、**セッション上の「選択」を作らず form の値だけで確認画面に進む**ように見える。
+通れば予約手続きの 枠選択 Ajax(3〜4.5 秒)と検索条件の先取りが不要になる。
+**ログインが要るので匿名では検証できない**。確認画面までは仮押さえにならない(§画面遷移)ので、本人ログインの dry-run(確認画面に到達したら
+`rsvWOpeReservedApplyBackAction` で戻る)で検証してから採用すること。`displayNo` を `prwrc1000` にしないと弾かれる可能性あり
