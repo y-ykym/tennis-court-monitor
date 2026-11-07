@@ -46,6 +46,8 @@ services:
       # 空き照会の取り方(2026-10-25)。'1' = 公園 × 週 = 16 本のセッションを持ち続け、毎回は週の JSON だけを 16 本同時に取る
       # (3 公園のとき 1 回の照会 約 50 秒 → 約 10 秒、通信 18 → 12 回。4 公園は 24 → 16 回)。おかしければ '0' で従来の「公園ごとに 4 週を順番に取る」に戻す
       AUTO_SCRAPE_WEEKS: '1'
+      # 2026-11-08: 既定は「空いている枠だけ返る一覧 JSON を公園ごとに 1 本」(1〜2 秒)。'0' で上の公園 × 週の方式に戻す
+      AUTO_SCRAPE_LIST: '1'
       # 想定外の応答(メンテナンス画面など)の最新 1 件だけを上書きで残す(メンテ中に何が返るかの実物を記録するため。2026-09-27)
       SCRAPE_LAST_FAILURE_FILE: /var/lib/booking/last-scrape-failure.html
       AUTO_STATE_FILE: /var/lib/booking/auto-state.json

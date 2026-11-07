@@ -235,9 +235,10 @@ export function createAutoRunner({
     }
     const weekOf = (date) => Math.floor(daysBetween(today, date) / 7);
     const filled = [...result];
-    for (const f of failures) filled.push(...lastAllSlots.filter((s) => s.facility === f.park.name && weekOf(s.date) === f.week));
+    // week が null(一覧 JSON の方式: 公園ごと 1 本)ならその公園の全部、数なら 公園×週 の分だけ補う
+    for (const f of failures) filled.push(...lastAllSlots.filter((s) => s.facility === f.park.name && (f.week == null || weekOf(s.date) === f.week)));
     filled.failures = failures;
-    log(`空き照会の一部が取れず、前回の結果で補いました: ${failures.map((f) => `${f.park.name} ${f.week + 1} 週目(${f.error.message})`).join(' / ')}`);
+    log(`空き照会の一部が取れず、前回の結果で補いました: ${failures.map((f) => `${f.park.name}${f.week == null ? '' : ` ${f.week + 1} 週目`}(${f.error.message})`).join(' / ')}`);
     event('poll_partial', { failures: failures.map((f) => ({ park: f.park.name, week: f.week, message: f.error.message })) });
     lastAllSlots = filled;
     return filled;
@@ -673,6 +674,7 @@ export function createAutoRunner({
 // AUTO_SCRAPE_WEEKS=0 で従来の「公園ごとに新しいセッションで 4 週を順番に取る」に戻す(AUTO_SCRAPE_CONCURRENCY 公園を同時、既定 3)
 export function createScraper({
   mockFile = process.env.MOCK_SLOTS_FILE,
+  listApi = process.env.AUTO_SCRAPE_LIST !== '0',
   weekSessions = process.env.AUTO_SCRAPE_WEEKS !== '0',
   concurrency = Number(process.env.AUTO_SCRAPE_CONCURRENCY) || 3,
   log = console.log,
@@ -680,7 +682,11 @@ export function createScraper({
   if (mockFile) {
     return async () => JSON.parse(fs.readFileSync(mockFile, 'utf8'));
   }
-  const { scrapeAvailability, createPersistentScraper } = require('../../lib/scrape.js');
+  const { scrapeAvailability, createPersistentScraper, createListScraper } = require('../../lib/scrape.js');
+  if (listApi) {
+    log('[auto] 空き照会の方式: 空いている枠だけ返る一覧 JSON を公園ごとに 1 本取る(AUTO_SCRAPE_LIST=0 で公園 × 週の方式)');
+    return createListScraper({ log });
+  }
   if (weekSessions) {
     log('[auto] 空き照会の方式: 公園 × 週のセッションを持ち続けて週だけ同時に取る(AUTO_SCRAPE_WEEKS=0 で従来の順番取り)');
     return createPersistentScraper({ log });

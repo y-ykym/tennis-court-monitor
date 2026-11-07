@@ -1269,3 +1269,16 @@ test('照会の部分採用(2026-11-08): 同じ公園が 10 分より長く取�
   assert.equal(r.skipped, 'scrape_failed');
   assert.ok(h2.logs.some((l) => l.includes('まだ一度も取れていない')), h2.logs.join('\n'));
 });
+
+test('照会の部分採用(2026-11-08): 一覧 JSON の方式(failures の week が null)なら、その公園の全部の枠を前回の結果で補う', async () => {
+  const h = harness({ slots: [slot('亀戸中央公園', '2026-09-20', '09:00-11:00'), slot('亀戸中央公園', '2026-10-04', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')] }); // 10/4 は日曜(監視対象)
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots(partial([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')], [['亀戸中央公園', '1050', null, '亀戸中央公園 の取得に失敗: HTTP 502: /web/index.jsp']]));
+  const r = await h.runner.tick();
+  await flush();
+  assert.equal(r.skipped, undefined);
+  assert.ok(h.logs.some((l) => l.includes('空き照会の一部が取れず、前回の結果で補いました: 亀戸中央公園(亀戸中央公園 の取得に失敗')), h.logs.join('\n'));
+  assert.ok(!h.logs.some((l) => l.includes('枠が消えた')), '亀戸の 2 枠(別の週)とも消えた扱いにしない: ' + h.logs.filter((l) => l.includes('枠が消えた')).join('\n'));
+  assert.ok(h.logs.some((l) => l.includes('照会: 監視対象 3 件(全体 3 件)')), h.logs.filter((l) => l.includes('照会:')).join('\n'));
+});
