@@ -93,8 +93,9 @@ oc = defaultdict(int)
 for a in appear: oc[a['outcome'] or '(記録なし)'] += 1
 for k, v in sorted(oc.items(), key=lambda kv: -kv[1]): print(f'  {k:28} {v}')
 
+partial = [e for e in ev if e['type'] == 'poll_partial']
 fails = [e for e in ev if e['type'] == 'poll_failed']
-hr(f'空き照会の失敗: {len(fails)} 回(時台別)')
+hr(f'空き照会の失敗: {len(fails)} 回(時台別)。一部だけ取れず前回の結果で補った照会: {len(partial)} 回(2026-11-08 から)')
 fh = defaultdict(int)
 for e in fails: fh[jst(e['at']).hour] += 1
 print('  ' + '  '.join(f'{h}時:{fh[h]}' for h in sorted(fh)) if fh else '  なし')

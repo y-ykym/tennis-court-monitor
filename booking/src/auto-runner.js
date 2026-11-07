@@ -50,9 +50,9 @@ import { signCancelToken } from './cancel-token.js';
 import { buildResultFlex } from './result-flex.js';
 
 const require = createRequire(import.meta.url);
-const { AUTO_BOOKING } = require('../../lib/config.js');
+const { AUTO_BOOKING, PARKS } = require('../../lib/config.js');
 const { isTargetSlot } = require('../../lib/filter.js');
-const { jstTodayIso, jstEndOfDaySec, jstHHMM } = require('../../lib/date.js');
+const { jstTodayIso, jstEndOfDaySec, jstHHMM, daysBetween } = require('../../lib/date.js');
 const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, isPenaltyPeriod, startHHMM, findPlaceConflict } = require('../../lib/auto-rules.js');
 
 // 除外一覧はこれより古いものを使わない(Worker に繋がらない間は、これを過ぎたら予約しない)
@@ -73,6 +73,10 @@ export const ERROR_RETRY_MAX = 2;
 export const ERROR_RETRY_NOW_MAX = 1;
 // 照会が間隔より長くかかったとき、次の照会までに最低これだけ空ける
 export const MIN_GAP_MS = 15 * 1000;
+// 空き照会で一部の 公園×週 だけ取れなかったとき(lib/scrape.js の failures)、その分は前回の結果で補って照会を続ける(2026-11-08)。
+// 補うのに使う「その公園を最後にきちんと取れた時刻」がこれより古ければ、補わずに従来どおり照会の失敗(スキップ)にする
+// (古い結果で補い続けると、取られた枠が空いたままに見えたり、新しい空きを見逃したまま照会が「成功」になるため)
+export const PARTIAL_CARRY_MAX_MS = 10 * 60 * 1000;
 // 「その日は既に上限まで予約がある」という記憶の有効時間。過ぎたら次の候補でまた一覧を見て数える。
 // 15 分だと、同じ枠が空いたり取られたりを繰り返す(9/17 の 9/21 17:00 猿江)たびにログインしてしまうので 60 分に(2026-09-17)
 export const DAY_REMAINING_TTL_MS = 60 * 60 * 1000;
@@ -150,6 +154,8 @@ export function createAutoRunner({
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
   let consecutiveFailures = 0; // 空き照会の連続失敗回数(成功で 0 に戻る。間隔を広げる判断に使う)
   let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
+  let lastAllSlots = []; // 直近の照会の全枠(一部の公園×週が取れなかったとき、その分を補うのに使う)
+  const parkFreshAt = new Map(); // 公園名 → その公園の全週をきちんと取れた最後の照会の時刻
   // 利用日ごとの残り枚数(予約一覧を見た結果から)。DAY_REMAINING_TTL_MS を過ぎたら忘れて、次はまた一覧を見て数える
   // (本人が LINE やサイトで取り消した後に「まだ 1 件ある」と思い込み続けないため)
   const dayRemaining = new Map(); // date → { remaining, at }
@@ -209,6 +215,38 @@ export function createAutoRunner({
     }
   }
 
+  // 一部の 公園×週 だけ取れなかった照会(result.failures)は、その分を前回の結果で補う(2026-11-08)。
+  // 補える前回の結果が PARTIAL_CARRY_MAX_MS より古ければ、従来どおり照会の失敗として throw する(呼び出し側の catch へ)
+  function fillPartial(result, today, started) {
+    const failures = Array.isArray(result.failures) ? result.failures : [];
+    const failedParks = new Set(failures.map((f) => f.park.name));
+    for (const p of PARKS) if (!failedParks.has(p.name)) parkFreshAt.set(p.name, started);
+    if (!failures.length) {
+      lastAllSlots = result;
+      return result;
+    }
+    const stale = failures.find((f) => {
+      const at = parkFreshAt.get(f.park.name);
+      return at == null || started - at > PARTIAL_CARRY_MAX_MS;
+    });
+    if (stale) {
+      const at = parkFreshAt.get(stale.park.name);
+      throw carryNotice(stale.error, new Error(`${stale.error.message}(${at == null ? 'まだ一度も取れていない' : `最後に取れたのが ${Math.round((started - at) / 60000)} 分前`}ため前回の結果では補えない)`));
+    }
+    const weekOf = (date) => Math.floor(daysBetween(today, date) / 7);
+    const filled = [...result];
+    for (const f of failures) filled.push(...lastAllSlots.filter((s) => s.facility === f.park.name && weekOf(s.date) === f.week));
+    filled.failures = failures;
+    log(`空き照会の一部が取れず、前回の結果で補いました: ${failures.map((f) => `${f.park.name} ${f.week + 1} 週目(${f.error.message})`).join(' / ')}`);
+    event('poll_partial', { failures: failures.map((f) => ({ park: f.park.name, week: f.week, message: f.error.message })) });
+    lastAllSlots = filled;
+    return filled;
+  }
+  const carryNotice = (from, to) => {
+    if (from && from.siteNotice) to.siteNotice = true;
+    return to;
+  };
+
   function usableExclusions() {
     if (!exclusions) return null;
     if (now() - exclusions.at > EXCLUSIONS_MAX_AGE_MS) return null;
@@ -224,7 +262,7 @@ export function createAutoRunner({
       const today = jstTodayIso(started);
       let slots;
       try {
-        slots = await scrape();
+        slots = fillPartial(await scrape(), today, started);
       } catch (e) {
         consecutiveFailures++;
         // 都サイトの「お知らせ」ページ(本物の障害・メンテナンス。lib/site-notice.js)なら、3 回待たずにすぐ間隔を広げる

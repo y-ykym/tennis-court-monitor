@@ -120,14 +120,32 @@ test('同じセッションで取り直しても空なら(セッションを失�
   assert.equal(scrape.stats().created, 5, '1 本作り直した');
 });
 
-test('同じ週が 3 回続けて失敗したら公園名入りのエラーで照会全体が失敗する。他の週は最後まで取り終える', async () => {
+test('同じ週が 3 回続けて失敗したら、その 公園×週 は諦めて取れた分を返し、failures に公園名入りのエラーを添える(2026-11-08)。他の週は最後まで取り終える', async () => {
   const site = fakeSite({ week: (session, form) => (session.park.code === '1050' && form.useDay === '20261101' ? '<html>error</html>' : undefined) });
   const { scrape } = make(site);
-  await assert.rejects(scrape(), /亀戸中央公園 の取得に失敗: 週データがJSONではありません/);
+  const slots = await scrape();
+  assert.equal(slots.length, 3, '取れた 3 週分は返す');
+  assert.equal(slots.failures.length, 1);
+  assert.equal(slots.failures[0].park.name, '亀戸中央公園');
+  assert.equal(slots.failures[0].week, 1);
+  assert.match(slots.failures[0].error.message, /亀戸中央公園 の取得に失敗: 週データがJSONではありません/);
   // 失敗した週は 3 回(セッション 3 本)、他の 3 週は 1 回ずつ
   assert.equal(site.calls.week, 6);
   assert.equal(site.inflight, 0, '投げ出した通信が残っていない');
   assert.deepEqual(scrape.stats(), { sessions: 3, created: 6 }, '失敗したセッションは持たない');
+});
+
+test('全部の 公園×週 が失敗したら従来どおり照会全体が失敗する(取れた分が無いので補えない)', async () => {
+  const site = fakeSite({ week: () => '<html>error</html>' });
+  const { scrape } = make(site);
+  await assert.rejects(scrape(), /の取得に失敗: 週データがJSONではありません/);
+  assert.equal(site.inflight, 0);
+});
+
+test('取れた照会は failures が空の配列', async () => {
+  const { scrape } = make(fakeSite());
+  const slots = await scrape();
+  assert.deepEqual(slots.failures, []);
 });
 
 test('セッションは 作ってから 30 分 か 前回使ってから 8 分 で作り直す。日付が変わっても作り直す', async () => {

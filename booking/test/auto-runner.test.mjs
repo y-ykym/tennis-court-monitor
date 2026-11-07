@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS, PARTIAL_CARRY_MAX_MS } from '../src/auto-runner.js';
 import { createEventLog, readEvents } from '../src/auto-events.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
@@ -1218,4 +1218,54 @@ test('即やり直し(2026-11-08): error の後の空き照会で枠が消えて
   assert.equal(calls.length, 1, '枠が消えていればやり直さない');
   assert.ok(h.logs.some((l) => l.includes('その後の空き照会で枠が消えているためその場ではやり直しません')), h.logs.join('\n'));
   assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'error');
+});
+
+// 一部の 公園×週 だけ取れなかった照会(lib/scrape.js が failures を添えて返す)を模す
+const partial = (slots, failures) => Object.assign([...slots], { failures: failures.map(([name, code, week, message]) => ({ park: { name, code }, week, error: new Error(message) })) });
+
+test('照会の部分採用(2026-11-08): 一部の公園×週が取れなかったら、その分は前回の結果で補い、枠が「消えた」ことにしない。取れた公園の新しい空きは普通に予約する', async () => {
+  const eventsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ev-')), 'auto-events.jsonl');
+  const h = harness({ eventsFile, slots: [slot('亀戸中央公園', '2026-09-20', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')] });
+  await h.runner.tick(); // 初回(既知の登録)
+  h.advance(60_000);
+  // 亀戸の 1 週目(9/14〜9/20)が 502。猿江は取れていて、新しい空きが 1 つ
+  h.setSlots(partial([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-30', '19:00-21:00')], [['亀戸中央公園', '1050', 0, '亀戸中央公園 の取得に失敗: HTTP 502: /web/index.jsp']]));
+  const r = await h.runner.tick();
+  await flush();
+  assert.equal(r.skipped, undefined, '照会の失敗(スキップ)にはしない');
+  assert.ok(h.logs.some((l) => l.includes('空き照会の一部が取れず、前回の結果で補いました: 亀戸中央公園 1 週目(亀戸中央公園 の取得に失敗: HTTP 502')), h.logs.join('\n'));
+  assert.ok(!h.logs.some((l) => l.includes('枠が消えた') && l.includes('亀戸中央公園')), '取れなかった公園の枠を「消えた」にしない');
+  assert.ok(h.logs.some((l) => l.includes('照会: 監視対象 3 件(全体 3 件)')), '補った分を含めて数える: ' + h.logs.filter((l) => l.includes('照会:')).join('\n'));
+  assert.deepEqual(h.bookings, ['2026-09-30 1040 19 B'], '取れた公園の新しい空きは予約する');
+  const ev = readEvents(eventsFile);
+  const pp = ev.find((e) => e.type === 'poll_partial');
+  assert.deepEqual(pp.failures, [{ park: '亀戸中央公園', week: 0, message: '亀戸中央公園 の取得に失敗: HTTP 502: /web/index.jsp' }]);
+  assert.ok(!ev.some((e) => e.type === 'poll_failed'));
+  // 次の照会で亀戸も取れた(空きは変わらず)→ 新規なし・消えたなし
+  h.advance(60_000);
+  h.setSlots([slot('亀戸中央公園', '2026-09-20', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-30', '19:00-21:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.ok(!h.logs.some((l) => l.includes('新しい空き') && l.includes('亀戸')), '補っていた枠が戻っても「新しい空き」にしない');
+  assert.equal(h.bookings.length, 1);
+});
+
+test('照会の部分採用(2026-11-08): 同じ公園が 10 分より長く取れないままなら、補わずに従来どおり照会の失敗(スキップ)にする。一度も取れていない公園も同じ', async () => {
+  const h = harness({ slots: [slot('亀戸中央公園', '2026-09-20', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')] });
+  await h.runner.tick();
+  const failing = partial([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')], [['亀戸中央公園', '1050', 0, '亀戸中央公園 の取得に失敗: HTTP 502: /web/index.jsp']]);
+  h.setSlots(failing);
+  h.advance(PARTIAL_CARRY_MAX_MS); // ちょうど 10 分: まだ補う
+  let r = await h.runner.tick();
+  assert.equal(r.skipped, undefined);
+  h.advance(60_000); // 11 分: もう補わない
+  r = await h.runner.tick();
+  assert.equal(r.skipped, 'scrape_failed');
+  assert.equal(r.consecutiveFailures, 1);
+  assert.ok(h.logs.some((l) => l.includes('空き照会に失敗(今回はスキップ。連続 1 回)') && l.includes('最後に取れたのが 11 分前')), h.logs.filter((l) => l.includes('空き照会')).join('\n'));
+  // 一度も取れていない公園(初回から失敗)は補えない
+  const h2 = harness({ slots: failing });
+  r = await h2.runner.tick();
+  assert.equal(r.skipped, 'scrape_failed');
+  assert.ok(h2.logs.some((l) => l.includes('まだ一度も取れていない')), h2.logs.join('\n'));
 });
