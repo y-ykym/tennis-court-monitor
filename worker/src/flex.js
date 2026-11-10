@@ -14,8 +14,6 @@
 //   │ │9/7 │ 大島小松川公園  明日     │ │                               │  ← 同じ日の予定は 1 つのタイルの右に時間順で縦に並ぶ
 //   │ │ 月 │ 19:00 - 21:00            │ │                               │     (2026-09-17 変更。キャンセルボタンは予定ごと)
 //   │ └────┘ 🐻 ストローク多め練      │ │                               │
-//   ├──────────────────────────────┤ ├──────────────────────────────┤
-//   │ 予約サイトを開く   一覧を更新  │ │ 予約サイトを開く   一覧を更新  │  ← フッター
 //   └──────────────────────────────┘ └──────────────────────────────┘
 //      ←── 横にスワイプで切り替え ──→
 //
@@ -38,21 +36,18 @@
 // JSON を軽くするため「時間+公園名+補足」は span 付きの 1 テキストにまとめる。表示行数は固定せず、
 // 各カードが MAX_BUBBLE_BYTES、全体が MAX_CAROUSEL_BYTES に収まるまで 1 人あたりの行数を減らす(超過分は「…ほかN件」)。
 // 実測: 固定部 約1.8KB、1行 約1.1KB(ボタン込み)→ 2 人 × 20 行で約 48KB。
-// フッターの「一覧を更新」はメッセージアクション(押すとその人が「よやく」と送った扱いになり、この Worker が一覧を返す)。
+// フッターのリンク(予約サイトを開く・一覧を更新)は 2026-11-10 に外した(本人決定。「よやく」はクイックリプライから送れる)。
 // ============================================================
 import Holidays from 'japanese-holidays';
 import { formatTime, jstTodayIso, sortReservations, mergedRows, isTennisbear, MSG_TB_FAILED } from './format.js';
 import { POP_ALERT } from './weather.js';
 import { EVENT_INFO_URL, tbStatusLabel, isCallOffStatus } from './tennisbear.js';
 
-const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 // バブル JSON の上限(LINE の 30KB 制限に余裕を持たせる)と、カルーセル全体の上限(50KB 制限に余裕を持たせる)
 export const MAX_BUBBLE_BYTES = 28000;
 export const MAX_CAROUSEL_BYTES = 49000;
 // 1 人あたりで試す最大行数(これ以上はバイト数で必ず溢れる)
 const MAX_ROWS = 24;
-// 「よやく」コマンド(line.js の COMMAND_TEXT と同じ。循環 import を避けて直書き)
-const COMMAND_TEXT = 'よやく';
 
 const DOW_JA = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -350,21 +345,6 @@ function header(title, right, bg) {
   };
 }
 
-const siteLinkButton = () => ({ type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label: '予約サイトを開く', uri: SITE_URL } });
-// 押した人が「よやく」と送った扱いになり、最新の一覧が返る
-const refreshButton = (label = '一覧を更新') => ({ type: 'button', style: 'link', height: 'sm', action: { type: 'message', label, text: COMMAND_TEXT } });
-
-// フッター: 区切り線 + リンク風ボタンを横並び(2つまで)
-function linkFooter(buttons) {
-  return {
-    type: 'box',
-    layout: 'vertical',
-    backgroundColor: '#FFFFFF',
-    contents: [{ type: 'separator', color: COLOR_LINE }, { type: 'box', layout: 'horizontal', contents: buttons }],
-  };
-}
-const siteLinkFooter = () => linkFooter([siteLinkButton()]);
-
 // 文字色を濃色で決め打ちしているため、背景もダークモードに依存しないよう白を明示
 function body(contents, extra = {}) {
   return { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '4px', backgroundColor: '#FFFFFF', contents, ...extra };
@@ -404,7 +384,7 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
       // 都だけ失敗: 従来どおりの断り書きを出したうえで、テニスベアの予定があれば下に出す(§15.2)
       right = '取得失敗';
       bg = COLOR_NG_BG;
-      rows.push(text('予約サイトに繋がりませんでした。少し待って「一覧を更新」を押してください', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'lg' }));
+      rows.push(text('予約サイトに繋がりませんでした。少し待って、もう一度「よやく」を送ってください', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'lg' }));
     } else if (merged.length === 0) {
       right = `${asOf} ・ 0件`;
       rows.push(text('予約はありません', { size: 'sm', color: COLOR_SUB, margin: 'lg' }));
@@ -427,7 +407,6 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
       size: 'mega',
       header: header(p.label, right, bg),
       body: body(rows),
-      footer: linkFooter([siteLinkButton(), refreshButton()]),
     };
   };
 
@@ -533,8 +512,6 @@ export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
       size: 'mega',
       header: header(ok ? 'キャンセルしました' : 'キャンセルできませんでした', ok ? nowText : null, ok ? COLOR_OK_BG : COLOR_NG_BG),
       body: body(contents),
-      // 成功したら残りの予約をすぐ確かめられるように「一覧を見る」、失敗はサイトで確認してもらう
-      footer: ok ? linkFooter([refreshButton('一覧を見る'), siteLinkButton()]) : siteLinkFooter(),
     },
   };
 }
@@ -553,9 +530,6 @@ export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
 //   │ │9/21│ 猿江恩賜公園  太郎                │
 //   │ │ 日 │                                    │
 //   │ └────┘                                    │
-//   │ ⚠ 明日 0:00 を過ぎると、取り消しにペナルティ(1点) │
-//   ├────────────────────────────────────────┤
-//   │ 予約サイトを開く            一覧を更新        │
 //   └────────────────────────────────────────┘
 
 const ALERT_MAX_ROWS = 15;
@@ -578,7 +552,7 @@ function penaltyRow(label, r) {
 export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', failedLabels = [] }) {
   const deadline = kind === 'deadline';
   const contents = [
-    text(deadline ? 'まもなく期限です。今日 23:59 までならペナルティなしで取り消せます' : '今日 23:59 までにキャンセルすれば、ペナルティは付きません', {
+    text(deadline ? 'まもなく期限です。今日 23:59 までならペナルティなしで取り消せます' : '今日 23:59 までなら、ペナルティなしで取り消せます', {
       size: 'sm',
       weight: 'bold',
       color: COLOR_TEXT,
@@ -595,17 +569,6 @@ export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', fa
   if (rows.length > shown.length) {
     contents.push(text(`…ほか${rows.length - shown.length}件(「よやく」で全部見られます)`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
   }
-  contents.push({
-    type: 'box',
-    layout: 'vertical',
-    margin: 'lg',
-    backgroundColor: COLOR_WARN_BG,
-    cornerRadius: 'md',
-    paddingAll: '10px',
-    contents: [
-      text('⚠ 日付が変わると取り消しにペナルティ(1点)が付きます。このボタンも 23:59 で使えなくなります', { size: 'xxs', color: COLOR_WARN_FG, wrap: true }),
-    ],
-  });
   if (failedLabels.length > 0) {
     contents.push(text(`※ ${failedLabels.join('・')} は予約サイトに繋がらず確認できていません`, { size: 'xxs', color: COLOR_ERROR, margin: 'md', wrap: true }));
   }
@@ -621,7 +584,6 @@ export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', fa
       size: 'mega',
       header: header(deadline ? '⏰ まもなく期限(23:59)' : '⏰ 今日中にキャンセル', nowText || null, COLOR_CONFIRM_BG),
       body: body(contents),
-      footer: linkFooter([siteLinkButton(), refreshButton()]),
     },
   };
 }

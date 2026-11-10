@@ -6,7 +6,6 @@
 //
 //   ┌──────────────────────────────────┐
 //   │ 📖 使い方                             │  ← 濃紺ヘッダー(他のカードと同じ配色)
-//   │    グループで送る合言葉                 │
 //   ├──────────────────────────────────┤
 //   │ [よやく]     予約の一覧                │  ← 行をタップするとその合言葉が送られる(message アクション)
 //   │              都営コートとテニスベアの予定 │
@@ -40,7 +39,6 @@ export { HELP_COMMAND_TEXT };
 export const MSG_HELP_FAILED = '使い方を表示できませんでした';
 
 const COLOR_HEADER_BG = '#1F2A44';
-const COLOR_HEADER_SUB = '#C7CEDB';
 const COLOR_TEXT = '#111827';
 const COLOR_SUB = '#4B5563';
 const COLOR_MUTED = '#9CA3AF';
@@ -51,16 +49,16 @@ const COLOR_PILL_FG = '#1F2A44';
 const text = (str, extra = {}) => ({ type: 'text', text: String(str), ...extra });
 
 // カードに載せる合言葉の一覧(表示順)。keyword は各モジュールの定数そのもの(クイックリプライのボタンが送る文字と同じ)
-//   title: したいこと(1 語)。desc: 補足(1〜2 文)。読む人は家族・仲間なので、仕組みの用語(除外枠など)は使わない。
+//   title: したいこと(1 語)。desc: 補足(1 文まで。2026-11-10 に短くした。'' なら出さない)。読む人は家族・仲間なので、仕組みの用語(除外枠など)は使わない。
 //   ON/OFF の打ち込み合言葉(じどうおん など)は載せない(設定カードのボタンで押せる。2026-09-25 本人決定)
 export function helpRows() {
   return [
-    { keyword: COMMAND_TEXT, title: '予約の一覧', desc: '都営コートとテニスベアの予定を日付順に。天気も出ます。キャンセルもここから' },
-    { keyword: EVENT_COMMAND_TEXT, title: 'イベントを探す', desc: '近くのコートの土日祝・初中級の練習会や大会。予定と重なるものは除いて、月・木の夜に新着も届きます' },
-    { keyword: AUTO_COMMAND_TEXT, title: '設定', desc: '自動予約と空き通知を止める・戻す。予約したくない日を決める' },
+    { keyword: COMMAND_TEXT, title: '予約の一覧', desc: '都営コートとテニスベアの予定。キャンセルもここから' },
+    { keyword: EVENT_COMMAND_TEXT, title: 'イベントを探す', desc: '近くのコートの土日祝の練習会や大会' },
+    { keyword: AUTO_COMMAND_TEXT, title: '設定', desc: '自動予約と空き通知を止める・戻す' },
     { keyword: CARD_COMMAND_TEXT, title: '受付で見せるカード', desc: '利用者カードの画像を人数分' },
     { keyword: CONTACT_COMMAND_TEXT, title: '電話でキャンセル', desc: '都営コートの電話番号。タップでかかります' },
-    { keyword: HELP_COMMAND_TEXT, title: 'この一覧', desc: '合言葉と、送ると何が返るか' },
+    { keyword: HELP_COMMAND_TEXT, title: 'この一覧', desc: '' },
   ];
 }
 
@@ -86,7 +84,7 @@ function keywordPill(keyword) {
 function helpRow({ keyword, title, desc }, { first }) {
   const right = [
     text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT, wrap: true }),
-    text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' }),
+    ...(desc ? [text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' })] : []),
   ];
   return {
     type: 'box',
@@ -111,7 +109,7 @@ export function buildHelpFlex(rows = helpRows()) {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE, margin: 'md' });
     body.push(helpRow(r, { first: i === 0 }));
   });
-  body.push(text('行をタップすると、その合言葉が送られます。メッセージの下に並ぶボタンからも送れます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
+  body.push(text('行をタップすると、その合言葉が送られます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
   return {
     type: 'flex',
     altText: helpText(rows).slice(0, 400),
@@ -125,10 +123,7 @@ export function buildHelpFlex(rows = helpRows()) {
         paddingAll: '14px',
         paddingStart: '16px',
         paddingEnd: '16px',
-        contents: [
-          text('📖 使い方', { color: '#FFFFFF', weight: 'bold', size: 'lg' }),
-          text('グループで送る合言葉', { color: COLOR_HEADER_SUB, size: 'xs', margin: 'xs' }),
-        ],
+        contents: [text('📖 使い方', { color: '#FFFFFF', weight: 'bold', size: 'lg' })],
       },
       body: { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '4px', backgroundColor: '#FFFFFF', contents: body },
     },

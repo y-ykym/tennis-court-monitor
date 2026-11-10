@@ -19,38 +19,43 @@ test('確認依頼カード: 開く URL がボタンに入り、予約者・期�
   assert.ok(bytes(m) < 10000, 'バブルは 10KB 未満');
 });
 
-test('結果カード: 成功は予約番号と料金、失敗は理由と手動リンク', () => {
+test('結果カード: 成功は予約番号と料金、失敗は理由。フッターのリンクは置かない(2026-11-10)', () => {
   const ok = buildResultFlex({ slot, status: 'success', reservationNo: '2026000562', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう');
   assert.match(JSON.stringify(ok.contents), /2026000562/);
-  const okActions = ok.contents.footer.contents[1].contents.map((b) => b.action);
-  assert.deepEqual(okActions.map((a) => a.type), ['message', 'uri'], '成功時は「予約一覧を見る」(よやく)とサイトリンク');
-  assert.equal(okActions[0].text, 'よやく');
+  assert.match(JSON.stringify(ok.contents), /2,600円/);
+  assert.equal(ok.contents.footer, undefined);
+  assert.equal(ok.contents.header.contents.length, 1, '見出しの下の言い直しは置かない');
+  assert.equal(JSON.stringify(ok.contents).includes('取り消すときは'), false, '取り消し方の案内文は置かない');
   const ng = buildResultFlex({ slot, status: 'taken', message: '満員', facility: '亀戸中央公園' }, 'ゆう');
   assert.match(JSON.stringify(ng.contents), /先に予約されていました/);
-  assert.deepEqual(ng.contents.footer.contents[1].contents.map((b) => b.action.type), ['uri'], '失敗時はサイトへのリンクだけ');
+  assert.equal(ng.contents.footer, undefined);
 });
 
 test('結果カード(自動予約): 見出しに「自動予約」。cancelData があれば警告文とキャンセル postback ボタンが付く', () => {
   const ok = buildResultFlex({ slot, status: 'success', reservationNo: '2026000562', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう', { auto: true, cancelData: 'c|A|2026000562|20260930|1300|1500|亀戸中央公園|3|1|.sig' });
   const text = JSON.stringify(ok.contents);
   assert.equal(ok.contents.header.contents[0].text, '🤖 自動予約が完了');
-  assert.match(text, /空きを見つけて自宅の予約サーバーが自動で予約しました/);
-  assert.match(text, /ペナルティなしで取り消せるのは今日 23:59 まで/);
+  assert.equal(text.match(/今日中/g).length, 1, '「今日中ならペナルティなし」は注意書きの 1 か所だけ');
+  assert.match(text, /⚠ ペナルティなしの取消は今日中/);
+  assert.match(JSON.stringify(ok.contents.body.contents.at(-1)), /ペナルティなしの取消は今日中/, '注意書きは本文の最後 = キャンセルボタンのすぐ上');
+  const sizes = ok.contents.body.contents.filter((n) => n.layout === 'horizontal').map((n) => n.contents[1].size);
+  assert.deepEqual([...new Set(sizes)], ['sm'], '予約番号も他の項目と同じ文字サイズ');
   const pb = JSON.stringify(ok.contents.footer).match(/"type":"postback"/g);
   assert.equal(pb.length, 1);
+  assert.equal(ok.contents.footer.contents[0].action.label, 'キャンセル');
+  assert.equal(JSON.stringify(ok.contents.footer).includes('"type":"uri"'), false, 'リンクは置かない');
   assert.match(JSON.stringify(ok.contents.footer), /"data":"c\|A\|2026000562/);
   assert.ok(bytes(ok) < 10000);
 
   const plain = buildResultFlex({ slot, status: 'success', reservationNo: '1', facility: '亀戸中央公園' }, 'ゆう', { auto: true });
   assert.equal(JSON.stringify(plain.contents).includes('"type":"postback"'), false, '+5 日以降はキャンセルボタン無し');
-  assert.equal(JSON.stringify(plain.contents).includes('ペナルティなしで取り消せるのは今日'), false);
+  assert.equal(JSON.stringify(plain.contents).includes('ペナルティなしの取消は今日中'), false);
 
   const ng = buildResultFlex({ slot, status: 'taken', message: '先に取られた', facility: '亀戸中央公園' }, 'ゆう', { auto: true });
   assert.equal(ng.contents.header.contents[0].text, '🤖 自動予約できませんでした');
-  // 手動(LINE のボタン)のカードは「(ボタン)」と押したボタンの名前で見分ける(2026-09-25。それまで小見出しが「自動で予約しました」で紛らわしかった)
+  // 手動(LINE のボタン)のカードは見出しの「(ボタン)」で見分ける(2026-09-25。小見出しは 2026-11-10 に外した)
   const manual = buildResultFlex({ slot, status: 'success', reservationNo: '1', facility: '亀戸中央公園' }, 'ゆう');
   assert.equal(manual.contents.header.contents[0].text, '🎾 予約完了(ボタン)');
-  assert.match(JSON.stringify(manual.contents.header), /LINE の「ゆうで予約」ボタンが押されたので予約しました/);
   assert.equal(JSON.stringify(manual.contents).includes('自動'), false, '手動カードに「自動」という言葉を出さない');
   const manualNg = buildResultFlex({ slot, status: 'taken', message: '満員', facility: '亀戸中央公園' }, 'ゆう');
   assert.equal(manualNg.contents.header.contents[0].text, '⚠️ 予約できませんでした(ボタン)');
@@ -60,8 +65,7 @@ test('結果カード(自動予約・ペナルティ期間の日): 取消にペ�
   const m = buildResultFlex({ slot, status: 'success', reservationNo: '1', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう', { auto: true, penalty: true });
   const text = JSON.stringify(m.contents);
   assert.match(text, /取り消すとペナルティ 1 点が付きます/);
-  assert.match(text, /「キャンセル」\(ペナルティ付き\)/);
-  assert.equal(text.includes('ペナルティなしで取り消せるのは今日'), false);
+  assert.equal(text.includes('ペナルティなしの取消は今日中'), false);
   assert.equal(text.includes('"type":"postback"'), false);
   assert.ok(bytes(m) < 10000);
 });

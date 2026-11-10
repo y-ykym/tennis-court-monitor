@@ -48,7 +48,7 @@ test('flex: 人ごとに 1 枚のカルーセル。ヘッダーは名前 + 現�
   assert.equal(pills(msg).length, 0, 'cancelData が無ければボタンは出ない');
   for (const bubble of msg.contents.contents) {
     assert.equal(bubble.size, 'mega', 'カルーセル内のバブルは同じ幅');
-    assert.deepEqual(find(bubble.footer, (n) => n.type === 'button').map((x) => x.action.type), ['uri', 'message'], '各カードにサイトリンクと更新');
+    assert.equal(bubble.footer, undefined, 'フッターのリンクは置かない(2026-11-10)');
   }
   // 1 人だけならカルーセルにせずバブルそのまま
   const single = buildReservationFlex([{ label: 'A', reservations: A }], opts);
@@ -135,11 +135,13 @@ test('flex: 各カード 28,000 バイト・全体 49,000 バイト以内(15+15 
   assert.ok(texts(msg30.contents).some((s) => /^…ほか\d+件$/.test(s)));
 });
 
-test('flex: フッターに「一覧を更新」(メッセージアクション「よやく」)がある', () => {
+test('flex: フッターのリンク(予約サイトを開く・一覧を更新)は置かない(2026-11-10 本人決定)', () => {
   const msg = buildReservationFlex([{ label: 'A', reservations: A }], opts);
-  const actions = find(msg.contents.footer, (n) => n.type === 'button').map((b) => b.action);
-  assert.deepEqual(actions.map((a) => a.type), ['uri', 'message']);
-  assert.equal(actions[1].text, 'よやく');
+  assert.equal(msg.contents.footer, undefined);
+  assert.equal(find(msg.contents, (n) => n.type === 'button').length, 0);
+  // 取得失敗の案内はボタンではなく合言葉を指す
+  const failed = buildReservationFlex([{ label: 'A', error: 'x' }, { label: 'B', reservations: A }], opts);
+  assert.ok(texts(failed.contents.contents[0].body).some((s) => s.includes('もう一度「よやく」を送ってください')));
 });
 
 test('flex: 確認カード(ペナルティ警告あり/なし・ボタン2つ)', () => {
@@ -175,12 +177,13 @@ test('flex: 結果カード(成功=緑・打ち消し線 / 失敗=グレー・�
   assert.ok(t.includes('予約番号 2026000123'));
   assert.equal(ok.contents.header.backgroundColor, '#15803D');
   assert.equal(find(ok.contents, (n) => n.decoration === 'line-through').length, 1);
-  assert.deepEqual(find(ok.contents.footer, (n) => n.type === 'button').map((b) => b.action.type), ['message', 'uri'], '成功時は「一覧を見る」が先');
+  assert.equal(ok.contents.footer, undefined, 'フッターのリンクは置かない(2026-11-10)');
   const ng = buildCancelResultFlex({ ok: false, label: '太郎', reservation: r });
   const t2 = texts(ng.contents);
   assert.equal(t2[0], 'キャンセルできませんでした');
   assert.ok(t2.some((s) => s.includes('予約サイトで状態を確認')));
   assert.equal(ng.contents.header.backgroundColor, '#6B7280');
+  assert.equal(ng.contents.footer, undefined);
 });
 
 // ---- フェーズ4 ペナルティ予告アラートのカード ----
@@ -191,8 +194,9 @@ test('buildPenaltyAlertFlex: 23:35 版は見出しが変わり、取得失敗し
   const morning = buildPenaltyAlertFlex({ rows: [{ label: '太郎', reservation: r() }], kind: 'morning', nowText: '9/17 9:00 現在' });
   const mt = texts(morning.contents);
   assert.ok(mt.includes('⏰ 今日中にキャンセル'));
-  assert.ok(mt.some((s) => s.includes('今日 23:59 までにキャンセルすれば')));
-  assert.ok(mt.some((s) => s.includes('ペナルティ(1点)')));
+  assert.ok(mt.includes('今日 23:59 までなら、ペナルティなしで取り消せます'));
+  assert.equal(mt.some((s) => s.includes('日付が変わると')), false, '同じ内容の ⚠ 枠は置かない(2026-11-10)');
+  assert.equal(morning.contents.footer, undefined, 'フッターのリンクは置かない');
   assert.equal(find(morning.contents, (n) => n.type === 'postback').length, 1);
 
   const night = buildPenaltyAlertFlex({ rows, kind: 'deadline', nowText: '9/17 23:35 現在', failedLabels: ['B'] });

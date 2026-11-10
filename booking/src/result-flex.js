@@ -15,23 +15,12 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { withQuickReply } = require('../../lib/quick-reply.js'); // 合言葉のボタン列(クイックリプライ)
 
-const SITE_URL = 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp';
 const DOW = ['日', '月', '火', '水', '木', '金', '土'];
-// 「よやく」コマンド(worker/src/line.js の COMMAND_TEXT と同じ文言)。メッセージアクションで送ると Worker が予約一覧を返す
-const COMMAND_TEXT = 'よやく';
 const COLOR_OK = '#06C755';
 const COLOR_NG = '#C0392B';
 const COLOR_WARN = '#E67E22';
 const COLOR_LINE = '#EEEEEE';
 
-const siteLinkButton = (label = '予約サイトを開く') => ({ type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label, uri: SITE_URL } });
-const listButton = () => ({ type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '予約一覧を見る', text: COMMAND_TEXT } });
-const linkFooter = (buttons) => ({
-  type: 'box',
-  layout: 'vertical',
-  backgroundColor: '#FFFFFF',
-  contents: [{ type: 'separator', color: COLOR_LINE }, { type: 'box', layout: 'horizontal', contents: buttons }],
-});
 const header = (title, sub, bg) => ({
   type: 'box',
   layout: 'vertical',
@@ -74,104 +63,64 @@ function row(k, v) {
   };
 }
 
-// 予約結果。成功: 緑ヘッダー + 予約番号を大きく + 取消の案内。失敗: 赤ヘッダー + 理由 + 手動で続けるリンク
+// 予約結果。成功: 緑ヘッダー + 予約番号・料金。失敗: 赤ヘッダー + 理由。
+//   2026-11-10 に情報量を減らした: 見出しの下の言い直し・取り消し方の案内文・フッターのリンクを外し、予約番号は他の行と同じ大きさに
 //   penalty: 利用日がペナルティ期間(今日+3 日以内。「せってい」の「追加枠」の自動予約)なら、取消にペナルティが付く旨を出す(2026-10-15。10-25 に枠単位へ)
 export function buildResultFlex(r, label = '', { auto = false, cancelData = null, penalty = false } = {}) {
   const ok = r.status === 'success';
-  // 見出しと小見出しで「自動予約」と「LINE のボタン(手動)」を見分けられるようにする(2026-09-25。それまでは手動側も「自動で予約しました」と出て紛らわしかった)
-  //   自動予約: 🤖 + 「自動予約」。手動: 🎾/⚠️ + 「(ボタン)」と、押したボタンの名前
+  // 見出しで「自動予約」と「LINE のボタン(手動)」を見分けられるようにする(2026-09-25)。自動予約: 🤖 + 「自動予約」。手動: 🎾/⚠️ + 「(ボタン)」
   const title = auto ? (ok ? '🤖 自動予約が完了' : '🤖 自動予約できませんでした') : ok ? '🎾 予約完了(ボタン)' : '⚠️ 予約できませんでした(ボタン)';
-  const buttonName = label ? `「${label}で予約」ボタン` : '予約ボタン';
   const rows = [row('予約者', label), row('日時', slotText(r.slot)), row('公園', r.facility || r.slot.park)];
-  if (ok && cancelData) {
-    // 利用日が 4 日後: ペナルティなしで取り消せるのは今日中だけなので目立たせる(取消自体に費用はかからない。付くのはペナルティ 1 点)
-    rows.push({
-      type: 'box',
-      layout: 'vertical',
-      margin: 'md',
-      backgroundColor: '#FFF7E6',
-      cornerRadius: 'md',
-      paddingAll: '10px',
-      contents: [{ type: 'text', text: '⚠ ペナルティなしで取り消せるのは今日 23:59 まで(利用日が 4 日後のため。明日からは取消にペナルティ 1 点が付きます)', size: 'xs', color: '#8A4B00', wrap: true }],
-    });
-  } else if (ok && penalty) {
-    rows.push({
-      type: 'box',
-      layout: 'vertical',
-      margin: 'md',
-      backgroundColor: '#FFF7E6',
-      cornerRadius: 'md',
-      paddingAll: '10px',
-      contents: [{ type: 'text', text: '⚠ この予約を取り消すとペナルティ 1 点が付きます(利用日が 3 日以内のため。「せってい」の追加枠です)', size: 'xs', color: '#8A4B00', wrap: true }],
-    });
-  }
   if (ok) {
-    rows.push(
-      {
+    rows.push(row('予約番号', r.reservationNo), row('料金', r.fee));
+    // 注意書きは本文のいちばん下 = 赤い「キャンセル」ボタンのすぐ上に置く(2026-11-10 本人指定)
+    const warn = cancelData
+      ? '⚠ ペナルティなしの取消は今日中' // 利用日が 4 日後: ペナルティなしで取り消せるのは今日 23:59 まで
+      : penalty
+        ? '⚠ 取り消すとペナルティ 1 点が付きます' // 利用日が 3 日以内(「せってい」の追加枠)
+        : null;
+    if (warn) {
+      rows.push({
         type: 'box',
-        layout: 'horizontal',
+        layout: 'vertical',
         margin: 'md',
-        alignItems: 'center',
-        contents: [
-          { type: 'text', text: '予約番号', size: 'sm', color: '#777777', flex: 2 },
-          { type: 'text', text: String(r.reservationNo || '-'), size: 'xl', weight: 'bold', color: '#111111', flex: 5, adjustMode: 'shrink-to-fit' },
-        ],
-      },
-      row('料金', r.fee),
-      {
-        type: 'text',
-        text: cancelData
-          ? '取り消すときは下の「キャンセル」(今日中)。明日以降は「予約一覧を見る」→ その行の「キャンセル」(ペナルティ付き)。'
-          : penalty
-            ? '取り消すときは「予約一覧を見る」→ その行の「キャンセル」(ペナルティ付き)。'
-            : '取り消すときは「予約一覧を見る」→ その行の「キャンセル」。利用日の4日前までならペナルティは付きません。',
-        size: 'xs',
-        color: '#777777',
-        wrap: true,
-        margin: 'lg',
-      }
-    );
+        backgroundColor: '#FFF7E6',
+        cornerRadius: 'md',
+        paddingAll: '10px',
+        contents: [{ type: 'text', text: warn, size: 'xs', color: '#8A4B00', wrap: true }],
+      });
+    }
   } else {
     rows.push(row('理由', `${STATUS_TEXT[r.status] || r.status}${r.message ? `: ${r.message}` : ''}`));
   }
-  let footer = ok ? linkFooter([listButton(), siteLinkButton()]) : linkFooter([siteLinkButton('予約サイトを開く(手動で続ける)')]);
-  if (ok && cancelData) {
-    // 「キャンセル」は postback(Worker のフェーズ1.6 の確認カード →「はい」→ 取消 → 除外枠に登録)。押した内容はトークに残る
-    footer = {
-      type: 'box',
-      layout: 'vertical',
-      backgroundColor: '#FFFFFF',
-      contents: [
-        {
+  // フッターのリンク(予約一覧を見る・予約サイトを開く)は置かない(2026-11-10 本人決定。合言葉はクイックリプライから送れる)。
+  // 「キャンセル」は postback(Worker のフェーズ1.6 の確認カード →「はい」→ 取消 → 除外枠に登録)。押した内容はトークに残る
+  const footer =
+    ok && cancelData
+      ? {
           type: 'box',
           layout: 'vertical',
+          backgroundColor: '#FFFFFF',
           paddingAll: '12px',
-          paddingBottom: '4px',
           contents: [
             {
               type: 'button',
               style: 'primary',
               color: COLOR_NG,
               height: 'sm',
-              action: { type: 'postback', label: 'キャンセル(今日中はペナルティなし)', data: cancelData, displayText: `${slotText(r.slot)} ${r.facility || ''} をキャンセル`.trim() },
+              action: { type: 'postback', label: 'キャンセル', data: cancelData, displayText: `${slotText(r.slot)} ${r.facility || ''} をキャンセル`.trim() },
             },
           ],
-        },
-        ...footer.contents,
-      ],
-    };
-  }
-  const sub = auto
-    ? ok ? '空きを見つけて自宅の予約サーバーが自動で予約しました' : '自動予約を試みましたが完了しませんでした'
-    : ok ? `LINE の${buttonName}が押されたので予約しました` : `LINE の${buttonName}の予約は完了しませんでした`;
+        }
+      : null;
   return {
     type: 'flex',
     altText: ok ? `${title} ${label} ${slotText(r.slot)} ${r.facility || ''}` : `${title} ${slotText(r.slot)}: ${STATUS_TEXT[r.status] || r.status}`,
     contents: {
       type: 'bubble',
-      header: header(title, sub, ok ? COLOR_OK : COLOR_NG),
+      header: header(title, null, ok ? COLOR_OK : COLOR_NG),
       body: { type: 'box', layout: 'vertical', paddingAll: '14px', backgroundColor: '#FFFFFF', contents: rows },
-      footer,
+      ...(footer ? { footer } : {}),
     },
   };
 }

@@ -21,21 +21,19 @@
 //   │ この日は自動予約も空き通知もしない           │     (フッターに横並びだと iPhone で「除外日を…」と文字が切れた)
 //   │  9/27(土)                         [解除] │
 //   │ 除外枠                                   │
-//   │ 手放した枠。空きが出ても取り直さない         │
-//   │  9/27(土) 13:00 大島小松川公園(キャンセル済み) [解除] │
+//   │ この枠は空きが出ても取らない                │
+//   │  9/27(土) 13:00 大島小松川公園         [解除] │
 //   │ 追加枠                             ■＋ 追加 │  ← 2026-10-25 追加(11-03 に「対象に追加した枠」から改名)(10-15〜10-25 は日単位の「ペナルティ期間でも予約する日」だった)。日時ピッカー
 //   │ ペナルティ期間でも、この枠だけは…           │
 //   │ 9/26(金)  ⚠ 取消にペナルティ               │  ← 日ごとにまとめ、⚠ は日付の行に 1 回(ペナルティ期間の日だけ)
 //   │   13:00〜15:00 亀戸中央              [解除] │  ← 「公園」を省いて折り返さないように
 //   │   15:00〜17:00 大島小松川            [解除] │
-//   ├──────────────────────────────────┤
-//   │ ↻ 更新                                   │
 //   └──────────────────────────────────┘
+//   フッターの「↻ 更新」は 2026-11-10 に外した(本人決定。「せってい」はクイックリプライから送れる)。同日に説明文も短くした
 //
 //   「追加枠」の「＋ 追加」で日を選ぶと、時間帯とコートを選ぶカード(buildPickFlex)が返り、押して ✓ を付けて「決定」で確定する
 // ============================================================
 
-const COMMAND_TEXT = 'せってい';
 // スイッチのボタンが送る合言葉(auto.js の AUTO_ON_TEXT ほかと同じ値。auto.js → auto-flex.js の一方向 import を保つため、ここにも書く)
 const AUTO_ON_TEXT = 'じどうおん';
 const AUTO_OFF_TEXT = 'じどうおふ';
@@ -167,7 +165,6 @@ const heading = (title, desc, addAction = null) => ({
   ],
 });
 const row = (label, pillBox) => ({ type: 'box', layout: 'horizontal', margin: 'md', alignItems: 'center', contents: [text(label, { size: 'md', color: COLOR_TEXT, flex: 1, wrap: true, gravity: 'center' }), pillBox] });
-const reasonText = (r) => (r === 'released' ? 'サイトで取消' : 'キャンセル済み');
 const fmtSlot = (s) => `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`;
 
 // model = { status, dates: [{ date, removeData }], slots: [{ date, start, facility, reason, removeData }],
@@ -190,10 +187,10 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   dates.slice(0, MAX_ROWS).forEach((d) => body.push(row(fmtDate(d.date), removePill(d.removeData, `${fmtDate(d.date)} の除外を解除`))));
   if (dates.length > MAX_ROWS) body.push(text(`…ほか${dates.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(heading('除外枠', '手放した枠。空きが出ても取り直さない'));
+  body.push(heading('除外枠', 'この枠は空きが出ても取らない'));
   if (slots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
   slots.slice(0, MAX_ROWS).forEach((s) => {
-    const label = `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}(${reasonText(s.reason)})`;
+    const label = `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility}`;
     body.push(row(label, removePill(s.removeData, `${fmtDate(s.date)} ${fmtTime(s.start)} ${s.facility} の除外を解除`)));
   });
   if (slots.length > MAX_ROWS) body.push(text(`…ほか${slots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
@@ -201,7 +198,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   // 追加枠(2026-10-25。11-03 に改名)。場所と時間を本人が指定した枠。ペナルティ期間・1 日 1 件の上限・場所の制約に関係なく取りに行く。
   // 「＋ 追加」は日付ピッカー。選ぶと params.date が付いて返り、Worker が時間帯とコートを選ぶカード(buildPickFlex)を返す
   const addSlotAction = addSlotData ? { type: 'datetimepicker', label: '＋ 追加', data: addSlotData, mode: 'date', initial: today, min: today, max: maxDate } : null;
-  body.push(heading('追加枠', '場所と時間を指定した枠。ペナルティ期間や 1 日 1 件の上限に関係なく、空きが出たら自動予約する(取消はペナルティ付き)。同じ日に 1 件取れたら、その日の残りは消える', addSlotAction));
+  body.push(heading('追加枠', 'ペナルティ期間でも自動予約する枠。1 件取れたら、その日の残りは消える', addSlotAction));
   if (allowSlots.length === 0) body.push(text('なし', { size: 'md', color: COLOR_MUTED, margin: 'sm' }));
   // 日ごとにまとめる(2026-10-25 実機: 8 枠で「10/25(日) 17:00 猿江恩賜公園 / ⚠ 取消にペナルティ」が 8 回並び、公園名も折り返して読みにくかった)。
   // 日付の行に ⚠ を 1 回だけ、枠の行は「17:00〜19:00 猿江恩賜」と短く(「公園」を省く)。一覧は date → start の順に並んでいる
@@ -219,7 +216,7 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
   });
   if (allowSlots.length > MAX_ROWS) body.push(text(`…ほか${allowSlots.length - MAX_ROWS}件`, { size: 'xs', color: COLOR_MUTED, margin: 'sm' }));
 
-  body.push(text('除外日・除外枠・追加枠は日時が過ぎると自動で消えます。切り替えは 1〜3 分で Pi に届きます。', { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xl' }));
+  body.push(text('過ぎた日時は自動で消えます', { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xl' }));
 
   const [, tm, td] = today.split('-').map(Number);
   return {
@@ -238,16 +235,6 @@ export function buildAutoSettingsFlex({ status, dates, slots, allowSlots = [], a
         contents: [text('⚙️ 設定', { color: '#FFFFFF', weight: 'bold', size: 'lg', flex: 1, gravity: 'center' }), text(`${tm}/${td} 現在`, { color: '#E5E7EB', size: 'xs', flex: 0, gravity: 'center', align: 'end' })],
       },
       body: { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '4px', backgroundColor: '#FFFFFF', contents: body },
-      footer: {
-        type: 'box',
-        layout: 'vertical',
-        backgroundColor: '#FFFFFF',
-        contents: [
-          { type: 'separator', color: COLOR_LINE },
-          // 「追加」のボタンは各見出しの右(2026-10-25 に移動。フッターに横並びだと文字が切れた)。フッターは「更新」だけ
-          { type: 'button', style: 'link', height: 'sm', action: { type: 'message', label: '↻ 更新', text: COMMAND_TEXT } },
-        ],
-      },
     },
   };
 }

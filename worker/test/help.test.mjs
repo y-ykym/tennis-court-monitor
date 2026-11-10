@@ -45,12 +45,14 @@ test('help: カードに合言葉と説明が全部載り、行ごとに message
   for (const r of helpRows()) {
     assert.ok(t.includes(r.keyword), `${r.keyword} が載っている`);
     assert.ok(t.includes(r.title), `${r.title} が載っている`);
-    assert.ok(t.includes(r.desc), `${r.keyword} の説明が載っている`);
+    if (r.desc) assert.ok(t.includes(r.desc), `${r.keyword} の説明が載っている`);
   }
   const acts = actions(flex.contents);
   assert.deepEqual(acts.map((a) => a.text), helpRows().map((r) => r.keyword));
   assert.ok(acts.every((a) => a.type === 'message' && a.label === a.text));
   assert.equal(flex.contents.footer, undefined, 'フッターのボタンは置かない');
+  assert.deepEqual(texts(flex.contents.header), ['📖 使い方'], '見出しの下の 1 行は置かない(2026-11-10)');
+  assert.equal(t.includes(''), false, '説明が空の行(この一覧)に空の文字を置かない');
   assert.ok(flex.altText.length <= 400);
   assert.ok(JSON.stringify(flex.contents).length < 30000, 'バブルは 30KB 以内');
 });

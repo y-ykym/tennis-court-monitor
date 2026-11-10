@@ -200,7 +200,8 @@ test('「せってい」カード: スイッチ 2 つ(ON/OFF ボタン)・除外
   assert.ok(t.includes('⚙️ 設定'));
   assert.ok(t.some((s) => s.includes('稼働中')));
   assert.equal(t.filter((s) => s === 'ON').length, 2, '自動予約・空き通知カードとも ON');
-  assert.ok(t.some((s) => s.includes('大島小松川公園') && s.includes('キャンセル済み')));
+  assert.ok(t.some((s) => s.includes('大島小松川公園')));
+  assert.equal(t.some((s) => s.includes('キャンセル済み')), false, '除外枠の行に理由は出さない(2026-11-10)');
   const acts = actions(reply.flex.contents);
   const picker = acts.find((a) => a.type === 'datetimepicker' && a.mode === 'date');
   assert.equal(picker.mode, 'date');
@@ -215,8 +216,9 @@ test('「せってい」カード: スイッチ 2 つ(ON/OFF ボタン)・除外
   }
   assert.ok(new TextEncoder().encode(JSON.stringify(reply.flex.contents)).length < 28000);
   assert.match(reply.text, /除外日: /);
-  // ぶら下がる「更新」はメッセージアクションで「せってい」
-  assert.ok(acts.some((a) => a.type === 'message' && a.text === 'せってい'));
+  // フッターの「更新」は置かない(2026-11-10 本人決定。「せってい」はクイックリプライから送れる)
+  assert.equal(reply.flex.contents.footer, undefined);
+  assert.equal(acts.some((a) => a.type === 'message' && a.text === 'せってい'), false);
   // スイッチのボタンは message アクション(署名・期限なし)。どちらも ON なので「OFF にする」が 2 つ
   const offs = acts.filter((a) => a.type === 'message' && a.label === 'OFF にする');
   assert.deepEqual(offs.map((a) => a.text), ['じどうおふ', 'つうちおふ']);
@@ -424,7 +426,7 @@ test('追加枠(2026-10-25): 日付ピッカー(b)→ 時間帯とコートを�
   const pickers = actions(r0.flex.contents).filter((a) => a.type === 'datetimepicker');
   assert.deepEqual(pickers.map((a) => [a.label, a.mode]), [['＋ 追加', 'date'], ['＋ 追加', 'date']], '除外日・追加枠の見出しの右に「＋ 追加」(どちらも日付ピッカー)');
   const add = pickers[1];
-  assert.equal(actions(r0.flex.contents).filter((a) => a.type === 'message' && a.label.includes('更新')).length, 1, 'フッターは「更新」だけ');
+  assert.equal(r0.flex.contents.footer, undefined, 'フッターは置かない');
   assert.ok(add.data.length <= 300);
   assert.equal((await verifyAutoData(SECRET, add.data, NOW)).kind, 'b');
   assert.match(r0.text, /追加枠: なし/);
