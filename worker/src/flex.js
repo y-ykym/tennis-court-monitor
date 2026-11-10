@@ -60,14 +60,14 @@ const TILE_COLORS = {
 };
 const COLOR_PAST = '#B0B5BD'; // 終了済みの文字色
 const COLOR_HEADER_BG = '#1F2A44'; // 濃紺
-const COLOR_LABEL_BG = '#E8EDF5'; // 人の名前ラベル(薄い紺)
 const COLOR_LABEL_FG = '#1F2A44';
 const COLOR_TEXT = '#111827';
 const COLOR_SUB = '#4B5563';
-const COLOR_MUTED = '#9CA3AF';
+const COLOR_MUTED = '#6B7280'; // 補足の灰(白地でコントラスト 4.83。以前の #9CA3AF は 2.54 で読みにくかった)
 const COLOR_LINE = '#E5E7EB';
 const COLOR_ERROR = '#B91C1C';
 const COLOR_SOON = '#DC2626'; // 今日/明日 の強調
+const COLOR_GONE = '#B0B5BD'; // 取り消した予約(打ち消し線)
 const COLOR_PILL_BG = '#FDECEC'; // キャンセルピル
 const COLOR_PILL_FG = '#B91C1C';
 const COLOR_CONFIRM_BG = '#9A3412'; // 確認カードのヘッダー(琥珀)
@@ -75,7 +75,6 @@ const COLOR_OK_BG = '#15803D'; // 成功
 const COLOR_NG_BG = '#6B7280'; // 失敗
 const COLOR_WARN_BG = '#FFF7E6'; // ペナルティ警告
 const COLOR_WARN_FG = '#8A4B00';
-const COLOR_PANEL_BG = '#F8FAFC';
 const COLOR_RAIN = '#DC2626'; // 降水確率が高いときの数字(フェーズ6)
 const COLOR_STATUS_BG = '#FFEDD5'; // テニスベアの参加状態ラベル(キャンセル待ち・承認待ちなど「まだ決まっていない」。2026-10-02)。オレンジ
 const COLOR_STATUS_FG = '#C2410C';
@@ -159,11 +158,11 @@ function dateTile(iso, past) {
 // 同じ枠をテニスベアでも募集している行(format.js の mergeSameSlot が tbTitle を添える)は
 // 「時間 / 公園名 + 補足 / 🐻 イベント名」。キャンセルボタンは都の予約なので付いたまま
 // フェーズ6: weather.js が r.weather を付けていれば、いちばん下に「☀️ 27℃ ☂ 30%」の行
-function detailText(r, { past, rel, timeSize = 'md', strike = false }) {
+function detailText(r, { past, rel }) {
   const main = past ? COLOR_PAST : COLOR_TEXT;
   const sub = past ? COLOR_PAST : COLOR_SUB;
   const time = r.start && r.end ? `${formatTime(r.start)} - ${formatTime(r.end)}` : r.start ? `${formatTime(r.start)} -` : '時間不明';
-  const spans = [span(time, { size: timeSize, weight: 'bold', color: main, ...(strike ? { decoration: 'line-through' } : {}) })];
+  const spans = [span(time, { size: 'md', weight: 'bold', color: main })];
   const relSpan = () => {
     if (rel) spans.push(span(`  ${rel}`, { size: 'xs', weight: 'bold', color: past ? COLOR_PAST : COLOR_SOON }));
   };
@@ -234,7 +233,11 @@ function cancelPill(r, data) {
     margin: 'sm',
     backgroundColor: COLOR_PILL_BG,
     cornerRadius: 'xl',
-    paddingAll: '6px',
+    // 押しやすいよう高さを取る(約 27px → 35px。2026-11-10)。文字は 11px のまま: 13px にすると幅が増えて公園名の行が折り返す
+    paddingTop: '10px',
+    paddingBottom: '10px',
+    paddingStart: '6px',
+    paddingEnd: '6px',
     action: {
       type: 'postback',
       label: 'キャンセル',
@@ -314,23 +317,11 @@ export function groupByDate(rows) {
   return groups;
 }
 
-// 人の名前ラベル(薄い紺の角丸)
-function personLabel(label) {
-  return {
-    type: 'box',
-    layout: 'vertical',
-    flex: 0,
-    backgroundColor: COLOR_LABEL_BG,
-    cornerRadius: '6px',
-    paddingTop: '3px',
-    paddingBottom: '3px',
-    paddingStart: '10px',
-    paddingEnd: '10px',
-    contents: [text(label, { size: 'md', weight: 'bold', color: COLOR_LABEL_FG })],
-  };
-}
-
-function header(title, right, bg) {
+// 帯: 題(19px・太字・白。長い題は縮めて 1 行に収める)+ 右に補足。
+// 帯の色は「してほしいこと」で決める(2026-11-10。緑: 良い知らせ / 琥珀: 期限つきで対応が要る / 濃紺: 読むだけ / 灰: うまくいかなかった)。
+// deadline: 右の補足が期限(「10分以内」)のときは 14px・太字・白で目立たせる。件数などは 13px の薄い白
+function header(title, right, bg, { deadline = false } = {}) {
+  const rightStyle = deadline ? { color: '#FFFFFF', size: 'sm', weight: 'bold' } : { color: '#E5E7EB', size: 'xs' };
   return {
     type: 'box',
     layout: 'horizontal',
@@ -339,8 +330,8 @@ function header(title, right, bg) {
     paddingStart: '16px',
     paddingEnd: '16px',
     contents: [
-      text(title, { color: '#FFFFFF', weight: 'bold', size: 'lg', flex: 1, gravity: 'center' }),
-      ...(right ? [text(right, { color: '#E5E7EB', size: 'xs', flex: 0, gravity: 'center', align: 'end' })] : []),
+      text(title, { color: '#FFFFFF', weight: 'bold', size: 'lg', flex: 1, gravity: 'center', adjustMode: 'shrink-to-fit' }),
+      ...(right ? [text(right, { ...rightStyle, flex: 0, gravity: 'center', align: 'end' })] : []),
     ],
   };
 }
@@ -371,8 +362,6 @@ function buildAltText(people, total) {
 // 戻り値の contents は、人が 2 人以上ならカルーセル(1 人 1 枚)、1 人ならそのバブル
 export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = jstNowHHMM() } = {}) {
   const total = people.reduce((n, p) => n + mergedRows(p).length, 0);
-  const [, tm, td] = today.split('-').map(Number);
-  const asOf = `${tm}/${td} 現在`;
 
   // 1 人分のカード。maxRows を超える分は「…ほかN件」
   const personBubble = (p, maxRows) => {
@@ -386,10 +375,10 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
       bg = COLOR_NG_BG;
       rows.push(text('予約サイトに繋がりませんでした。少し待って、もう一度「よやく」を送ってください', { size: 'sm', color: COLOR_SUB, wrap: true, margin: 'lg' }));
     } else if (merged.length === 0) {
-      right = `${asOf} ・ 0件`;
+      right = '0件';
       rows.push(text('予約はありません', { size: 'sm', color: COLOR_SUB, margin: 'lg' }));
     } else {
-      right = `${asOf} ・ ${merged.length}件`;
+      right = `${merged.length}件`;
     }
     // maxRows は「予定の数」で数える(同じ日をまとめても件数の上限の意味は変えない)
     const shown = merged.slice(0, maxRows);
@@ -401,7 +390,7 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
     });
     if (hidden > 0) rows.push(text(`…ほか${hidden}件`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
     // テニスベアだけ失敗: 黙って 0 件に見せず、末尾に小さく 1 行(§15.2)
-    if (p.tennisbear?.error) rows.push(text(MSG_TB_FAILED, { size: 'xxs', color: COLOR_MUTED, margin: 'lg', wrap: true }));
+    if (p.tennisbear?.error) rows.push(text(MSG_TB_FAILED, { size: 'xs', color: COLOR_MUTED, margin: 'lg', wrap: true }));
     return {
       type: 'bubble',
       size: 'mega',
@@ -425,42 +414,35 @@ export function buildReservationFlex(people, { today = jstTodayIso(), nowHHMM = 
 
 // ---- フェーズ1.6 キャンセル ----
 
-// 対象の予約を示すパネル(日付タイル + 時間 / 公園名)。確認カード・結果カードで共用
-function reservationPanel(r, { past = false, rel = null } = {}) {
+// 確認カード・結果カードは 1 件の予約についてのカードなので、予約結果(booking/src/result-flex.js)と同じ表にする
+// (2026-11-10 本人指定。それまでは日付タイル + 名前ラベルだった)。予約者・日時・公園は太字(大事な情報)。
+//   gone: 取り消した予約の行(薄い灰 + 打ち消し線)
+function tableRow(k, v, { strong = false, gone = false, first = false } = {}) {
+  const value = gone ? { color: COLOR_GONE, decoration: 'line-through' } : { color: COLOR_TEXT, ...(strong ? { weight: 'bold' } : {}) };
   return {
     type: 'box',
     layout: 'horizontal',
-    margin: 'lg',
-    alignItems: 'center',
-    backgroundColor: COLOR_PANEL_BG,
-    cornerRadius: 'lg',
-    paddingAll: '10px',
-    contents: [dateTile(r.date, past), detailText(r, { past, rel, timeSize: 'lg', strike: past })],
+    ...(first ? {} : { margin: 'md' }),
+    contents: [text(k, { size: 'sm', color: COLOR_MUTED, flex: 2 }), text(v || '-', { size: 'sm', flex: 5, wrap: true, ...value })],
   };
 }
-
-function metaLine(label, id) {
-  return {
-    type: 'box',
-    layout: 'horizontal',
-    margin: 'md',
-    alignItems: 'center',
-    contents: [personLabel(label), text(`予約番号 ${id}`, { size: 'xs', color: COLOR_SUB, margin: 'md', flex: 1, gravity: 'center' })],
-  };
-}
+const dateTimeText = (r) => `${r.date ? `${shortDate(r.date)}(${dowOf(r.date)})` : ''} ${formatTime(r.start)}-${formatTime(r.end)}`.trim();
+// 予約者・日時・公園・予約番号 の 4 行
+const reservationRows = (label, r, { gone = false, first = false } = {}) => [
+  tableRow('予約者', label, { strong: true, first }),
+  tableRow('日時', dateTimeText(r), { strong: true, gone }),
+  tableRow('公園', r.facility, { strong: true, gone }),
+  tableRow('予約番号', r.id),
+];
+const tableBody = (contents) => body(contents, { paddingTop: '12px' });
 
 const reservationText = (label, r) =>
   `${label} ${r.date ? `${shortDate(r.date)}(${dowOf(r.date)})` : ''} ${formatTime(r.start)}-${formatTime(r.end)} ${r.facility}`.replace(/\s+/g, ' ').trim();
 
-// 確認カード: 「この予約をキャンセルしますか？」+ 対象 + (該当時)ペナルティ警告 + [いいえ][はい、キャンセルする]
+// 確認カード: 「この予約をキャンセルしますか？」+ 対象の表 + (該当時)ペナルティ警告 + [はい、キャンセルする][いいえ]
 //   yesData: kind='y' の署名付きトークン(10分)。noData: 「いいえ」の postback data
-export function buildCancelConfirmFlex({ label, reservation: r, penalty = false, penaltyDay = 3, yesData, noData }, { today = jstTodayIso() } = {}) {
-  const rel = r.date ? relativeLabel(r.date, today) : null;
-  const contents = [
-    text('この予約をキャンセルしますか？', { size: 'md', weight: 'bold', color: COLOR_TEXT, margin: 'lg', wrap: true }),
-    reservationPanel(r, { rel }),
-    metaLine(label, r.id),
-  ];
+export function buildCancelConfirmFlex({ label, reservation: r, penalty = false, penaltyDay = 3, yesData, noData }) {
+  const contents = [text('この予約をキャンセルしますか？', { size: 'md', weight: 'bold', color: COLOR_TEXT, wrap: true }), ...reservationRows(label, r)];
   if (penalty) {
     contents.push({
       type: 'box',
@@ -469,7 +451,7 @@ export function buildCancelConfirmFlex({ label, reservation: r, penalty = false,
       backgroundColor: COLOR_WARN_BG,
       cornerRadius: 'md',
       paddingAll: '10px',
-      contents: [text(`⚠ 利用日が${penaltyDay}日以内のため、キャンセルするとペナルティ(1点)が付きます`, { size: 'xs', color: COLOR_WARN_FG, wrap: true })],
+      contents: [text(`⚠ 利用日が${penaltyDay}日以内のため、キャンセルするとペナルティ(1点)が付きます`, { size: 'sm', color: COLOR_WARN_FG, wrap: true })],
     });
   }
   return {
@@ -478,8 +460,8 @@ export function buildCancelConfirmFlex({ label, reservation: r, penalty = false,
     contents: {
       type: 'bubble',
       size: 'mega',
-      header: header('キャンセルの確認', '10分以内に選択', COLOR_CONFIRM_BG),
-      body: body(contents),
+      header: header('⚠️ キャンセルの確認', '10分以内', COLOR_CONFIRM_BG, { deadline: true }),
+      body: tableBody(contents),
       // ボタンは縦積み・全幅(横並びだと「はい、キャンセル…」と省略された)。赤の「はい」を上、「いいえ」を下
       footer: {
         type: 'box',
@@ -496,10 +478,11 @@ export function buildCancelConfirmFlex({ label, reservation: r, penalty = false,
   };
 }
 
-// 結果カード。ok=true: 緑「キャンセルしました」+ 取り消した予約(打ち消し線)。ok=false: グレー「キャンセルできませんでした」
-export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
+// 結果カード。ok=true: 緑「✅ キャンセルしました」+ 取り消した予約の表(日時と公園に打ち消し線)。ok=false: 灰「キャンセルできませんでした」
+//   nowText は使わなくなった(届いた時刻は LINE が表示する。2026-11-10)
+export function buildCancelResultFlex({ ok, label, reservation: r }) {
   const contents = ok
-    ? [reservationPanel(r, { past: true }), metaLine(label, r.id)]
+    ? reservationRows(label, r, { gone: true, first: true })
     : [
         text('予約サイトで状態を確認してください。', { size: 'sm', color: COLOR_TEXT, margin: 'lg', wrap: true }),
         text('既にキャンセル済みの場合は一覧に表示されません。', { size: 'sm', color: COLOR_TEXT, wrap: true }),
@@ -510,8 +493,8 @@ export function buildCancelResultFlex({ ok, label, reservation: r, nowText }) {
     contents: {
       type: 'bubble',
       size: 'mega',
-      header: header(ok ? 'キャンセルしました' : 'キャンセルできませんでした', ok ? nowText : null, ok ? COLOR_OK_BG : COLOR_NG_BG),
-      body: body(contents),
+      header: header(ok ? '✅ キャンセルしました' : 'キャンセルできませんでした', null, ok ? COLOR_OK_BG : COLOR_NG_BG),
+      body: ok ? tableBody(contents) : body(contents),
     },
   };
 }
@@ -549,7 +532,7 @@ function penaltyRow(label, r) {
 // rows: [{ label, reservation }](日付・開始時刻の昇順で渡す)
 // kind: 'morning'(朝 9 時の予告)| 'deadline'(23:35 の最終確認)
 // failedLabels: 予約サイトから取得できなかった人の名前(いれば「確認できていません」の断り書きを出す)
-export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', failedLabels = [] }) {
+export function buildPenaltyAlertFlex({ rows, kind = 'morning', failedLabels = [] }) {
   const deadline = kind === 'deadline';
   const contents = [
     text(deadline ? 'まもなく期限です。今日 23:59 までならペナルティなしで取り消せます' : '今日 23:59 までなら、ペナルティなしで取り消せます', {
@@ -570,7 +553,7 @@ export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', fa
     contents.push(text(`…ほか${rows.length - shown.length}件(「よやく」で全部見られます)`, { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'lg' }));
   }
   if (failedLabels.length > 0) {
-    contents.push(text(`※ ${failedLabels.join('・')} は予約サイトに繋がらず確認できていません`, { size: 'xxs', color: COLOR_ERROR, margin: 'md', wrap: true }));
+    contents.push(text(`※ ${failedLabels.join('・')} は予約サイトに繋がらず確認できていません`, { size: 'xs', color: COLOR_ERROR, margin: 'md', wrap: true }));
   }
   const first = rows[0];
   const alt = first
@@ -582,7 +565,8 @@ export function buildPenaltyAlertFlex({ rows, kind = 'morning', nowText = '', fa
     contents: {
       type: 'bubble',
       size: 'mega',
-      header: header(deadline ? '⏰ まもなく期限(23:59)' : '⏰ 今日中にキャンセル', nowText || null, COLOR_CONFIRM_BG),
+      // 見出し右の「何時現在」は外した(題が切れるため。届いた時刻は LINE が表示する。2026-11-10)
+      header: header(deadline ? '⏰ まもなく期限(23:59)' : '⏰ 今日中にキャンセル', null, COLOR_CONFIRM_BG),
       body: body(contents),
     },
   };

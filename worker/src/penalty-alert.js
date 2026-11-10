@@ -199,7 +199,7 @@ export async function runPenaltyAlert(env, { kind = 'morning', now = Date.now(),
     return { rows: 0, failed, sent: null };
   }
 
-  const flex = buildPenaltyAlertFlex({ rows, kind, nowText: asOfText(now), failedLabels: failed });
+  const flex = buildPenaltyAlertFlex({ rows, kind, failedLabels: failed });
   const sent = await pushFlexOrText(env, flex, alertText(rows, { deadline }), push);
   console.log(`[alert] ${kind}: 対象 ${rows.length} 件を ${sent} で送信${failed.length ? ` / 取得失敗 ${failed.length} 人` : ''} (${Date.now() - started}ms)`);
   await saveSentToday(env, today, [...(sentToday?.ids || []), ...rows.map((r) => r.reservation.id)]);

@@ -43,7 +43,7 @@ const NOTIFY_OFF_TEXT = 'つうちおふ';
 const COLOR_HEADER_BG = '#1F2A44';
 const COLOR_TEXT = '#111827';
 const COLOR_SUB = '#4B5563';
-const COLOR_MUTED = '#9CA3AF';
+const COLOR_MUTED = '#6B7280'; // 補足の灰(白地でコントラスト 4.83。以前の #9CA3AF は 2.54)
 const COLOR_LINE = '#E5E7EB';
 const COLOR_PILL_BG = '#E8EDF5';
 const COLOR_PANEL_BG = '#F3F4F6';
@@ -159,8 +159,8 @@ const heading = (title, desc, addAction = null) => ({
   margin: 'xl',
   contents: [
     addAction
-      ? { type: 'box', layout: 'horizontal', alignItems: 'center', contents: [text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT, flex: 1, gravity: 'center' }), pill('＋ 追加', addAction, { filled: true })] }
-      : text(title, { size: 'sm', weight: 'bold', color: COLOR_TEXT }),
+      ? { type: 'box', layout: 'horizontal', alignItems: 'center', contents: [text(title, { size: 'md', weight: 'bold', color: COLOR_TEXT, flex: 1, gravity: 'center' }), pill('＋ 追加', addAction, { filled: true })] }
+      : text(title, { size: 'md', weight: 'bold', color: COLOR_TEXT }),
     text(desc, { size: 'xs', color: COLOR_SUB, wrap: true, margin: 'xs' }),
   ],
 });
@@ -328,8 +328,8 @@ export function buildPickFlex({ date, penalty, hours, parks, count, confirmData 
     altText: pickText({ date, penalty, hours, parks, count, warn }).slice(0, 400),
     contents: {
       type: 'bubble',
-      size: 'kilo',
-      header: { type: 'box', layout: 'horizontal', backgroundColor: COLOR_HEADER_BG, paddingAll: '14px', paddingStart: '16px', contents: [text('➕ 追加枠を追加', { color: '#FFFFFF', weight: 'bold', size: 'md' })] },
+      size: 'mega', // 幅と題の大きさは他のカードと同じ(2026-11-10)
+      header: { type: 'box', layout: 'horizontal', backgroundColor: COLOR_HEADER_BG, paddingAll: '14px', paddingStart: '16px', paddingEnd: '16px', contents: [text('➕ 追加枠を追加', { color: '#FFFFFF', weight: 'bold', size: 'lg' })] },
       body: { type: 'box', layout: 'vertical', paddingAll: '16px', backgroundColor: '#FFFFFF', contents: body },
     },
   };

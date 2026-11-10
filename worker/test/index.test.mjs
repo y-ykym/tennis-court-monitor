@@ -52,9 +52,9 @@ test('postback: 「キャンセル」ボタン → 確認カード(はい=10分�
   const reply = await buildPostbackReply(env, token, { now: NOW });
   assert.equal(reply.flex.type, 'flex');
   const t = texts(reply.flex.contents);
-  assert.ok(t.includes('キャンセルの確認'));
+  assert.ok(t.includes('⚠️ キャンセルの確認'));
   assert.ok(t.includes('この予約をキャンセルしますか？'));
-  assert.ok(t.includes('太郎') && t.includes('予約番号 2026000123'));
+  assert.ok(t.includes('太郎') && t.includes('予約番号') && t.includes('2026000123'));
   assert.equal(t.some((s) => s.includes('ペナルティ')), false, '12日後なので警告なし');
   const pb = postbacks(reply.flex.contents);
   assert.deepEqual(pb.map((p) => p.label), ['はい、キャンセルする', 'いいえ']);

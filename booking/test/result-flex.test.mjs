@@ -85,3 +85,19 @@ test('pushResult: 送る本文の最後のメッセージにクイックリプ�
   assert.equal(bodies[1].messages[0].quickReply, undefined);
   assert.equal(bodies[1].messages[1].quickReply.items.length, 6);
 });
+
+test('結果カード・確認依頼カードの形(2026-11-10): 帯の色・表の太字・失敗の理由は赤', () => {
+  const rowsOf = (m) => m.contents.body.contents.filter((n) => n.layout === 'horizontal').map((n) => [n.contents[0].text, n.contents[1].weight, n.contents[1].color]);
+  const ok = buildResultFlex({ slot, status: 'success', reservationNo: '1', fee: '2,600円', facility: '亀戸中央公園' }, 'ゆう', { auto: true });
+  assert.equal(ok.contents.header.backgroundColor, '#15803D', '成功は緑(白文字が読める濃さ)');
+  assert.equal(ok.contents.size, 'mega');
+  assert.deepEqual(rowsOf(ok), [['予約者', 'bold', '#111827'], ['日時', 'bold', '#111827'], ['公園', 'bold', '#111827'], ['予約番号', undefined, '#111827'], ['料金', undefined, '#111827']], '予約者・日時・公園だけ太字');
+  const ng = buildResultFlex({ slot, status: 'taken', facility: '亀戸中央公園' }, 'ゆう', { auto: true });
+  assert.equal(ng.contents.header.backgroundColor, '#6B7280', '失敗は灰');
+  assert.deepEqual(rowsOf(ng).at(-1), ['理由', 'bold', '#DC2626'], '理由は赤の太字');
+  const ch = buildChallengeFlex({ slot, facility: '亀戸中央公園', label: 'ゆう', url: 'https://example.workers.dev/vnc', minutes: 8 });
+  assert.equal(ch.contents.header.backgroundColor, '#9A3412', '対応が要るカードは琥珀');
+  assert.deepEqual(ch.contents.header.contents.map((n) => n.text), ['🔐 確認が必要です', '8分以内'], '期限を帯の右に');
+  assert.match(ch.contents.body.contents[0].text, /8分以内に操作してください/, '期限を本文の先頭にも');
+  assert.deepEqual(rowsOf(ch).map((r) => r[0]), ['予約者', '日時', '公園']);
+});

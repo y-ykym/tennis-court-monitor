@@ -32,15 +32,15 @@ function find(node, pred, out = []) {
 const tiles = (msg) => find(msg.contents, (n) => n.width === '58px' && n.backgroundColor).map((n) => [texts(n).join(' '), n.backgroundColor]);
 const pills = (msg) => find(msg.contents, (n) => n.action?.type === 'postback');
 
-test('flex: 人ごとに 1 枚のカルーセル。ヘッダーは名前 + 現在日・件数、行は日付昇順', () => {
+test('flex: 人ごとに 1 枚のカルーセル。ヘッダーは名前 + 件数(「現在」は出さない。2026-11-10)、行は日付昇順', () => {
   const msg = buildReservationFlex([{ label: '太郎', reservations: A }, { label: 'B', reservations: B }], opts);
   assert.equal(msg.type, 'flex');
   assert.equal(msg.altText, '📅 予約一覧 3件: 太郎 9/6(日) 9:00-11:00 猿江恩賜公園 ほか');
   assert.equal(msg.contents.type, 'carousel');
   assert.equal(msg.contents.contents.length, 2, '1 人 1 枚');
   const [a, b] = msg.contents.contents;
-  assert.deepEqual(texts(a.header), ['太郎', '9/2 現在 ・ 2件']);
-  assert.deepEqual(texts(b.header), ['B', '9/2 現在 ・ 1件']);
+  assert.deepEqual(texts(a.header), ['太郎', '2件']);
+  assert.deepEqual(texts(b.header), ['B', '1件']);
   const t = texts(a.body);
   assert.ok(t.indexOf('9:00 - 11:00') < t.indexOf('11:00 - 13:00'), '日付昇順(9/6 → 9/13)');
   assert.equal(t.includes('支払前') || t.includes('支払済'), false, '支払状況は表示しない');
@@ -53,7 +53,7 @@ test('flex: 人ごとに 1 枚のカルーセル。ヘッダーは名前 + 現�
   // 1 人だけならカルーセルにせずバブルそのまま
   const single = buildReservationFlex([{ label: 'A', reservations: A }], opts);
   assert.equal(single.contents.type, 'bubble');
-  assert.deepEqual(texts(single.contents.header), ['A', '9/2 現在 ・ 2件']);
+  assert.deepEqual(texts(single.contents.header), ['A', '2件']);
 });
 
 test('flex: 日付タイルの色(日=赤 / 土=青 / 祝日=赤 / 平日=グレー)', () => {
@@ -75,7 +75,7 @@ test('flex: 日付タイルの色(日=赤 / 土=青 / 祝日=赤 / 平日=グレ
 test('flex: 片方0件・片方失敗は、それぞれのカードに表示', () => {
   const msg = buildReservationFlex([{ label: 'A', reservations: [] }, { label: 'B', error: new Error('x') }], opts);
   const [a, b] = msg.contents.contents;
-  assert.deepEqual(texts(a.header), ['A', '9/2 現在 ・ 0件']);
+  assert.deepEqual(texts(a.header), ['A', '0件']);
   assert.ok(texts(a.body).includes('予約はありません'));
   assert.deepEqual(texts(b.header), ['B', '取得失敗']);
   assert.equal(b.header.backgroundColor, '#6B7280', '失敗はグレーのヘッダー');
@@ -148,10 +148,18 @@ test('flex: 確認カード(ペナルティ警告あり/なし・ボタン2つ)'
   const r = { id: '2026000123', date: '2026-09-18', start: '17:00', end: '19:00', facility: '大島小松川公園' };
   const msg = buildCancelConfirmFlex({ label: '太郎', reservation: r, penalty: true, penaltyDay: 3, yesData: 'Y', noData: 'n' }, { today: '2026-09-16' });
   const t = texts(msg.contents);
-  assert.equal(t[0], 'キャンセルの確認');
+  assert.deepEqual(t.slice(0, 2), ['⚠️ キャンセルの確認', '10分以内'], '帯: 題 + 期限');
+  assert.deepEqual(find(msg.contents.header, (n) => n.text === '10分以内').map((n) => [n.size, n.weight, n.color]), [['sm', 'bold', '#FFFFFF']], '期限は 14px・太字・白');
   assert.ok(t.includes('この予約をキャンセルしますか？'));
-  assert.ok(t.includes('17:00 - 19:00') && t.includes('\n大島小松川公園') && t.includes('  明後日'));
-  assert.ok(t.includes('予約番号 2026000123'));
+  // 予約結果と同じ表(2026-11-10 本人指定)。予約者・日時・公園は太字、予約番号は細字
+  const rows = find(msg.contents.body, (n) => n.type === 'box' && n.layout === 'horizontal').map((b) => [b.contents[0].text, b.contents[1].text, b.contents[1].weight]);
+  assert.deepEqual(rows, [
+    ['予約者', '太郎', 'bold'],
+    ['日時', '9/18(金) 17:00-19:00', 'bold'],
+    ['公園', '大島小松川公園', 'bold'],
+    ['予約番号', '2026000123', undefined],
+  ]);
+  assert.equal(tiles(msg).length, 0, '日付タイルは使わない');
   assert.ok(t.some((s) => s.includes('利用日が3日以内のため')));
   assert.equal(t.some((s) => s.includes('支払')), false, '支払状況は出さない');
   assert.equal(t.some((s) => s.includes('取り消せません')), false);
@@ -161,7 +169,7 @@ test('flex: 確認カード(ペナルティ警告あり/なし・ボタン2つ)'
     { type: 'postback', label: 'いいえ', data: 'n', displayText: 'いいえ' },
   ]);
   assert.equal(msg.contents.footer.layout, 'vertical', 'ボタンは縦積み(省略されないように)');
-  assert.equal(find(msg.contents, (n) => n.adjustMode === 'shrink-to-fit').length, 1, '日付は縮小して1行に収める');
+  assert.equal(find(msg.contents, (n) => n.adjustMode === 'shrink-to-fit').length, 1, '題は縮小して1行に収める');
   assert.ok(bubbleBytes(msg.contents) < 4000);
   const noWarn = buildCancelConfirmFlex({ label: 'A', reservation: r, penalty: false, yesData: 'Y', noData: 'n' }, { today: '2026-09-02' });
   assert.equal(texts(noWarn.contents).some((s) => s.includes('ペナルティ')), false);
@@ -170,13 +178,19 @@ test('flex: 確認カード(ペナルティ警告あり/なし・ボタン2つ)'
 
 test('flex: 結果カード(成功=緑・打ち消し線 / 失敗=グレー・サイト確認の案内)', () => {
   const r = { id: '2026000123', date: '2026-09-18', start: '17:00', end: '19:00', facility: '大島小松川公園' };
-  const ok = buildCancelResultFlex({ ok: true, label: '太郎', reservation: r, nowText: '9/6 12:49' });
+  const ok = buildCancelResultFlex({ ok: true, label: '太郎', reservation: r });
   const t = texts(ok.contents);
-  assert.equal(t[0], 'キャンセルしました');
-  assert.equal(t[1], '9/6 12:49');
-  assert.ok(t.includes('予約番号 2026000123'));
+  assert.deepEqual(texts(ok.contents.header), ['✅ キャンセルしました'], '時刻は出さない(2026-11-10)');
+  const rows = find(ok.contents.body, (n) => n.type === 'box' && n.layout === 'horizontal').map((b) => [b.contents[0].text, b.contents[1].text, b.contents[1].decoration]);
+  assert.deepEqual(rows, [
+    ['予約者', '太郎', undefined],
+    ['日時', '9/18(金) 17:00-19:00', 'line-through'],
+    ['公園', '大島小松川公園', 'line-through'],
+    ['予約番号', '2026000123', undefined],
+  ]);
+  assert.ok(t.includes('2026000123'));
   assert.equal(ok.contents.header.backgroundColor, '#15803D');
-  assert.equal(find(ok.contents, (n) => n.decoration === 'line-through').length, 1);
+  assert.equal(find(ok.contents, (n) => n.decoration === 'line-through').length, 2, '取り消した日時と公園');
   assert.equal(ok.contents.footer, undefined, 'フッターのリンクは置かない(2026-11-10)');
   const ng = buildCancelResultFlex({ ok: false, label: '太郎', reservation: r });
   const t2 = texts(ng.contents);
@@ -191,7 +205,8 @@ test('buildPenaltyAlertFlex: 23:35 版は見出しが変わり、取得失敗し
   const r = (over = {}) => ({ id: '1', date: '2026-09-21', start: '09:00', end: '11:00', facility: '猿江恩賜公園', cancelData: 'c|A|x', ...over });
   const rows = Array.from({ length: 18 }, (_, i) => ({ label: i % 2 ? 'B' : '太郎', reservation: r({ id: String(i) }) }));
 
-  const morning = buildPenaltyAlertFlex({ rows: [{ label: '太郎', reservation: r() }], kind: 'morning', nowText: '9/17 9:00 現在' });
+  const morning = buildPenaltyAlertFlex({ rows: [{ label: '太郎', reservation: r() }], kind: 'morning' });
+  assert.deepEqual(texts(morning.contents.header), ['⏰ 今日中にキャンセル'], '見出し右の時刻は出さない(題が切れるため)');
   const mt = texts(morning.contents);
   assert.ok(mt.includes('⏰ 今日中にキャンセル'));
   assert.ok(mt.includes('今日 23:59 までなら、ペナルティなしで取り消せます'));
@@ -199,7 +214,7 @@ test('buildPenaltyAlertFlex: 23:35 版は見出しが変わり、取得失敗し
   assert.equal(morning.contents.footer, undefined, 'フッターのリンクは置かない');
   assert.equal(find(morning.contents, (n) => n.type === 'postback').length, 1);
 
-  const night = buildPenaltyAlertFlex({ rows, kind: 'deadline', nowText: '9/17 23:35 現在', failedLabels: ['B'] });
+  const night = buildPenaltyAlertFlex({ rows, kind: 'deadline', failedLabels: ['B'] });
   const nt = texts(night.contents);
   assert.ok(nt.includes('⏰ まもなく期限(23:59)'));
   assert.ok(nt.some((s) => s.includes('まもなく期限です')));
@@ -267,7 +282,7 @@ test('flex(§15): テニスベアの行は 🐻 イベント名 + コート名�
   const site = A.map((r) => ({ ...r, cancelData: DATA }));
   const msg = buildReservationFlex([{ label: '太郎', reservations: site, tennisbear: { events: TB } }], opts);
   assert.equal(msg.contents.type, 'bubble');
-  assert.deepEqual(texts(msg.contents.header), ['太郎', '9/2 現在 ・ 4件'], '件数はテニスベア込み');
+  assert.deepEqual(texts(msg.contents.header), ['太郎', '4件'], '件数はテニスベア込み');
   assert.deepEqual(
     tiles(msg).map(([t]) => t),
     ['9/6 日', '9/8 火', '9/13 日', '9/22 火'],
@@ -309,7 +324,7 @@ test('flex(§15): テニスベアの行は行全体がイベント詳細ペー�
 test('flex(§15): テニスベアだけ失敗 → 都の予約は普通に出し、カード末尾に小さく 1 行', () => {
   const msg = buildReservationFlex([{ label: 'A', reservations: A, tennisbear: { error: new Error('x') } }, { label: 'B', reservations: B }], opts);
   const [a, b] = msg.contents.contents;
-  assert.deepEqual(texts(a.header), ['A', '9/2 現在 ・ 2件']);
+  assert.deepEqual(texts(a.header), ['A', '2件']);
   const last = texts(a.body).at(-1);
   assert.equal(last, '🐻 テニスベアの取得に失敗しました');
   assert.equal(texts(b.body).some((s) => s.includes('テニスベア')), false, 'B には出ない');
@@ -358,7 +373,7 @@ test('flex: 同じ日の予定は 1 つの日付タイルの右に時間順で�
     { source: 'tennisbear', id: 'b', title: 'ストローク多め練', date: '2026-09-23', start: '19:00', end: '21:00', facility: '大島小松川公園Ａ' },
   ];
   const msg = buildReservationFlex([{ label: '太郎', reservations, tennisbear: { events: TBX } }], { today: '2026-09-17', nowHHMM: '12:00' });
-  assert.deepEqual(texts(msg.contents.header), ['太郎', '9/17 現在 ・ 6件'], '件数は予定の数のまま');
+  assert.deepEqual(texts(msg.contents.header), ['太郎', '6件'], '件数は予定の数のまま');
   assert.deepEqual(tiles(msg).map(([t]) => t), ['9/22 火', '9/23 水', '9/25 金'], 'タイルは日ごとに 1 つ');
   assert.equal(pills(msg).length, 4, 'キャンセルボタンは都の 4 件ぶん');
   assert.equal(find(msg.contents.body, (n) => n.type === 'separator').length, 2, '罫線は日と日の間(2 本)だけ');
@@ -404,7 +419,7 @@ test('flex: 同じ枠を都で予約しテニスベアでも募集している�
   const site = [{ id: '2026000123', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園', status: '支払前', cancelData: DATA }];
   const ev = { source: 'tennisbear', id: '1621297', title: 'ストローク多め練', date: '2026-09-22', start: '19:00', end: '21:00', facility: '大島小松川公園Ａ', placeCode: '0100010020', organizer: true };
   const msg = buildReservationFlex([{ label: 'A', reservations: site, tennisbear: { events: [ev] } }], opts);
-  assert.deepEqual(texts(msg.contents.header), ['A', '9/2 現在 ・ 1件'], '2 行に見せず 1 件と数える');
+  assert.deepEqual(texts(msg.contents.header), ['A', '1件'], '2 行に見せず 1 件と数える');
   assert.deepEqual(tiles(msg).map(([t]) => t), ['9/22 火'], '日付タイルも 1 つ');
   const t = texts(msg.contents.body);
   assert.ok(t.includes('\n大島小松川公園'), '土台は都の行(公園名は都の表記)');

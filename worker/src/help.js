@@ -41,7 +41,7 @@ export const MSG_HELP_FAILED = '使い方を表示できませんでした';
 const COLOR_HEADER_BG = '#1F2A44';
 const COLOR_TEXT = '#111827';
 const COLOR_SUB = '#4B5563';
-const COLOR_MUTED = '#9CA3AF';
+const COLOR_MUTED = '#6B7280';
 const COLOR_LINE = '#E5E7EB';
 const COLOR_PILL_BG = '#E8EDF5';
 const COLOR_PILL_FG = '#1F2A44';
@@ -109,7 +109,7 @@ export function buildHelpFlex(rows = helpRows()) {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE, margin: 'md' });
     body.push(helpRow(r, { first: i === 0 }));
   });
-  body.push(text('行をタップすると、その合言葉が送られます', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
+  body.push(text('行をタップすると、その合言葉が送られます', { size: 'xs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
   return {
     type: 'flex',
     altText: helpText(rows).slice(0, 400),

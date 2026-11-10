@@ -610,10 +610,7 @@ export async function buildPostbackReply(env, data, { deferLogout, now = Date.no
     });
     console.log(`[cancel] 確認カード: ${slotText(token)}${penalty ? ' (ペナルティ対象)' : ''}`);
     return {
-      flex: buildCancelConfirmFlex(
-        { label: person.label, reservation, penalty, penaltyDay: token.penaltyDay ?? 3, yesData, noData: POSTBACK_NO },
-        { today }
-      ),
+      flex: buildCancelConfirmFlex({ label: person.label, reservation, penalty, penaltyDay: token.penaltyDay ?? 3, yesData, noData: POSTBACK_NO }),
       text: 'キャンセルの確認カードを表示できませんでした。「よやく」からやり直してください',
     };
   }
@@ -649,9 +646,8 @@ export async function buildPostbackReply(env, data, { deferLogout, now = Date.no
       console.error(`[auto] 除外枠の登録に失敗(取消自体は成功): ${e.message}`);
     }
   }
-  const nowText = `${jstTodayIso(new Date()).slice(5).replace(/^0/, '').replace('-0', '/').replace('-', '/')} ${jstNowHHMM()}`;
   return {
-    flex: buildCancelResultFlex({ ok, label: person.label, reservation, nowText }),
+    flex: buildCancelResultFlex({ ok, label: person.label, reservation }),
     text: ok
       ? `キャンセルしました: ${person.label} ${token.date} ${token.start}-${token.end} ${token.facility}`
       : 'キャンセルできませんでした。予約サイトで状態を確認してください',

@@ -102,7 +102,7 @@ const HEADER_COLORS = {
 };
 const COLOR_TEXT = '#111827';
 const COLOR_SUB = '#4B5563'; // イベント名・主催者名(2026-09-27 に #6B7280 から少し濃く。本人が「文字が小さくない?」と指摘 → 大きさと濃さを一段上げた)
-const COLOR_MUTED = '#9CA3AF';
+const COLOR_MUTED = '#6B7280';
 const COLOR_LINE = '#E5E7EB';
 const COLOR_WARN = '#B45309';
 const ROWS_PER_BUBBLE = 8; // 1 枚に載せる上限(超えたらその日を 2 枚に分ける)
@@ -411,7 +411,7 @@ function placeChip(placeCode) {
     paddingBottom: '2px',
     paddingStart: '6px',
     paddingEnd: '6px',
-    contents: [text(place.short, { size: 'xxs', weight: 'bold', color: place.fg })],
+    contents: [text(place.short, { size: 'xs', weight: 'bold', color: place.fg })],
   };
 }
 
@@ -498,7 +498,7 @@ function dateBubble(iso, rows, prices, { mode, part, total, note, range }) {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE });
     body.push(eventRow(ev, prices.get(ev.id), { first: i === 0 }));
   });
-  if (note) body.push(text(note, { size: 'xxs', color: COLOR_WARN, wrap: true, margin: 'md' }));
+  if (note) body.push(text(note, { size: 'xs', color: COLOR_WARN, wrap: true, margin: 'md' }));
   return {
     type: 'bubble',
     size: 'mega',
@@ -508,7 +508,7 @@ function dateBubble(iso, rows, prices, { mode, part, total, note, range }) {
       type: 'box',
       layout: 'vertical',
       backgroundColor: '#FFFFFF',
-      contents: [{ type: 'separator', color: COLOR_LINE }, text('タップでイベントの詳細を開く', { size: 'xxs', color: COLOR_MUTED, align: 'center', margin: 'md' })],
+      contents: [{ type: 'separator', color: COLOR_LINE }, text('タップでイベントの詳細を開く', { size: 'xs', color: COLOR_MUTED, align: 'center', margin: 'md' })],
       paddingBottom: '10px',
     },
   };

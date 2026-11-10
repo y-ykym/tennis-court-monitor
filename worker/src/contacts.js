@@ -31,10 +31,9 @@ export { CONTACT_COMMAND_TEXT };
 export const MSG_CONTACT_FAILED = '連絡先を表示できませんでした';
 
 const COLOR_HEADER_BG = '#1F2A44';
-const COLOR_HEADER_SUB = '#C7CEDB';
 const COLOR_TEXT = '#111827';
 const COLOR_PHONE = '#1D4F91';
-const COLOR_MUTED = '#9CA3AF';
+const COLOR_MUTED = '#6B7280';
 const COLOR_LINE = '#E5E7EB';
 
 const text = (str, extra = {}) => ({ type: 'text', text: String(str), ...extra });
@@ -84,7 +83,7 @@ export function buildContactFlex(rows = contactRows()) {
     if (i > 0) body.push({ type: 'separator', color: COLOR_LINE, margin: 'md' });
     body.push(contactRow(r, { first: i === 0 }));
   });
-  body.push(text('番号をタップすると電話がかかります', { size: 'xxs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
+  body.push(text('番号をタップすると電話がかかります', { size: 'xs', color: COLOR_MUTED, margin: 'xl', wrap: true }));
   return {
     type: 'flex',
     altText: contactText(rows).slice(0, 400),
@@ -98,10 +97,7 @@ export function buildContactFlex(rows = contactRows()) {
         paddingAll: '14px',
         paddingStart: '16px',
         paddingEnd: '16px',
-        contents: [
-          text('📞 キャンセルの連絡先', { color: '#FFFFFF', weight: 'bold', size: 'lg' }),
-          text('都営コートのサービスセンター', { color: COLOR_HEADER_SUB, size: 'xs', margin: 'xs' }),
-        ],
+        contents: [text('📞 キャンセルの連絡先', { color: '#FFFFFF', weight: 'bold', size: 'lg' })],
       },
       body: { type: 'box', layout: 'vertical', paddingAll: '16px', paddingTop: '4px', backgroundColor: '#FFFFFF', contents: body },
     },
