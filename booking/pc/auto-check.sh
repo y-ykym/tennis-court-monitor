@@ -49,7 +49,7 @@ verdict = '✔ 動いている'
 if mode != 'on': verdict = f'✖ 止まっている(mode={mode}。.env の AUTO_BOOKING を確認)'
 elif not enabled: verdict = '⏸ LINE の「せってい」で OFF になっている(Pi は動いているが予約しない)'
 elif not last_at: verdict = '… 起動直後(まだ初回の照会が終わっていない)' if up_min < 3 else f'✖ 起動から {up_min} 分たつのに照会が 1 度も終わっていない'
-elif fails >= 3: verdict = f'⚠ 空き照会が連続 {fails} 回失敗中(照会の間隔を最大 15 分に広げている。サイトのメンテナンスか長い障害。1 回成功すれば 1 分に戻る)'
+elif fails >= 3: verdict = f'⚠ 空き照会が連続 {fails} 回失敗中(照会の間隔を広げている。都サイトの「お知らせ」なら 3 分・それ以外は最大 15 分。1 回成功すれば通常に戻る)'
 elif age_min >= 5: verdict = f'✖ 最後の照会が {age_min} 分前(5 分以上止まっている。ログを確認)'
 print(verdict)
 print(f"  mode={mode}  LINEスイッチ={'ON' if enabled else 'OFF'}  空き通知カード={'ON' if notify else 'OFF'}  起動 {jst(started)}({up_min} 分前)")

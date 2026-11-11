@@ -69,7 +69,7 @@ export function createBrowserWarmer({
     b.setPhase('top');
     await b.page.goto(topUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (!(await b.page.$('[onclick*="gRsvWTransUserLoginAction"]'))) {
-      // 本物の障害・メンテナンスの応答(お知らせページ)なら、起こし直しの間隔を最初から最大にする(下の catch)
+      // 都サイトの「お知らせ」ページなら、ログでそれと分かるメッセージにする
       const title = typeof b.page.title === 'function' ? await b.page.title().catch(() => '') : '';
       if (isSiteNoticePage(title)) throw siteNoticeError('トップページ');
       throw new Error('トップページにログインボタンがありません(メンテナンス中の可能性)');
@@ -128,8 +128,9 @@ export function createBrowserWarmer({
         failures++;
         await discard(b);
         state = 'idle';
-        // 都サイトが止まっている(お知らせページ)間は 1 分おきに起こしても無駄なので、待ちを最初から最大にする
-        const wait = e.siteNotice ? maxRetryMs : retryDelay();
+        // 都サイトの「お知らせ」ページでも他の失敗と同じ待ち方にする(1 分 → 2 倍ずつ → 最大 10 分)。
+        // お知らせは 1〜2 回で消える短い不調が大半で、最初から 10 分待つとその間の予約が遅い経路になる(2026-11-11)
+        const wait = retryDelay();
         log(`先に起こせませんでした(${failures} 回目): ${e.message.split('\n')[0]}。${busy ? '予約が終わってから' : `${Math.round(wait / 1000)} 秒後に`}やり直します`);
         if (!stopped && !busy) schedule(prepare, wait);
       } finally {

@@ -40,7 +40,9 @@
 //   空き照会が連続で失敗(サイトのメンテナンス・長い障害): BACKOFF_AFTER 回目から次の照会までの間隔を BACKOFF_STEPS_MS の順に広げ、
 //     1 回成功したら通常の間隔に戻す(2026-09-27。定期メンテの時間帯の決め打ち lib/maintenance.js は撤去。
 //     旧システムの公表値「毎月 27 日 12:00〜28 日 8:45」で稼働中のサイトを 21 時間飛ばしたため。新システムに定期メンテの公表は無い)
-//     都サイトの「お知らせ」ページ(本物の障害・メンテナンス。lib/site-notice.js)が返ったときは 1 回目からすぐ広げる(2026-11-07)
+//     都サイトの「お知らせ」ページ(lib/site-notice.js)が返った失敗も同じく 3 回目から広げるが、広げるのは 3 分まで(NOTICE_BACKOFF_STEPS_MS)。
+//     2026-11-09〜10 の夜に出たお知らせ 31 回のうち 20 回は 1 回きり・8 回は 2 回続きの短い不調で、長い 3 回も「つながりにくい」状態だった
+//     (同時刻の GitHub 側は 3 回に 1 回ほど成功)。1 回目から広げて 15 分まで伸ばすと、夜の 2 時間 18 分で 9 回しか照会できなかった(2026-11-11)
 //
 //   ログには利用者番号・パスワード・鍵・Cookie を出さない。見送りの理由は必ず出す
 // ============================================================
@@ -92,6 +94,8 @@ export const TB_PLANS_STALE_MAX_MS = 60 * 60 * 1000;
 export const BACKOFF_AFTER = 3;
 // 広げた間隔(連続失敗 3 回目 → 3 分、4 回目 → 5 分、5 回目 → 10 分、6 回目以降 → 15 分)。成功で即リセット
 export const BACKOFF_STEPS_MS = [3 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000, 15 * 60 * 1000];
+// 直近の失敗が都サイトの「お知らせ」ページだったときの広げ方(3 回目以降ずっと 3 分。短い不調が大半なので長く空けない。2026-11-11)
+export const NOTICE_BACKOFF_STEPS_MS = [3 * 60 * 1000];
 
 // 連続失敗の回数に応じた照会間隔。閾値未満なら通常の間隔(normalMs)
 export function backoffIntervalMs(consecutiveFailures, normalMs, { after = BACKOFF_AFTER, steps = BACKOFF_STEPS_MS } = {}) {
@@ -153,6 +157,8 @@ export function createAutoRunner({
   const bookingEnabled = () => mode === 'on' && remoteEnabled;
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
   let consecutiveFailures = 0; // 空き照会の連続失敗回数(成功で 0 に戻る。間隔を広げる判断に使う)
+  let lastFailureWasNotice = false; // 直近の失敗が都サイトの「お知らせ」ページだったか(広げる上限を 3 分にする)
+  const backoffOpts = () => (lastFailureWasNotice ? { steps: NOTICE_BACKOFF_STEPS_MS } : {});
   let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
   let lastAllSlots = []; // 直近の照会の全枠(一部の公園×週が取れなかったとき、その分を補うのに使う)
   const parkFreshAt = new Map(); // 公園名 → その公園の全週をきちんと取れた最後の照会の時刻
@@ -266,10 +272,9 @@ export function createAutoRunner({
         slots = fillPartial(await scrape(), today, started);
       } catch (e) {
         consecutiveFailures++;
-        // 都サイトの「お知らせ」ページ(本物の障害・メンテナンス。lib/site-notice.js)なら、3 回待たずにすぐ間隔を広げる
-        if (e.siteNotice && consecutiveFailures < BACKOFF_AFTER) consecutiveFailures = BACKOFF_AFTER;
-        const backoff = backoffIntervalMs(consecutiveFailures, 0);
-        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます${e.siteNotice ? '(都サイトが止まっている間は公園を変えても無駄なため)' : '(メンテナンスか長い障害の可能性)'}` : ''}`);
+        lastFailureWasNotice = !!e.siteNotice;
+        const backoff = backoffIntervalMs(consecutiveFailures, 0, backoffOpts());
+        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます${e.siteNotice ? '(都サイトの「お知らせ」が続いているため。短い不調が多いので 3 分より長くは空けない)' : '(メンテナンスか長い障害の可能性)'}` : ''}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
         event('poll_failed', { consecutive: consecutiveFailures, message: e.message, ...(e.siteNotice ? { siteNotice: true } : {}) });
         await heartbeat();
@@ -277,6 +282,7 @@ export function createAutoRunner({
       }
       if (consecutiveFailures >= BACKOFF_AFTER) log(`空き照会が回復しました(連続失敗 ${consecutiveFailures} 回のあと)。通常の間隔に戻します`);
       consecutiveFailures = 0;
+      lastFailureWasNotice = false;
       // 監視対象(平日は猿江 19:00 だけ・土日祝は全部。lib/filter.js)に加えて、「せってい」の追加枠はいつでも見る
       // (平日の 17:00 や大島・亀戸は監視対象ではないため、これが無いと追加しても見てもらえない。2026-10-25)
       const allowKeys = new Set((exclusions?.allowSlots || []).map(slotKey));
@@ -648,7 +654,7 @@ export function createAutoRunner({
     const loop = async () => {
       const startedAt = now();
       await tick();
-      const intervalMs = backoffIntervalMs(consecutiveFailures, pollIntervalAt(startedAt, interval));
+      const intervalMs = backoffIntervalMs(consecutiveFailures, pollIntervalAt(startedAt, interval), backoffOpts());
       timer = setTimeout(loop, nextDelayMs({ startedAt, finishedAt: now(), intervalMs }));
     };
     timer = setTimeout(loop, 3000);
@@ -664,6 +670,7 @@ export function createAutoRunner({
     effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
     exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining, tbPlans,
     consecutiveFailures: () => consecutiveFailures,
+    backoffMs: (normalMs) => backoffIntervalMs(consecutiveFailures, normalMs, backoffOpts()),
   };
   return api;
 }

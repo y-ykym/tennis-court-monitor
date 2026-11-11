@@ -1106,7 +1106,7 @@ test('再挑戦(2026-11-06): 一時エラーの後、枠が消えてまた現れ
   assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'success');
 });
 
-test('都サイトの「お知らせ」ページ(siteNotice)なら 1 回目の失敗からすぐ間隔を広げ、成功で戻す', async () => {
+test('都サイトの「お知らせ」ページ(siteNotice)は 2 回目まで通常の間隔で見直し、3 回目以降も 3 分より長くは空けない。成功で戻す(2026-11-11)', async () => {
   let fail = true;
   const logs = [];
   const runner = createAutoRunner({
@@ -1125,11 +1125,19 @@ test('都サイトの「お知らせ」ページ(siteNotice)なら 1 回目の�
     log: (m) => logs.push(m),
   });
   const failLine = () => logs.filter((m) => m.includes('空き照会に失敗')).at(-1) || '';
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 1 });
+  assert.ok(!failLine().includes('次の照会まで'), failLine());
+  assert.equal(runner.backoffMs(60000), 60000, '1 回目は通常の間隔');
+  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 2 });
+  assert.equal(runner.backoffMs(60000), 60000, '2 回目も通常の間隔');
   assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 3 });
-  assert.ok(failLine().includes('次の照会まで 3 分空けます(都サイトが止まっている間は公園を変えても無駄なため)'), failLine());
-  assert.equal(backoffIntervalMs(runner.consecutiveFailures(), 60000), 3 * 60000);
-  assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 4 });
-  assert.ok(failLine().includes('次の照会まで 5 分空けます'), failLine());
+  assert.ok(failLine().includes('次の照会まで 3 分空けます(都サイトの「お知らせ」が続いているため'), failLine());
+  assert.equal(runner.backoffMs(60000), 3 * 60000);
+  for (let i = 0; i < 5; i++) await runner.tick();
+  assert.equal(runner.consecutiveFailures(), 8);
+  assert.ok(failLine().includes('次の照会まで 3 分空けます'), failLine());
+  assert.equal(runner.backoffMs(60000), 3 * 60000, '何回続いても 3 分まで');
+  assert.equal(runner.backoffMs(3 * 60000), 3 * 60000);
   fail = false;
   await runner.tick();
   assert.equal(runner.consecutiveFailures(), 0);

@@ -203,7 +203,7 @@ test('トップにログインボタンが無ければ(メンテナンス)失敗
   assert.equal(launched.length, 2);
 });
 
-test('トップが都サイトの「お知らせ」ページ(本物の障害)なら、起こし直しの待ちを最初から最大の 10 分にする', async () => {
+test('トップが都サイトの「お知らせ」ページでも、起こし直しの待ちは他の失敗と同じ 1 分から(短い不調が大半のため。2026-11-11)', async () => {
   const clock = fakeClock();
   const logs = [];
   const { launch, launched } = fakeLaunch({ notice: true });
@@ -212,11 +212,9 @@ test('トップが都サイトの「お知らせ」ページ(本物の障害)な
   await flush();
   assert.equal(w.status().state, 'idle');
   assert.equal(launched[0].page.isClosed(), true);
-  assert.ok(logs.at(-1).includes('都サイトがメンテナンス・障害中') && logs.at(-1).includes('600 秒後にやり直します'), logs.at(-1));
-  await clock.advance(9 * 60 * 1000);
-  assert.equal(launched.length, 1, '10 分経つまで起こさない');
+  assert.ok(logs.at(-1).includes('都サイトがメンテナンス・障害中') && logs.at(-1).includes('60 秒後にやり直します'), logs.at(-1));
   await clock.advance(60 * 1000);
-  assert.equal(launched.length, 2);
+  assert.equal(launched.length, 2, '1 分後に起こし直す');
 });
 
 test('何も無いときの acquire は起こして待ってから渡す。stop 後は null', async () => {
