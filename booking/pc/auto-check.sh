@@ -81,11 +81,19 @@ else:
         print(f"  {jst(v.get('at') or 0)}  {v.get('status',''):9}  {date} {start}  公園{park}")
 PY
 
-hr "この 24 時間のログ(照会の定期行を除いた振り分け。※コンテナ再作成でログは消える。長期の集計は ./auto-stats.sh)"
-docker compose logs --since 24h --no-log-prefix booking 2>/dev/null | grep '\[auto\]' | grep -v '照会: 監視対象\|除外一覧を更新' | tail -30
-echo "  fetch failed: $(docker compose logs --since 24h booking 2>/dev/null | grep -c 'fetch failed') 件 / 24h(回線不調の目安)"
+hr "この 24 時間のログ(照会の定期行を除いた振り分け。長期の集計は ./auto-stats.sh)"
+# volume のログファイル(日本時間の日付ごと・7 日分)から読む。docker のログは Pi の急な再起動で 1 行でも壊れると
+# --since が 0 行を返し、ここが空欄・fetch failed が常に 0 件になる(2026-11-11 に発生)。行頭の時刻は UTC の ISO 表記なので文字列で比べられる。
+CUTOFF="[$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%S')"
+LOG24=$(docker compose exec -T booking sh -c 'cat $(ls /var/lib/booking/logs/server-*.log 2>/dev/null | tail -2) 2>/dev/null' 2>/dev/null | awk -v c="$CUTOFF" '/^\[20/ && $1 >= c')
+if [ -z "$LOG24" ]; then
+  echo "  (ログファイルから読めないため docker のログを使います)"
+  LOG24=$(docker compose logs --since 24h --no-log-prefix booking 2>/dev/null)
+fi
+printf '%s\n' "$LOG24" | grep '\[auto\]' | grep -v '照会: 監視対象\|除外一覧を更新' | tail -30
+echo "  fetch failed: $(printf '%s\n' "$LOG24" | grep -c 'fetch failed') 件 / 24h(回線不調の目安)"
 echo "  直近の照会 3 行:"
-docker compose logs --since 24h --no-log-prefix booking 2>/dev/null | grep '\[auto\] 照会:' | tail -3 | sed 's/^/    /'
+printf '%s\n' "$LOG24" | grep '\[auto\] 照会:' | tail -3 | sed 's/^/    /'
 echo "  ※ コンテナを作り直す前のログは /var/lib/booking/logs/server-YYYY-MM-DD.log(7 日分)。例: docker compose exec booking sh -c 'grep -E \"予約|高速経路|warm\" /var/lib/booking/logs/server-\$(date +%F).log | tail -40'"
 echo "  ※ 失敗時の画面(スクショ・HTML)は /var/lib/booking/debug-out(7 日分。個人情報を含むので Pi の外に出さない): $(docker compose exec -T booking sh -c 'ls /var/lib/booking/debug-out 2>/dev/null | tail -3 | tr "\n" " "')"
 
