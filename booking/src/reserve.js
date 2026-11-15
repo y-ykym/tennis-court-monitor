@@ -620,6 +620,9 @@ export async function reserve(slot, credentials, options = {}) {
         return done(afterHuman ? 'abandoned' : 'rejected', afterHuman ? '人間の操作が完了しないまま終了しました(予約はされていません)' : 'reCAPTCHA v2 のチェックが要求されました(人間の操作が必要)', { facility });
       }
       await saveDebug(page, debugDir, `apply-${resultId || 'unknown'}`);
+      // 理由の文言(onload の errorMsg)は、下の verifyByList が同じページを予約一覧へ移す前に読んでおく。
+      // 移した後に読むと常に空になり、「施設予約に失敗」(先を越された)が error 扱いになって無駄なやり直しが走っていた(2026-11-16)
+      const resultHtml = await page.content().catch(() => '');
       // 完了画面ではない。画面だけで「失敗」と決めず、一覧に入っていないかを確かめる(入っていれば成功)
       const hit = await verifyByList(page, slot, facility, log);
       if (hit) return successByList(hit);
@@ -627,7 +630,7 @@ export async function reserve(slot, credentials, options = {}) {
         return done('abandoned', '人間の操作が完了しないまま終了しました(予約はされていません)', { facility });
       }
       // 理由は alert > 画面の onload に埋め込まれた errorMsg/showAlert > 本文先頭 の順で採る(本文先頭は非表示モーダルの文言で当てにならない)
-      const embedded = siteErrorMessage(await page.content().catch(() => ''));
+      const embedded = siteErrorMessage(resultHtml);
       const reason = lastAlert() || embedded || bodyText.slice(0, 200);
       if (/reCAPTCHA|ロボット|不正なアクセス/i.test(reason)) return done('rejected', `サイトの認証(reCAPTCHA)で申込みが拒否されました: ${reason}`);
       if (/同じ利用日時|複数の予約|既に予約|2件まで/.test(reason)) return done('duplicate', `サイトが申込みを断りました: ${reason}`);
