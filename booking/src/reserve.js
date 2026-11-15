@@ -275,7 +275,12 @@ export async function reserve(slot, credentials, options = {}) {
     reservationsBefore = parseReservations(html);
     log(`予約一覧(予約前): ${reservationsBefore.length} 件`);
     const stop = beforeApply ? await beforeApply({ reservations: reservationsBefore }) : null;
-    if (stop) throw new ReserveError(stop.status || 'capped', stop.message || '見送りました');
+    if (stop) {
+      // 自分の判断での見送り(その日の上限など)。失敗ではないので、下の catch で失敗画面(error)を残さない目印を付ける
+      const err = new ReserveError(stop.status || 'capped', stop.message || '見送りました');
+      err.declined = true;
+      throw err;
+    }
   };
 
   // 先に起こしたブラウザ(options.warm)を受け取ったら、この関数が必ず閉じる(閉じないと warmer が「使用中」のまま次を起こせず、
@@ -632,7 +637,8 @@ export async function reserve(slot, credentials, options = {}) {
     };
     return await classify(false);
   } catch (e) {
-    await saveDebug(page, debugDir, 'error');
+    // 見送り(beforeApply の中止)では画面を残さない。debug-out が見送りの画面で埋まり、本物の失敗が見分けにくかった(2026-11-16)
+    if (!e?.declined) await saveDebug(page, debugDir, 'error');
     // 「予約」を押した後のエラー(タイムアウト等)は、予約だけ入っている可能性があるので一覧で確かめる
     if (applySent && loggedIn && !page.isClosed()) {
       const hit = await verifyByList(page, slot, facility, log);
