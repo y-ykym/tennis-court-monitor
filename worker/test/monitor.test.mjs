@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runMonitor, probeBookingServer, autoIssue, fetchLineQuotaUsage, ALERT_AFTER_FAILS, PROBE_ATTEMPTS, AUTO_STALL_MS, AUTO_FAIL_ALERT_AFTER } from '../src/monitor.js';
+import { runMonitor, probeBookingServer, autoIssue, fetchLineQuotaUsage, fetchLineQuotaLimit, fetchLineQuota, ALERT_AFTER_FAILS, PROBE_ATTEMPTS, AUTO_STALL_MS, AUTO_FAIL_ALERT_AFTER } from '../src/monitor.js';
 
 function fakeKV(initial = {}) {
   const store = new Map(Object.entries(initial));
@@ -174,29 +174,143 @@ test('monitor: LINE の通数が 160 に達したら、その月に 1 回だけ 
   const env = baseEnv();
   const pushed = [];
   const push = async (_t, _to, text) => pushed.push(text);
+  const pushCard = async (_t, _to, msgs) => { cards.push(msgs[0]); pushed.push(msgs[0].altText); };
+  const cards = [];
   const status = async (_env, now) => ({ ...autoOk, lastSeenAt: now - 60000 });
   let usage = 159;
   const quota = async (token) => { assert.equal(token, 't'); return usage; };
-  let r = await runMonitor(env, { now: T0, probe: up, status, quota, push });
+  let r = await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
   assert.deepEqual([r.quotaNotified, pushed.length], [null, 0]);
   usage = 160;
-  r = await runMonitor(env, { now: T0 + 3600000, probe: up, status, quota, push });
+  r = await runMonitor(env, { now: T0 + 3600000, probe: up, status, quota, push, pushCard });
   assert.deepEqual([r.quotaNotified, pushed.length], [160, 1]);
-  assert.match(pushed[0], /今月の LINE の通数が 160\/200 通/);
+  assert.match(pushed[0], /今月の通知はあと 40 通です\(160\/200 通\)/);
   assert.match(pushed[0], /つうちおふ/);
   assert.equal(JSON.parse(env.BOOKING_KV.store.get('monitor_state')).quotaWarnedMonth, '2026-09');
-  usage = 190;
-  r = await runMonitor(env, { now: T0 + 7200000, probe: up, status, quota, push });
+  usage = 189;
+  r = await runMonitor(env, { now: T0 + 7200000, probe: up, status, quota, push, pushCard });
   assert.deepEqual([r.quotaNotified, pushed.length], [null, 1], '同じ月は 1 回だけ');
   // 翌月(10/1 9:00 JST 以降)に改めて 160 を超えたら送る
   const oct = Date.parse('2026-10-05T03:00:00Z');
-  r = await runMonitor(env, { now: oct, probe: up, status, quota, push });
-  assert.deepEqual([r.quotaNotified, pushed.length], [190, 2]);
+  r = await runMonitor(env, { now: oct, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [189, 2]);
   // API の失敗は黙って次回へ(Pi が落ちていても通数は見る)
   const broken = async () => { throw new Error('HTTP 500'); };
   r = await runMonitor(env, { now: oct + 3600000, probe: down, status, quota: broken, push });
   assert.deepEqual([r.notified, r.quotaNotified, pushed.length], ['down', null, 3]);
   assert.equal(JSON.parse(env.BOOKING_KV.store.get('monitor_state')).quotaWarnedMonth, '2026-10', '控えは引き継ぐ');
+});
+
+test('monitor: LINE の通数が 190 に達したら、その月に 1 回だけ「今月の通知はここまで」。160 を飛び越えたら 1 通にまとめる', async () => {
+  const env = baseEnv();
+  const pushed = [];
+  const push = async (_t, _to, text) => { pushed.push(text); };
+  const cards = [];
+  const pushCard = async (_t, _to, msgs) => { cards.push(msgs[0]); pushed.push(msgs[0].altText); };
+  const status = async () => ({ reachable: false });
+  let usage = 160;
+  const quota = async () => usage;
+  let r = await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [160, 1]);
+  usage = 188;
+  r = await runMonitor(env, { now: T0 + 3600000, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [null, 1]);
+  usage = 192;
+  r = await runMonitor(env, { now: T0 + 7200000, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [192, 2]);
+  assert.match(pushed[1], /今月の通知はここまでです\(192\/200 通/);
+  assert.match(pushed[1], /「よやく」で確認できます/);
+  usage = 200;
+  r = await runMonitor(env, { now: T0 + 10800000, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [null, 2], '同じ月は 1 回だけ');
+  // 翌月: 160 を見ないまま 190 を超えていたら「終わり」の 1 通だけ(⚠️ と 2 通にしない)
+  const oct = T0 + 20 * 24 * 3600000;
+  usage = 194;
+  r = await runMonitor(env, { now: oct, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [194, 3]);
+  assert.match(pushed[2], /ここまでです/);
+  r = await runMonitor(env, { now: oct + 3600000, probe: up, status, quota, push, pushCard });
+  assert.equal(pushed.length, 3);
+  const st = JSON.parse(env.BOOKING_KV.store.get('monitor_state'));
+  assert.deepEqual([st.quotaWarnedMonth, st.quotaEndedMonth], ['2026-10', '2026-10']);
+});
+
+test('monitor: 上限は LINE の答えに合わせる(5,000 通なら 4,960 で ⚠️・4,990 で終わり)。上限なしのプランは見張らない', async () => {
+  const env = baseEnv();
+  const pushed = [];
+  const push = async (_t, _to, text) => { pushed.push(text); };
+  const cards = [];
+  const pushCard = async (_t, _to, msgs) => { cards.push(msgs[0]); pushed.push(msgs[0].altText); };
+  const status = async () => ({ reachable: false });
+  let q = { usage: 190, limit: 5000 };
+  const quota = async () => q;
+  let r = await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [null, 0], '200 通の境目では鳴らさない');
+  q = { usage: 4960, limit: 5000 };
+  r = await runMonitor(env, { now: T0 + 3600000, probe: up, status, quota, push, pushCard });
+  assert.equal(r.quotaNotified, 4960);
+  assert.match(pushed[0], /あと 40 通です\(4960\/5000 通\)/);
+  q = { usage: 4990, limit: 5000 };
+  r = await runMonitor(env, { now: T0 + 7200000, probe: up, status, quota, push, pushCard });
+  assert.match(pushed[1], /ここまでです\(4990\/5000 通/);
+  const env2 = baseEnv();
+  q = { usage: 99999, limit: Infinity };
+  r = await runMonitor(env2, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.quotaNotified, pushed.length], [null, 2]);
+});
+
+test('monitor: 通数の知らせはカードで送る。OFF にするボタンは「つうちおふ」を送り、もう止めていれば出さない。400 で弾かれたらテキストで', async () => {
+  const status = async () => ({ reachable: false });
+  const quota = async () => ({ usage: 160, limit: 200 });
+  const find = (o, pred, out = []) => { if (o && typeof o === 'object') { if (pred(o)) out.push(o); Object.values(o).forEach((v) => find(v, pred, out)); } return out; };
+  // ON のとき: ボタンあり。戻る日は翌月 1 日(T0 は 9/13 → 10/1(木) 9:00)
+  let env = baseEnv();
+  let cards = [];
+  const texts = [];
+  const push = async (_t, _to, text) => { texts.push(text); };
+  let pushCard = async (_t, _to, msgs) => { cards.push(msgs[0]); };
+  await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].type, 'flex');
+  assert.match(cards[0].altText, /10\/1\(木\) 9:00 まで/);
+  assert.deepEqual(find(cards[0], (o) => o.type === 'message').map((a) => a.text), ['つうちおふ']);
+  assert.ok(JSON.stringify(cards[0]).includes('あと 40 通で、10/1(木) まで通知が止まります'));
+  // もう OFF のとき: ボタンなし
+  env = baseEnv();
+  await env.BOOKING_KV.put('notify_switch', JSON.stringify({ enabled: false, at: T0 }));
+  cards = [];
+  await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.equal(find(cards[0], (o) => o.type === 'message').length, 0);
+  assert.match(cards[0].altText, /すでに止めています/);
+  // 400 → テキストで送り直す。429 → 持ち越し
+  env = baseEnv();
+  pushCard = async () => { const e = new Error('LINE push失敗: HTTP 400'); e.status = 400; throw e; };
+  let r = await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.sent, r.pending, texts.length], [1, 0, 1]);
+  assert.match(texts[0], /あと 40 通です/);
+  env = baseEnv();
+  pushCard = async () => { const e = new Error('LINE push失敗: HTTP 429'); e.status = 429; throw e; };
+  r = await runMonitor(env, { now: T0, probe: up, status, quota, push, pushCard });
+  assert.deepEqual([r.sent, r.pending, texts.length], [0, 1, 1]);
+});
+
+test('monitor: fetchLineQuotaLimit は value を返す(none は Infinity)。fetchLineQuota は上限が読めなければ 200 として続ける', async () => {
+  const orig = globalThis.fetch;
+  try {
+    let quotaRes = { ok: true, json: async () => ({ type: 'limited', value: 5000 }) };
+    globalThis.fetch = async (u) => (String(u).endsWith('/quota') ? quotaRes : { ok: true, json: async () => ({ totalUsage: 136 }) });
+    assert.equal(await fetchLineQuotaLimit('tok'), 5000);
+    assert.deepEqual(await fetchLineQuota('tok'), { usage: 136, limit: 5000 });
+    quotaRes = { ok: true, json: async () => ({ type: 'none' }) };
+    assert.equal(await fetchLineQuotaLimit('tok'), Infinity);
+    quotaRes = { ok: false, status: 500 };
+    await assert.rejects(fetchLineQuotaLimit('tok'), /HTTP 500/);
+    assert.deepEqual(await fetchLineQuota('tok'), { usage: 136, limit: 200 });
+    globalThis.fetch = async () => ({ ok: false, status: 401 });
+    await assert.rejects(fetchLineQuota('tok'), /HTTP 401/);
+  } finally {
+    globalThis.fetch = orig;
+  }
 });
 
 test('monitor: fetchLineQuotaUsage は totalUsage を返す。HTTP エラー・形式の不備は例外', async () => {

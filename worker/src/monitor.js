@@ -7,11 +7,11 @@
 //                 トンネルの数秒〜10 秒の切断や、コンテナの作り直し(20〜30 秒)で鳴らさないよう、20 秒おきに 4 回(約 1 分幅)試して
 //                 全部ダメなら失敗とする(2026-09-13 21:00 の初回は 10 秒幅でデプロイの瞬間に当たり誤報した)
 //             (3) 応答すれば、/auto/status で自動予約が働いているか(照会ループ・空き照会の連続失敗・ブラウザの起動。autoIssue())
-//             (4) LINE の今月の通数(無料枠 200 通に迫っていないか。fetchLineQuotaUsage())
+//             (4) LINE の今月の通数(今月の上限に迫っていないか。fetchLineQuota())
 //             (3)(4) は 2026-11-01 まで毎月 1 日の LINE のお知らせで本人に手で確認してもらっていたもの。異常のときだけ知らせる形に置き換えた
 //   知らせ方: 失敗したら LINE グループに 1 回だけ「止まっています」を push(1 時間間隔なので初回で知らせる)。
 //             復帰したら「復帰しました」を 1 回 push。連続失敗中に毎回鳴らさない
-//   状態:     KV の monitor_state に { fails, alerted, since, autoAlerted, quotaWarnedMonth, pending } を保存(Worker は毎回まっさらで起きるため)
+//   状態:     KV の monitor_state に { fails, alerted, since, autoAlerted, quotaWarnedMonth, quotaEndedMonth, pending } を保存(Worker は毎回まっさらで起きるため)
 //   順番:     **状態を保存してから送る**。逆(送ってから保存)にすると、
 //             (a) KV が書けないとき「知らせた」記録が残らず、毎時同じ警報を送り続ける
 //             (b) LINE が失敗すると例外で保存まで届かず、次の回も同じ判定をやり直し、停止時間が実態より長く出る
@@ -20,16 +20,25 @@
 //
 // 手元で試す: wrangler dev --test-scheduled → curl "http://localhost:8787/__scheduled?cron=0+*+*+*+*"
 // ============================================================
-import { pushText } from './line.js';
+import { pushText, pushMessages } from './line.js';
+import { buildQuotaWarnFlex, buildQuotaEndFlex, quotaWarnText, quotaEndText, quotaResumeLabel } from './quota-flex.js';
 import { autoStatus } from './auto.js';
 
 // LINE の通数の見張り(2026-11-01〜)。無料枠は月 200 通(グループ宛は 1 回で 2 通)。超えると月末まで push が全部 429 で止まり、
-// 空き通知も結果カードも黙って届かなくなる。今月の消費が QUOTA_WARN_AT に達したら、その月に 1 回だけ ⚠️ を送る(送った月を monitor_state に控える)。
+// 空き通知も結果カードも黙って届かなくなる。今月の消費が上限の QUOTA_WARN_MARGIN 通手前に達したら、その月に 1 回だけ ⚠️ を送る(送った月を monitor_state に控える)。
 // 2026-10-31 までは毎月 1 日に「先月の通数を LINE Official Account Manager で確認」という手作業の案内を送っていた(10 月の実績 136 通)。
 // 通数の API が読めないとき(障害・権限)は今回は見ない(次の毎時に見直す。鳴らさない)
+// 上限は LINE に聞く(fetchLineQuotaLimit。2026-11-16〜。プランを変えても手直しが要らないように)。読めないときだけ QUOTA_LIMIT を使う。
+// ⚠️ は上限の QUOTA_WARN_MARGIN 通手前(200 通なら 160)、「今月は終わり」は QUOTA_LAST_MARGIN 通手前(200 通なら 190)。
+// 上限なしのプラン(type: none)は見張らない
 export const QUOTA_LIMIT = 200;
-export const QUOTA_WARN_AT = 160;
+export const QUOTA_WARN_MARGIN = 40;
+export const QUOTA_LAST_MARGIN = 10;
+// 上限に達した後は「止まりました」を送る手段が無い(その push も 429 になる)。だから上限の少し手前で「今月の通知はここで終わり」を
+// その月に 1 回だけ送る(2026-11-16 本人の希望: その月は上限で通知が来なくなったと分かればよい)。見張りは毎時なので、
+// 1 時間のうちに数回 push されても間に合うよう 10 通(グループ宛 5 回分)手前にしている。この後に届くのは多くて 4 回
 const LINE_QUOTA_URL = 'https://api.line.me/v2/bot/message/quota/consumption';
+const LINE_QUOTA_LIMIT_URL = 'https://api.line.me/v2/bot/message/quota';
 
 // 今月の消費通数(LINE の月内の集計は UTC だが、1 日 9:00 JST の切り替わり以外は気にしなくてよい)
 export async function fetchLineQuotaUsage(accessToken) {
@@ -40,8 +49,31 @@ export async function fetchLineQuotaUsage(accessToken) {
   return j.totalUsage;
 }
 
+// 今月の上限({ type: 'limited', value: 200 }。上限なしのプランは { type: 'none' } → Infinity)
+export async function fetchLineQuotaLimit(accessToken) {
+  const res = await fetch(LINE_QUOTA_LIMIT_URL, { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = await res.json();
+  if (j.type === 'none') return Infinity;
+  if (typeof j.value !== 'number') throw new Error('value がありません');
+  return j.value;
+}
+
+// 消費と上限をまとめて読む。消費が読めなければ例外(今回は見ない)。上限だけ読めないときは QUOTA_LIMIT として続ける
+export async function fetchLineQuota(accessToken) {
+  const [usage, limit] = await Promise.all([
+    fetchLineQuotaUsage(accessToken),
+    fetchLineQuotaLimit(accessToken).catch((e) => {
+      console.log(`[monitor] LINE の通数の上限を読めませんでした(${QUOTA_LIMIT} 通として見ます): ${e.message}`);
+      return QUOTA_LIMIT;
+    }),
+  ]);
+  return { usage, limit };
+}
+
 const KV_URL_KEY = 'booking_url'; // booking.js と同じキー
 const KV_STATE_KEY = 'monitor_state';
+const KV_NOTIFY_SWITCH_KEY = 'notify_switch'; // auto.js の KV_NOTIFY_SWITCH と同じキー
 // 何回連続で失敗したら知らせるか(1 時間間隔なので初回。一時的な切断は probe 内の再試行で吸収する)
 export const ALERT_AFTER_FAILS = 1;
 const WARMUP_TIMEOUT_MS = 8000;
@@ -110,10 +142,10 @@ const humanDuration = (ms) => {
 
 // 確認して状態を更新し、必要なら LINE に知らせる。
 // 戻り値: { ok, fails, notified: 'down'|'up'|null, autoNotified: 'stalled'|'scrape_failing'|'browser_failing'|'resumed'|null, quotaNotified: number|null, sent, pending, saved }
-export async function runMonitor(env, { now = Date.now(), probe = probeBookingServer, status = autoStatus, quota = fetchLineQuotaUsage, push = pushText } = {}) {
+export async function runMonitor(env, { now = Date.now(), probe = probeBookingServer, status = autoStatus, quota = fetchLineQuota, push = pushText, pushCard = pushMessages } = {}) {
   const prev = JSON.parse((await env.BOOKING_KV.get(KV_STATE_KEY)) || '{"fails":0,"alerted":false,"since":null}');
   const { ok, reason } = await probe(env);
-  const carry = { autoAlerted: prev.autoAlerted || false, quotaWarnedMonth: prev.quotaWarnedMonth || null };
+  const carry = { autoAlerted: prev.autoAlerted || false, quotaWarnedMonth: prev.quotaWarnedMonth || null, quotaEndedMonth: prev.quotaEndedMonth || null };
   const next = ok ? { fails: 0, alerted: false, since: null, ...carry } : { fails: prev.fails + 1, alerted: prev.alerted, since: prev.since ?? now, ...carry };
   let notified = null;
   let autoNotified = null;
@@ -138,11 +170,26 @@ export async function runMonitor(env, { now = Date.now(), probe = probeBookingSe
   // LINE の通数の見張り(Pi が落ちていても見る)。その月に 1 回だけ
   const month = new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 7);
   try {
-    const usage = await quota(env.LINE_CHANNEL_ACCESS_TOKEN);
-    if (usage >= QUOTA_WARN_AT && prev.quotaWarnedMonth !== month) {
+    // quota() は { usage, limit }。数だけ返す実装(テスト)なら上限は QUOTA_LIMIT
+    const q = await quota(env.LINE_CHANNEL_ACCESS_TOKEN);
+    const { usage, limit } = typeof q === 'number' ? { usage: q, limit: QUOTA_LIMIT } : q;
+    if (usage >= limit - QUOTA_LAST_MARGIN && prev.quotaEndedMonth !== month) {
+      // 160 の ⚠️ をまだ送っていなくても、こちら 1 通で足りる(残りの通数を 2 つの知らせで使わない)
+      next.quotaEndedMonth = month;
       next.quotaWarnedMonth = month;
       quotaNotified = usage;
-      queue.push({ at: now, text: `⚠️ 今月の LINE の通数が ${usage}/${QUOTA_LIMIT} 通です(無料枠。グループ宛は 1 回で 2 通)\n${QUOTA_LIMIT} 通に達すると月末まで空き通知・結果カード・この監視が全部止まります。翌月 1 日 9:00 に戻ります。減らすなら LINE で「つうちおふ」(空き通知カードを止める。自動予約は続く)` });
+      const card = { usage, limit, resume: quotaResumeLabel(now) };
+      queue.push({ at: now, text: quotaEndText(card), flex: buildQuotaEndFlex(card) });
+    } else if (usage >= limit - QUOTA_WARN_MARGIN && prev.quotaWarnedMonth !== month) {
+      next.quotaWarnedMonth = month;
+      quotaNotified = usage;
+      // 空き通知カードをもう止めているなら、スイッチのボタンは出さない(KV notify_switch。無ければ ON)
+      let notifyOn = true;
+      try {
+        notifyOn = JSON.parse((await env.BOOKING_KV.get(KV_NOTIFY_SWITCH_KEY)) || 'null')?.enabled !== false;
+      } catch {}
+      const card = { usage, limit, resume: quotaResumeLabel(now), notifyOn };
+      queue.push({ at: now, text: quotaWarnText(card), flex: buildQuotaWarnFlex(card) });
     }
   } catch (e) {
     console.log(`[monitor] LINE の通数を読めませんでした(今回は見ない): ${e.message}`);
@@ -180,7 +227,18 @@ export async function runMonitor(env, { now = Date.now(), probe = probeBookingSe
     }
     const late = now - m.at > DELAYED_NOTE_MS ? `\n(${jst(m.at)} 時点のお知らせです。送信できなかったため遅れて届いています)` : '';
     try {
-      await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, `${m.text}${late}`);
+      // カードがある知らせ(通数)はカードで。遅れて届くぶんと、形式の不備(400)で弾かれたときはテキストで
+      let asCard = false;
+      if (m.flex && !late) {
+        try {
+          await pushCard(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, [m.flex]);
+          asCard = true;
+        } catch (e) {
+          if (e.status !== 400) throw e;
+          console.log(`[monitor] カードが弾かれたのでテキストで送ります: ${e.message}`);
+        }
+      }
+      if (!asCard) await push(env.LINE_CHANNEL_ACCESS_TOKEN, env.LINE_GROUP_ID, `${m.text}${late}`);
       sent++;
     } catch (e) {
       failure = e.message;

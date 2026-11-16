@@ -78,11 +78,12 @@ export function autoSwitchView(status) {
   }
   return { on: true, detail: `Pi からの合図なし${status.lastSeenAt ? `(最後は ${jstHHMM(status.lastSeenAt)})` : ''}。空きは通知カードで届きます`, color: COLOR_NG };
 }
+// 何が止まるのかが伝わるよう、止まるカードを実際の題(「🎾 新しい空き」)で名指しする(2026-11-16 本人の希望)
 export function notifySwitchView(status) {
   const on = status.notifyEnabled !== false;
   return on
-    ? { on, detail: '新しい空きをカードで知らせます', color: COLOR_OK }
-    : { on, detail: '止めています(自動予約・結果カード・予告・「よやく」は動きます)', color: COLOR_NG };
+    ? { on, detail: '「🎾 新しい空き」のカードを送ります。OFF にすると止まります', color: COLOR_OK }
+    : { on, detail: '「🎾 新しい空き」のカードを止めています(自動予約・結果カード・予告・「よやく」は動きます)', color: COLOR_NG };
 }
 
 // 角丸の小さいボタン(「解除」「OFF にする」など)。filled は濃紺の塗り(スイッチ用。薄い「解除」と区別がつくように)
