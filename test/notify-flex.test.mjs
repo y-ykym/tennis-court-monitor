@@ -36,3 +36,12 @@ test('空き通知カード(2026-11-10): 日ごとに日付タイル 1 つ。「
   assert.deepEqual(find(b.body, (n) => n.type === 'text' && /面$/.test(n.text || '')).map((n) => [n.text, n.size]), [['残1面', 'xs'], ['2面', 'xs'], ['残1面', 'xs']]);
   assert.equal(find(b.body, (n) => n.size === 'xxs').length, 0, '11px の文字は使わない');
 });
+
+test('isQuotaExceeded: 今月の通数切れ(429 + monthly limit)だけ true。一時的な送りすぎや他のエラーは false', async () => {
+  const { createRequire } = await import('node:module');
+  const { isQuotaExceeded } = createRequire(import.meta.url)('../lib/notify.js');
+  assert.equal(isQuotaExceeded(429, '{"message":"You have reached your monthly limit."}'), true);
+  assert.equal(isQuotaExceeded(429, '{"message":"The API rate limit has been exceeded. Try again later."}'), false);
+  assert.equal(isQuotaExceeded(400, '{"message":"You have reached your monthly limit."}'), false);
+  assert.equal(isQuotaExceeded(500, ''), false);
+});

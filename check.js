@@ -81,8 +81,14 @@ const DRY_RUN = process.argv.includes('--dry-run');
     } else {
       // 予約支援サーバー(フェーズ2)を通知と同時に起こしておく(コールドスタート対策。失敗しても通知は送る)
       const [sent] = await Promise.allSettled([sendLineMessage(toNotify), warmupBookingServer()]);
-      if (sent.status === 'rejected') throw sent.reason;
-      console.log(`LINE通知を送信しました (${toNotify.length}件)`);
+      if (sent.status === 'rejected') {
+        // 今月の LINE の通数を使い切っているときは、月が替わるまで何度やっても送れない。失敗にせず結果を保存して終える
+        // (失敗にすると 3 分おきに同じ空きを送ろうとして、月末まで失敗の記録が並ぶ。自動予約は Pi が別に動いている)
+        if (!sent.reason?.quotaExceeded) throw sent.reason;
+        console.log(`LINE の今月の通数を使い切っているため通知できませんでした (${toNotify.length}件)。結果は保存して続けます。`);
+      } else {
+        console.log(`LINE通知を送信しました (${toNotify.length}件)`);
+      }
     }
   } else {
     console.log(newSlots.length > 0 ? '新しい空きはすべて自動予約の対象(または除外枠・予定と重なる枠)のため通知しません。' : '新しい空きはありません。');
