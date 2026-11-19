@@ -8,7 +8,8 @@
 // reCAPTCHA の載った画面(確認画面)は開かないので、判定に材料を与えない。枠の選択はセッションの中だけの状態で、仮押さえにならない
 // (docs/site-notes.md)。ログアウトで消える。
 //
-//   Pi で: docker compose exec -T booking node scripts/http-first-measure.mjs [--person A] [--park 1040] [--date YYYY-MM-DD] [--start 9]
+//   Pi で(booking/pc から。scripts はイメージに入れていない(.dockerignore)ので、動いているコンテナに置いてから実行する):
+//     docker compose cp ../scripts booking:/app/booking/ && docker compose exec -T booking node scripts/http-first-measure.mjs [--person A] [--park 1040] [--date YYYY-MM-DD] [--start 9]
 //     既定: 予約者 A・猿江(1040)・今日から 14 日後・9 時。枠が空いていなくても選択までは進む(サーバーは「予約」送信まで空きを検証しない)
 //
 // 本番のブラウザ・プロファイルには触らない(playwright を読み込まない)。ログインを 1 回するので、続けて何度も回さない。

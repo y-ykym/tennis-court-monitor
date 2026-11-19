@@ -24,8 +24,6 @@ COPY booking/package.json booking/package-lock.json ./
 RUN npm ci
 COPY booking/src ./src
 COPY booking/server ./server
-# 手元で動かす確認用のスクリプト(予約を押さない計測 http-first-measure.mjs など。サーバーは使わない)
-COPY booking/scripts ./scripts
 # noVNC クライアントをブラウザ用に束ねてから、開発用パッケージを落とす
 RUN npm run build:novnc && npm prune --omit=dev
 # Google Chrome 安定版(素の Chromium より reCAPTCHA に疑われにくい)。Linux 版は amd64 のみなので、それ以外(手元の arm64)では入れない
