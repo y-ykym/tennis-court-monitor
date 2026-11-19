@@ -34,3 +34,15 @@ test('通常の確認画面にある空の errorMsg(&quot;&quot;, 0) は空文�
   const html = '<body onload="javascript:msgHide();javascript:errorMsg(&quot;&quot;, 0);startInitTimer();"><div onclick="showConfirm(&quot;x&quot;, 0)"></div>';
   assert.equal(siteErrorMessage(html), '');
 });
+
+// 記録・ログに個人情報を残さない(2026-11-19)
+import { redactPersonal } from '../src/reserve.js';
+test('redactPersonal: 利用者カードのモーダルの利用者番号・氏名と、利用者番号そのものを伏せる。ほかの文言は変えない', () => {
+  const body = '完了画面に到達しませんでした (prwea1000.jsp): ご利用環境 × 対応ブラウザ 閉じる 利用者カード× 利用者番号：12345678 利用者氏名：山田太郎 様 閉じる 抽選申込み';
+  const out = redactPersonal(body, { userId: '12345678' });
+  assert.ok(!out.includes('12345678') && !out.includes('山田'), out);
+  assert.ok(out.includes('利用者番号：(伏せ)') && out.includes('利用者氏名：(伏せ)') && out.includes('抽選申込み'));
+  assert.equal(redactPersonal('ログイン失敗 12345678 を確認', { userId: '12345678' }), 'ログイン失敗 (伏せ) を確認');
+  assert.equal(redactPersonal('先に予約された可能性があります: エラーが発生しました。(施設予約に失敗しました。)', { userId: '12345678' }), '先に予約された可能性があります: エラーが発生しました。(施設予約に失敗しました。)');
+  assert.equal(redactPersonal(null), '');
+});

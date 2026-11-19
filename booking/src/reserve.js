@@ -292,7 +292,8 @@ export async function reserve(slot, credentials, options = {}) {
   let reservationsBefore = null;
   // 診断(結果に diag として付ける。server.mjs が経路・先起こしの有無を足し、auto-runner が記録に残す)
   const diag = {};
-  const done = (status, message, extra = {}) => ({ status, message, elapsedMs: Date.now() - started, diag: { ...diag }, ...(reservationsBefore ? { reservationsBefore } : {}), ...extra });
+  // message は記録(auto-events.jsonl)・ログ・LINE の結果カードに出るので、利用者番号・氏名を必ず伏せる(redactPersonal)
+  const done = (status, message, extra = {}) => ({ status, message: redactPersonal(message, credentials), elapsedMs: Date.now() - started, diag: { ...diag }, ...(reservationsBefore ? { reservationsBefore } : {}), ...extra });
   // 予約一覧 HTML を解析して控え、beforeApply に見せる。中止の指示があれば ReserveError で抜ける(予約は送らない)
   // 本物の一覧画面でなければ(障害時のお知らせページ・セッション切れのホーム等)件数も手放し判定も信用できないので、ここで中止する
   // (2026-10-08 08:03 に「0 件」を信じて自動予約した 4 枠を除外枠に誤登録した)
@@ -668,7 +669,9 @@ export async function reserve(slot, credentials, options = {}) {
       }
       // 理由は alert > 画面の onload に埋め込まれた errorMsg/showAlert > 本文先頭 の順で採る(本文先頭は非表示モーダルの文言で当てにならない)
       const embedded = siteErrorMessage(resultHtml);
-      const reason = lastAlert() || embedded || bodyText.slice(0, 200);
+      // どちらも無ければ理由は「表示なし」とする。以前は本文の先頭 200 字を入れていたが、ログイン後の本文には利用者カードのモーダル
+      // (利用者番号・氏名)が含まれ、それが記録とログに残っていた(2026-11-05 23:51 の記録で 2026-11-19 に発覚)。画面そのものは debug-out にある
+      const reason = lastAlert() || embedded || '理由の表示なし(画面は debug-out に保存)';
       if (/reCAPTCHA|ロボット|不正なアクセス/i.test(reason)) return done('rejected', `サイトの認証(reCAPTCHA)で申込みが拒否されました: ${reason}`);
       if (/同じ利用日時|複数の予約|既に予約|2件まで/.test(reason)) return done('duplicate', `サイトが申込みを断りました: ${reason}`);
       // 「施設予約に失敗しました」= 確認画面を出してから「予約」を押すまでの間に他の人の予約が成立した(一覧に無いことは上で確認済み)
@@ -711,6 +714,16 @@ export async function reserve(slot, credentials, options = {}) {
 }
 
 // 通知・ログ用の枠表記("亀戸中央公園 9/17(木) 15-17時" 相当は呼び出し側で公園名を足す)
+// 記録・ログ・LINE に出る文言から個人情報を伏せる(2026-11-19)。サイトの画面には利用者カードのモーダル「利用者番号：12345678 利用者氏名：○○ 様」が
+// 埋め込まれていて、画面の本文を理由として拾うとそのまま残る。利用者番号そのもの(credentials.userId)が混じっていればそれも伏せる
+export function redactPersonal(text, credentials = null) {
+  let out = String(text ?? '');
+  out = out.replace(/利用者番号\s*[：:]\s*\d+/g, '利用者番号：(伏せ)').replace(/利用者氏名\s*[：:]\s*.{0,30}?\s*様/g, '利用者氏名：(伏せ)');
+  const id = String(credentials?.userId || '');
+  if (id.length >= 4) out = out.split(id).join('(伏せ)');
+  return out;
+}
+
 // 画面に埋め込まれたサイト側のエラー文言を読む。
 // サイトは失敗時に同じ画面を再表示し、<body onload="…errorMsg(&quot;文言&quot;, 0)…"> または showAlert(…) で文言を出す
 // (モーダル表示なので page.on('dialog') では拾えない)。本文(innerText)の先頭は全ページ共通の非表示モーダル
