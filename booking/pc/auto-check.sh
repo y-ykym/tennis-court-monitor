@@ -57,6 +57,8 @@ print(f"  最後の照会: {jst(last_at)}({age_min} 分前、所要 {int(last_ms
 print(f"  いま空いている監視対象: {len(s.get('targets') or [])} 件  除外一覧: 除外日 {ex.get('dates',0)}・除外枠 {ex.get('slots',0)}・追加枠 {ex.get('allowSlots',0)}(更新 {jst(ex.get('at') or 0)})  予約の行列: 実行中={q.get('running') or 'なし'} 待ち={len(q.get('waiting') or [])}")
 sl = s.get('siteList')
 print('  手元の予約一覧: ' + (f"{'・'.join(f'{k} {v} 件' for k, v in sorted((sl.get('counts') or {}).items())) or '予約なし'}(取得 {jst(sl.get('at') or 0)}。1 時間ごとに取り直し)" if sl else 'まだ無い(起動直後か、取り直しに失敗。ログの「手元の予約一覧」を確認)'))
+ck = (sl or {}).get('check') or {}
+if ck.get('checks'): print(f"    サイトとの照らし合わせ(起動してから): {ck['checks']} 回中、食い違い {ck.get('mismatches', 0)} 回" + (f"(最後 {jst(ck['lastMismatchAt'])}。ログの「食い違って」を確認)" if ck.get('lastMismatchAt') else ''))
 nh = s.get('nightHold')
 if nh and nh.get('held'): print(f"  夜間に溜めている成立カード: {nh['held']} 件(8:00 にまとめて送る。次の送信 {jst(nh.get('nextFlushAt') or 0)})")
 w = s.get('warm')

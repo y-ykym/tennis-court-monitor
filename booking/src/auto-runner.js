@@ -88,7 +88,9 @@ export const DAY_REMAINING_TTL_MS = 60 * 60 * 1000;
 // (11/17 16:46 は、既に予約のある 11/22 の大島をログインして見送るのに 22 秒 + ブラウザの起こし直し 30 秒かかり、
 //  同時に出た 11/27 の猿江が待たされて先を越された。上の DAY_REMAINING は「その日の予約に挑戦した後の 60 分」しか覚えていない)。
 // 手元の一覧が「0 件」のときは従来どおりログインして予約直前の一覧(beforeApply)で数えるので、古い一覧のせいで二重に取ることはない。
-// 逆に、サイトで直接取り消した日は次の取り直しまで「予約あり」のままになる(最大で SITE_LIST_MAX_AGE_MS)
+// 逆に、サイトで直接取り消した日は次の取り直しまで「予約あり」のままになる(最大で SITE_LIST_MAX_AGE_MS)。
+// LINE での取消・LINE のボタンでの手動予約は、その場で手元の一覧に反映する(applyCancels / noteBooked。同日追加)。
+// 本人は「予約サイトで直接は操作しない」前提で運用する(2026-11-19 本人明言)
 export const SITE_LIST_REFRESH_MS = 60 * 60 * 1000;
 // 取り直しに失敗したときは、これだけ空けてもう一度
 export const SITE_LIST_RETRY_MS = 10 * 60 * 1000;
@@ -154,6 +156,9 @@ export function createAutoRunner({
   now = Date.now,
   pollMs = AUTO_BOOKING.POLL_INTERVAL_MS,
   forgetFile = null,
+  // 手元の予約一覧(下の siteList)が使えるとき、予約の前にサイトで予約一覧を見るのを省く(昼間で 1 通信 4.5 秒。2026-11-19 本人決定)。
+  // 代わりに成立の後で一覧を見て、同じ日に 2 件入っていたらカードで知らせる。false で従来どおり予約の前に見る(server は AUTO_SKIP_LIST=0)
+  skipListCheck = true,
   eventLog = null, // auto-events.js の { append(obj) }。枠の出現・消滅・試行の記録(照会間隔の調整用)。無ければ記録しない
 }) {
   const interval = Math.max(Number(pollMs) || AUTO_BOOKING.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
@@ -200,6 +205,61 @@ export function createAutoRunner({
     const l = usableSiteList();
     return l ? (l.byPerson[person] || []).filter((r) => r.date === date).length : null;
   };
+  // LINE での取消(Worker が除外枠に reason: 'cancel' で載せる)と、手放しの検出('released')を手元の一覧に反映する(2026-11-19)。
+  // 除外枠は「その 公園・日・開始時刻 の予約が at の時点で無くなった」印なので、それより前から手元にある同じ枠の予約を外す。
+  // (取り直しが取消の前に始まっていて、取消の後に「まだある」一覧を返すことがある → 一覧の時刻 < 取消の時刻 なので外れる。
+  //  取消の後に同じ枠を取り直した予約は、手元に入った時刻の方が新しいので残る)
+  // 「その日は上限」の記憶(ログイン直後の一覧から。60 分)も、その日の分は忘れる(取消した日の別の枠をすぐ取りに行けるように)
+  function applyCancels() {
+    if (!siteList || !exclusions) return;
+    for (const x of exclusions.slots || []) {
+      if (!x?.date || !x.start || x.at == null) continue;
+      for (const [person, list] of Object.entries(siteList.byPerson)) {
+        const keep = list.filter((r) => !(r.date === x.date && r.start === x.start && String(r.park ?? '') === String(x.park ?? '') && x.at > (r.addedAt ?? siteList.at)));
+        if (keep.length === list.length) continue;
+        siteList.byPerson[person] = keep;
+        const mem = dayRemaining.get(x.date);
+        if (mem && mem.at < x.at) dayRemaining.delete(x.date);
+        log(`手元の予約一覧から外しました(取消または手放し): ${person} ${x.date} ${x.start} ${x.facility || x.park}`);
+      }
+    }
+  }
+  // 取り直しのたびに、それまで手元に持っていた一覧(before)と、いまサイトから取った一覧を比べる(2026-11-19)。
+  // LINE 経由の予約・取消をその場で反映できていれば一致するはず。食い違いは「サイトで直接操作した」か「反映もれ」で、
+  // ログと記録(site_list_diff)に残す。予約直前の一覧の確認を省いてよいかの判断材料(食い違いが出ないことを数日見る)。
+  // 比べないもの: 取り直しを始めた後に手元へ足した予約(サイトの一覧が成立前のことがある)・昨日までの予約(日付が変われば一覧から消える)
+  const siteListCheck = { checks: 0, mismatches: 0, lastMismatchAt: null, lastMismatch: null };
+  function compareSiteList(before, startedAt) {
+    if (!before || !siteList) return;
+    const today = jstTodayIso(now());
+    const keyOf = (person, r) => `${person} ${r.date} ${r.start} ${parkOf(r.park)?.name || r.park || '別の場所'}`;
+    const keysOf = (l, skip) => {
+      const out = new Set();
+      for (const [person, list] of Object.entries(l.byPerson)) for (const r of list) if (r.date >= today && !skip(r)) out.add(keyOf(person, r));
+      return out;
+    };
+    const addedLater = (r) => r.addedAt != null && r.addedAt >= startedAt;
+    const had = keysOf(before, addedLater);
+    const has = keysOf(siteList, addedLater);
+    const onlySite = [...has].filter((k) => !had.has(k)); // サイトにあって手元に無かった(サイトで直接取った・予約の反映もれ)
+    const onlyLocal = [...had].filter((k) => !has.has(k)); // 手元にだけあった(サイトで直接取り消した・取消の反映もれ)
+    siteListCheck.checks++;
+    if (!onlySite.length && !onlyLocal.length) return;
+    siteListCheck.mismatches++;
+    siteListCheck.lastMismatchAt = now();
+    siteListCheck.lastMismatch = { onlySite, onlyLocal };
+    log(`手元の予約一覧がサイトと食い違っていました(サイトの内容に合わせました)${onlySite.length ? `。手元に無かった予約: ${onlySite.join(' / ')}` : ''}${onlyLocal.length ? `。手元にだけあった予約: ${onlyLocal.join(' / ')}` : ''}`);
+    event('site_list_diff', { onlySite, onlyLocal });
+  }
+  // LINE のボタンでの手動予約が成立したとき、server.mjs が呼ぶ(2026-11-19)。次の取り直しを待たずに手元の一覧へ足す
+  function noteBooked(person, { date, start, park }) {
+    if (!siteList || !person || !date || !start) return false;
+    const list = (siteList.byPerson[person] ||= []);
+    if (list.some((r) => r.date === date && r.start === start && String(r.park ?? '') === String(park ?? ''))) return false;
+    list.push({ date, start, end: startHHMM(Number(start.slice(0, 2)) + 2), park: park ?? null, facility: parkOf(park)?.name || '', addedAt: now() });
+    log(`手元の予約一覧に足しました(手動予約の成立): ${person} ${date} ${start} ${parkOf(park)?.name || park}`);
+    return true;
+  }
   // 取り直し。照会ループが待たずに呼ぶ(失敗しても予約は従来どおり動く)。戻り値は取れたかどうか
   function refreshSiteList() {
     if (typeof worker.plans !== 'function') return Promise.resolve(false);
@@ -216,7 +276,7 @@ export function createAutoRunner({
         const byPerson = {};
         for (const p of res.plans) {
           if (p?.source !== 'site' || !p.person || !p.date) continue;
-          (byPerson[p.person] ||= []).push({ date: p.date, start: p.start || '', park: p.park ?? null });
+          (byPerson[p.person] ||= []).push({ date: p.date, start: p.start || '', end: p.end || '', park: p.park ?? null, facility: p.facility || '' });
         }
         // 取りに行っている間に成立した自動予約は、Worker の一覧に入っていないことがあるので残す
         for (const [person, list] of Object.entries(siteList?.byPerson || {})) {
@@ -225,7 +285,10 @@ export function createAutoRunner({
             if (!(byPerson[person] || []).some((x) => x.date === r.date && x.start === r.start)) (byPerson[person] ||= []).push(r);
           }
         }
+        const before = usableSiteList();
         siteList = { at: startedAt, byPerson };
+        applyCancels(); // 取りに行っている間に LINE で取り消された分
+        compareSiteList(before, startedAt);
         log(`手元の予約一覧を更新: ${Object.keys(byPerson).sort().map((k) => `${k} ${byPerson[k].length} 件`).join('・') || '予約なし'}(次は ${Math.round(SITE_LIST_REFRESH_MS / 60000)} 分後。既に予約のある日はログインせずに見送る)`);
         return true;
       } catch (e) {
@@ -276,6 +339,7 @@ export function createAutoRunner({
         for (const k of allowSlots.map(slotKey)) if (!before.has(k)) freshAllowKeys.add(k);
         exclusions = { dates: res.dates, slots: res.slots, allowSlots, at: now() };
         if (changed) log(`除外一覧を更新: 除外日 ${res.dates.length} 件、除外枠 ${res.slots.length} 件、追加枠 ${allowSlots.length} 件`);
+        applyCancels(); // LINE での取消は除外枠として届く。手元の予約一覧からも外す
       }
       return true;
     } catch (e) {
@@ -550,6 +614,20 @@ export function createAutoRunner({
       state.save();
       return { status: 'conflict', message: tbConflict.reason };
     }
+    // 手元の予約一覧が使えるなら、予約の前にサイトで一覧を見るのを省く(skipList)。重なり・隣の時間帯の別の公園の判定も手元の一覧で先に行う
+    // (上限 1 件のうちは上の件数の判定が先に当たる。追加枠は時間が重なる予約だけ見る)。成立の後に一覧を見て答え合わせをする(下の reservationsAfter)
+    const local = skipListCheck ? usableSiteList() : null;
+    const skipList = !!local;
+    if (skipList) {
+      const mine = (local.byPerson[c.person] || []).filter((r) => r.date === c.date);
+      const conflict = findPlaceConflict(c, mine, { overlapOnly: allowed });
+      if (conflict) {
+        log(`見送り: ${describe(c)} (${conflict.reason}。手元の予約一覧(${Math.round((now() - local.at) / 60000)} 分前)で判定。ログインせず)`);
+        attempt(c, 'conflict', conflict.reason);
+        state.save();
+        return { status: 'conflict', message: conflict.reason };
+      }
+    }
     state.markAttempt(key, 'running');
     state.save();
     let listCount = null;
@@ -566,12 +644,12 @@ export function createAutoRunner({
       if (conflict) return { status: 'conflict', message: conflict.reason };
       return null;
     };
-    log(`自動予約 開始: ${describe(c)} 予約者=${creds.label}(${c.person})`);
+    log(`自動予約 開始: ${describe(c)} 予約者=${creds.label}(${c.person})${skipList ? ` [予約前の一覧は省く。手元の一覧 ${Math.round((now() - local.at) / 60000)} 分前]` : ''}`);
     // stillVacant: 直近の照会にこの枠がまだあるか(server.mjs が、やり直しの前に見る。消えていればやり直さず taken。2026-11-01)
     const stillVacant = () => lastTargets.some((s) => slotKey(s) === key);
     const bookOnce = async () => {
       try {
-        return await book(c, { credentials: creds, beforeApply, stillVacant });
+        return await book(c, { credentials: creds, beforeApply, stillVacant, skipList });
       } catch (e) {
         return { status: 'error', message: e.message };
       }
@@ -591,6 +669,25 @@ export function createAutoRunner({
       result.diag = { ...(result.diag || {}), retryNow: n, firstError: first.message, firstMs: first.elapsedMs, firstDiag: first.diag };
     }
     const ok = result.status === 'success';
+    if (skipList) result.diag = { ...(result.diag || {}), listSkipped: true };
+    // 予約の前の一覧を省いた回の答え合わせ: 成立の後に取った一覧(サイトの本物)でその日の件数を数え直し、手元の一覧もその人の分を入れ替える。
+    // 同じ日に上限を超えて入っていたら(手元の一覧が知らなかった予約があった)、成立カードとログで知らせる
+    let doubled = null;
+    if (ok && skipList && Array.isArray(result.reservationsAfter)) {
+      const after = result.reservationsAfter;
+      const sameDay = after.filter((r) => r.date === c.date);
+      listCount = Math.max(sameDay.length - 1, 0); // 今回の 1 件を除いた、予約の前の件数に当たる数
+      if (!allowed && sameDay.length > AUTO_BOOKING.MAX_PER_DAY) {
+        const others = sameDay.filter((r) => !(r.start === startHHMM(c.startHour) && parkOf(r.facility)?.code === c.park));
+        doubled = others.length ? others : sameDay;
+        log(`⚠ 二重予約: ${c.date} に ${sameDay.length} 件の予約があります(手元の予約一覧に無かった予約: ${doubled.map((r) => `${r.start} ${r.facility}`).join(' / ')})。どちらかを取り消してください`);
+        event('double_booked', { key, person: c.person, date: c.date, others: doubled.map((r) => ({ start: r.start, facility: r.facility, id: r.id })) });
+      }
+      if (siteList) siteList.byPerson[c.person] = after.filter((r) => r.date && r.start).map((r) => ({ date: r.date, start: r.start, end: r.end || '', park: parkOf(r.facility)?.code ?? null, facility: r.facility || '', addedAt: now() }));
+      await detectReleased(c.person, after, today);
+    } else if (ok && skipList) {
+      log('  予約後の一覧が取れなかったため、答え合わせは次の取り直し(1 時間ごと)に任せます');
+    }
     if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() }); // 追加枠の成立で負になることがある(その日の普段の枠は capped)
     if (result.status === 'auth_error') {
       const first = !authFailedAt.has(c.person) || now() - authFailedAt.get(c.person) >= AUTH_PAUSE_MS;
@@ -612,8 +709,10 @@ export function createAutoRunner({
       const start = startHHMM(c.startHour);
       const end = startHHMM(Number(c.startHour) + 2);
       state.addOwn({ key, person: c.person, id: result.reservationNo || '', date: c.date, start, end, park: c.park, facility: park?.name || c.facility });
-      // 手元の予約一覧にもその場で足す(次の取り直しを待たずに、同じ日の枠をログインせずに見送れる)
-      if (siteList) (siteList.byPerson[c.person] ||= []).push({ date: c.date, start, park: c.park, addedAt: now() });
+      // 手元の予約一覧にもその場で足す(次の取り直しを待たずに、同じ日の枠をログインせずに見送れる)。予約後の一覧で入れ替え済みなら重ねない
+      if (siteList && !(siteList.byPerson[c.person] || []).some((r) => r.date === c.date && r.start === start && String(r.park ?? '') === String(c.park))) {
+        (siteList.byPerson[c.person] ||= []).push({ date: c.date, start, end, park: c.park, facility: park?.name || '', addedAt: now() });
+      }
       await dropAllowedSlotsAt(c.date);
       // フェーズ11: その人の Google カレンダーの同期を Worker に頼む(待たない。配線が無ければ何もしない)
       if (typeof worker.calendarSync === 'function') {
@@ -643,7 +742,8 @@ export function createAutoRunner({
       }
       // ペナルティ期間の枠(「せってい」の追加枠)の成功カードには、取消にペナルティが付く旨を添える(2026-10-15。10-25 に枠単位へ)
       const penalty = isPenaltyPeriod(c.date, today);
-      await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData, penalty }), '自動予約の成立カード');
+      const doubleBooked = doubled ? doubled.map((r) => `${r.start} ${r.facility}`).join('・') : null;
+      await notify(buildResultFlex({ slot: bookingSlot(c), ...result }, creds.label, { auto: true, cancelData, penalty, doubleBooked }), '自動予約の成立カード');
     } else if (!SILENT_STATUSES.has(result.status)) {
       await notify(buildResultFlex({ slot: bookingSlot(c), ...result, facility: result.facility || parkOf(c.park)?.name || c.facility }, creds.label, { auto: true }), '自動予約の結果カード');
     } else if (result.status === 'taken' || result.status === 'duplicate' || result.status === 'error') {
@@ -744,7 +844,7 @@ export function createAutoRunner({
     tick, start, stop, mode, active, intervalMs: interval,
     effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
     exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining, tbPlans,
-    refreshSiteList, siteList: () => siteList,
+    refreshSiteList, siteList: () => siteList, noteBooked, siteListCheck: () => ({ ...siteListCheck }),
     consecutiveFailures: () => consecutiveFailures,
     backoffMs: (normalMs) => backoffIntervalMs(consecutiveFailures, normalMs, backoffOpts()),
   };

@@ -27,6 +27,7 @@
 //   BROWSER_WARM=0          ブラウザを先に起こしてトップページを開いておく(src/browser-warmer.js。既定 on)のをやめる
 //   LOG_DIR                 サーバーのログを日付ごとに残す場所(例 /var/lib/booking/logs。無ければ docker logs だけ)
 //   NIGHT_HOLD=0            夜間(0:00〜8:00)の自動予約の成立カードを 8:00 にまとめて送る(src/morning-digest.js。既定 on)のをやめる
+//   AUTO_SKIP_LIST          '0' で、自動予約が予約の前に必ずサイトの予約一覧を見る従来の動きに戻す(既定は、手元の予約一覧が使えれば省いて成立後に見る)
 //   DEBUG_DIR               失敗時のスクリーンショットと HTML の置き場(既定 /tmp/debug-out。volume に置くと作り直しても残る。7 日で削除)
 //   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード。カンマ区切りで複数可(例 1160,1050,1040。2026-11-01 から)。
 //                           既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う
@@ -320,6 +321,8 @@ async function runReserve(s, extra = {}) {
   // フェーズ11: 成立したら Worker にその人の Google カレンダーの同期を頼む(結果は待たない。自動予約は auto-runner が同じものを呼ぶ)
   if (s.kind === 'manual' && result.status === 'success') {
     requestCalendarSync(payload.person, 'booked');
+    // 手元の予約一覧(自動予約が「その日は予約済みか」を見るのに使う)にもその場で足す(2026-11-19)
+    autoRunner?.noteBooked(payload.person === 'B' ? 'B' : 'A', { date: payload.date, start: `${String(Number(payload.startHour)).padStart(2, '0')}:00`, park: payload.park });
     // 手で取れた日の「追加枠」も全部消す(同じ日は 1 件取れたら残りは取らない。2026-11-03。自動予約は auto-runner が同じことをする)
     if (WORKER_URL && SECRET) {
       dropAllowedSlots(WORKER_URL, SECRET, [{ date: payload.date }]).catch((e) => log(`追加枠の削除を Worker に頼めませんでした: ${e.message}`));
@@ -382,7 +385,9 @@ if (AUTO_MODE !== 'off') {
         return c.userId && c.password ? c : null;
       },
       // 候補 1 件の予約実行(行列の中で呼ばれる)。手動と同じセッション扱いにして、reCAPTCHA v2 の /vnc も同じ仕組みで動くようにする
-      book: async (c, { beforeApply, stillVacant }) => {
+      // 手元の予約一覧が使えるとき、予約の前の一覧(昼間 4.5 秒)を省き、成立の後に見る(AUTO_SKIP_LIST=0 で従来どおり予約の前に見る。2026-11-19)
+      skipListCheck: process.env.AUTO_SKIP_LIST !== '0',
+      book: async (c, { beforeApply, stillVacant, skipList }) => {
         // 空き照会の面数(c.count)を vacant として渡し、高速経路の週データの再確認(5〜10 秒)を飛ばす(2026-11-01)。
         // 2026-10-25 は渡さなかった: サーバーは枠選択 Ajax でも確認画面でも空きを検証せず(送った akiNum が 1 以上なら空きでないセルでも
         // 選べて確認画面に到達)、空きの検証は最後の「予約」送信だけで、先に取られていた回に「予約」を押したときの応答が未確認だったため。
@@ -392,7 +397,7 @@ if (AUTO_MODE !== 'off') {
         const payload = { park: c.park, date: c.date, startHour: Number(c.startHour), people: AUTO_BOOKING.PEOPLE, person: c.person, auto: 1, exp: slotExpiry(c.date, c.startHour), vacant: Number(c.count) >= 1 ? Number(c.count) : null };
         const token = sign(payload, SECRET);
         const s = newSession(token, payload, 'auto');
-        return runReserve(s, { reservationList: true, beforeApply, stillVacant });
+        return runReserve(s, { reservationList: !skipList, listAfter: !!skipList, beforeApply, stillVacant });
       },
       notify: async (message, what) => {
         if (!LINE.token || !LINE.to) return false;
@@ -555,9 +560,9 @@ const server = http.createServer((req, res) => {
         exclusions: autoRunner?.exclusions()
           ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, allowSlots: (autoRunner.exclusions().allowSlots || []).length, at: autoRunner.exclusions().at }
           : null,
-        // 手元の予約一覧(1 時間ごとに取り直し。既に予約のある日をログインせずに見送るのに使う)。件数と取った時刻だけ
+        // 手元の予約一覧(1 時間ごとに取り直し。既に予約のある日をログインせずに見送るのに使う)。件数と取った時刻、サイトと比べた結果(check。起動してからの回数)
         siteList: autoRunner?.siteList()
-          ? { at: autoRunner.siteList().at, counts: Object.fromEntries(Object.entries(autoRunner.siteList().byPerson).map(([k, v]) => [k, v.length])) }
+          ? { at: autoRunner.siteList().at, counts: Object.fromEntries(Object.entries(autoRunner.siteList().byPerson).map(([k, v]) => [k, v.length])), check: autoRunner.siteListCheck() }
           : null,
         queue: { running: queue.current() ? { kind: queue.current().kind, id: queue.current().id } : null, waiting: queue.waiting().map((j) => ({ kind: j.kind, id: j.id })) },
       }),

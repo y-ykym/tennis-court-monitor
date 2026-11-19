@@ -79,7 +79,8 @@ const slotRows = (label, slot, facility) => [row('予約者', label, { strong: t
 // 予約結果。成功: 緑の帯 + 予約番号・料金。失敗: 灰の帯 + 理由(赤)。
 //   2026-11-10 に情報量を減らした: 見出しの下の言い直し・取り消し方の案内文・フッターのリンクを外し、予約番号は他の行と同じ大きさに
 //   penalty: 利用日がペナルティ期間(今日+3 日以内。「せってい」の「追加枠」の自動予約)なら、取消にペナルティが付く旨を出す(2026-10-15。10-25 に枠単位へ)
-export function buildResultFlex(r, label = '', { auto = false, cancelData = null, penalty = false } = {}) {
+//   doubleBooked: 同じ日に既にあった別の予約("17:00 木場公園")。自動予約が予約前の一覧を省いた回に、成立後の一覧で 2 件目と分かったときだけ渡す(2026-11-19)
+export function buildResultFlex(r, label = '', { auto = false, cancelData = null, penalty = false, doubleBooked = null } = {}) {
   const ok = r.status === 'success';
   // 見出しで「自動予約」と「LINE のボタン(手動)」を見分けられるようにする(2026-09-25)。自動予約: 🤖 + 「自動予約」。手動: 🎾/⚠️ + 「(ボタン)」
   const title = auto ? (ok ? '🤖 自動予約が完了' : '🤖 自動予約できませんでした') : ok ? '🎾 予約完了(ボタン)' : '⚠️ 予約できませんでした(ボタン)';
@@ -92,6 +93,16 @@ export function buildResultFlex(r, label = '', { auto = false, cancelData = null
       : penalty
         ? '⚠ 取り消すとペナルティ 1 点が付きます' // 利用日が 3 日以内(「せってい」の追加枠)
         : null;
+    const warnBox = (text) => ({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'md',
+      backgroundColor: '#FFF7E6',
+      cornerRadius: 'md',
+      paddingAll: '10px',
+      contents: [{ type: 'text', text, size: 'sm', color: '#8A4B00', wrap: true }],
+    });
+    if (doubleBooked) rows.push(warnBox(`⚠ この日は予約が重なっています(${doubleBooked})。どちらかを取り消してください`));
     if (warn) {
       rows.push({
         type: 'box',

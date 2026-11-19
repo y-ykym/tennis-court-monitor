@@ -21,6 +21,9 @@
 //     launchArgs: [],        Chromium の起動引数(例: ['--window-size=600,1000'])
 //     viewport: {...}|null,  ページのビューポート。null でウィンドウに従う
 //     reservationList: false, (フェーズ3)ログイン直後にその人の予約一覧(prwha1000)を取り、結果に reservationsBefore として付ける
+//     listAfter: false,      予約が成立した後に、その人の予約一覧(prwha1000)を開いて結果に reservationsAfter として付ける(2026-11-19)。
+//                            予約の前の一覧(reservationList)を省いたとき、同じ日に 2 件入っていないかを呼び出し側が確かめるのに使う。
+//                            成立の後なので取り合いには影響しない。取れなければ付けない(結果は success のまま)
 //     warm: null,            launchBrowserForReserve() で先に起こしてあるブラウザ { browser, context, page, setPhase, close, topLoadedAt }。
 //                            渡すと起動を省き、fastInPage で topLoadedAt が新しければトップページの読み込みも省く(src/browser-warmer.js。2026-10-25)。
 //                            渡したブラウザはこの関数が閉じる
@@ -200,6 +203,32 @@ async function verifyByList(page, slot, facility, log) {
   }
 }
 
+// 予約が成立した後に、同じブラウザで予約の確認一覧(prwha1000)を開いて解析する(options.listAfter)。開けなければ null
+async function listAfterSuccess(page, log) {
+  try {
+    if ((await pageId(page)) !== 'prwha1000.jsp') {
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+        page.evaluate(() => {
+          document.form1.action = '/web/rsvWGetCancelRsvDataAction.do';
+          document.form1.submit();
+        }),
+      ]);
+    }
+    const html = await page.content();
+    if (!isReservationListPage(html)) {
+      log(`予約一覧(予約後): 一覧画面が開けませんでした (${pageIdOf(html) || '不明'})`);
+      return null;
+    }
+    const list = parseReservations(html);
+    log(`予約一覧(予約後): ${list.length} 件`);
+    return list;
+  } catch (e) {
+    log(`予約一覧(予約後): 失敗 (${e.message.split('\n')[0]})`);
+    return null;
+  }
+}
+
 async function hidden(page, name) {
   return page.$eval(`input[name="${name}"]`, (e) => e.value).catch(() => null);
 }
@@ -361,8 +390,9 @@ export async function reserve(slot, credentials, options = {}) {
   let applySent = false;
   let facility = slot.park;
   // 完了画面に到達しなかったときの成功判定(一覧で確認できたら success)
-  const successByList = (hit) => {
+  const successByList = async (hit) => {
     log(`予約完了(一覧で確認) 予約番号=${hit.id} (${Date.now() - started}ms)`);
+    const after = options.listAfter ? await listAfterSuccess(page, log) : null; // 画面はもう一覧なので読み直すだけ
     return done('success', `予約が完了しました(一覧で確認): ${facility} ${hit.date} ${hit.start}-${hit.end} ${hit.fee || ''}`.trim(), {
       reservationNo: hit.id,
       fee: hit.fee || '',
@@ -370,6 +400,7 @@ export async function reserve(slot, credentials, options = {}) {
       dateText: hit.date,
       timeText: `${hit.start}-${hit.end}`,
       verifiedByList: true,
+      ...(after ? { reservationsAfter: after } : {}),
     });
   };
   try {
@@ -599,13 +630,19 @@ export async function reserve(slot, credentials, options = {}) {
         const t = await parseResultTable(page);
         const title = await page.$eval('h3 .title', (e) => e.textContent.trim()).catch(() => facility);
         log(`予約完了 予約番号=${t['予約番号']} (${Date.now() - started}ms)`);
-        return done('success', `予約が完了しました: ${title} ${dateLabel} ${t['時間'] || ''} ${t['利用料金'] || ''}`, {
-          reservationNo: t['予約番号'] || '',
-          fee: t['利用料金'] || '',
-          facility: title,
-          dateText: dateLabel,
-          timeText: t['時間'] || '',
-        });
+        const elapsedMs = Date.now() - started; // 成立までの所要(下の予約後の一覧は含めない)
+        const after = options.listAfter ? await listAfterSuccess(page, log) : null;
+        return {
+          ...done('success', `予約が完了しました: ${title} ${dateLabel} ${t['時間'] || ''} ${t['利用料金'] || ''}`, {
+            reservationNo: t['予約番号'] || '',
+            fee: t['利用料金'] || '',
+            facility: title,
+            dateText: dateLabel,
+            timeText: t['時間'] || '',
+            ...(after ? { reservationsAfter: after } : {}),
+          }),
+          elapsedMs,
+        };
       }
       const bodyText = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ')).catch(() => '');
       if (resultId === 'prwea1000.jsp' && /チェックを入れて/.test(bodyText)) {
@@ -625,7 +662,7 @@ export async function reserve(slot, credentials, options = {}) {
       const resultHtml = await page.content().catch(() => '');
       // 完了画面ではない。画面だけで「失敗」と決めず、一覧に入っていないかを確かめる(入っていれば成功)
       const hit = await verifyByList(page, slot, facility, log);
-      if (hit) return successByList(hit);
+      if (hit) return await successByList(hit);
       if (resultId === 'prwea1000.jsp' && afterHuman) {
         return done('abandoned', '人間の操作が完了しないまま終了しました(予約はされていません)', { facility });
       }
@@ -645,7 +682,7 @@ export async function reserve(slot, credentials, options = {}) {
     // 「予約」を押した後のエラー(タイムアウト等)は、予約だけ入っている可能性があるので一覧で確かめる
     if (applySent && loggedIn && !page.isClosed()) {
       const hit = await verifyByList(page, slot, facility, log);
-      if (hit) return successByList(hit);
+      if (hit) return await successByList(hit);
     }
     if (e instanceof ReserveError) return done(e.status, e.message);
     const timeout = /Timeout|timeout/.test(e.message);
