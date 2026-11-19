@@ -15,6 +15,7 @@
 //     +4 日の枠は 23:35 以降は自動予約しない)。対象外になっていたら予約せず、Pi 自身が従来の空き通知カード(予約ボタン付き)を送る
 //     (Actions は見つけた時点で「対象枠だから通知しない」と処理済みのことがあるため)。除外日・除外枠になっていたらカードも送らない。
 //     その利用日の残り枚数が 0 なら見送り(ログイン不要)。
+//     手元の予約一覧(Worker の /auto/plans で 1 時間ごとに取り直す A・B の都の予約。成立分はその場で足す)でその日が上限でも見送り(ログイン不要。2026-11-19)。
 //     次に Worker からその人のテニスベアの予定を取り(/auto/tennisbear。10 分は使い回す)、候補と時間が重なる予定(場所を問わず)、
 //     または時間が接する別の場所の予定があれば見送り 'conflict'(ログイン不要。2026-09-24 追加。lib/auto-rules.js の findPlaceConflict)。
 //     テニスベアの予定が取れなければ、直近 60 分以内の結果があればそれで判定し、無ければ見送る(判定できないため予約しない)。
@@ -82,6 +83,17 @@ export const PARTIAL_CARRY_MAX_MS = 10 * 60 * 1000;
 // 「その日は既に上限まで予約がある」という記憶の有効時間。過ぎたら次の候補でまた一覧を見て数える。
 // 15 分だと、同じ枠が空いたり取られたりを繰り返す(9/17 の 9/21 17:00 猿江)たびにログインしてしまうので 60 分に(2026-09-17)
 export const DAY_REMAINING_TTL_MS = 60 * 60 * 1000;
+// A・B の都の予約一覧を手元に持っておく(2026-11-19 本人提案)。SITE_LIST_REFRESH_MS ごとに Worker の /auto/plans で取り直し、
+// 自動予約が成立したらその場で足す。「その日は既に予約がある」枠を、ログインせずに見送るのに使う
+// (11/17 16:46 は、既に予約のある 11/22 の大島をログインして見送るのに 22 秒 + ブラウザの起こし直し 30 秒かかり、
+//  同時に出た 11/27 の猿江が待たされて先を越された。上の DAY_REMAINING は「その日の予約に挑戦した後の 60 分」しか覚えていない)。
+// 手元の一覧が「0 件」のときは従来どおりログインして予約直前の一覧(beforeApply)で数えるので、古い一覧のせいで二重に取ることはない。
+// 逆に、サイトで直接取り消した日は次の取り直しまで「予約あり」のままになる(最大で SITE_LIST_MAX_AGE_MS)
+export const SITE_LIST_REFRESH_MS = 60 * 60 * 1000;
+// 取り直しに失敗したときは、これだけ空けてもう一度
+export const SITE_LIST_RETRY_MS = 10 * 60 * 1000;
+// 手元の一覧はこれより古ければ使わない(取り直しが失敗し続けたら従来どおりログインして数える)
+export const SITE_LIST_MAX_AGE_MS = 80 * 60 * 1000;
 // ログインが拒否された(auth_error)予約者は、この時間はその人の自動予約を止める(パスワード誤り等で繰り返すとアカウントロックの恐れ。
 // カードも最初の 1 回だけ)。時間が過ぎたら次の候補で 1 回だけ試し直す
 export const AUTH_PAUSE_MS = 6 * 60 * 60 * 1000;
@@ -131,6 +143,7 @@ export function createAutoRunner({
   state, // auto-state.js
   worker, // { heartbeat(payload) → Promise<{ dates, slots, allowSlots? }>, addExcludedSlots(slots) → Promise, dropAllowedSlots?([{ date }]) → Promise,
   //         tennisbear?(person) → Promise<{ configured, events }>,
+  //         plans?() → Promise<{ plans:[{ person, source, date, start, end, park }], failed:[…] }>(A・B の都の予約一覧を手元に持つのに使う。2026-11-19),
   //         calendarSync?(person) → void(フェーズ11。予約成立の直後に Worker へ同期を頼む。結果は待たない) }
   book, // async (candidate, { credentials, beforeApply }) → reserve() の結果
   credentialsFor, // (person) → { userId, password, label } | null
@@ -176,6 +189,56 @@ export function createAutoRunner({
     }
     return r.remaining;
   };
+  // 手元に持っている A・B の都の予約一覧(SITE_LIST_REFRESH_MS ごとに取り直す)。
+  // { at(取りに行った時刻), byPerson: { A: [{ date, start, park, addedAt? }], B: [...] } }。addedAt は自動予約の成立で足した分
+  let siteList = null;
+  let siteListInflight = null;
+  let siteListNextAt = 0; // 次に取り直す時刻
+  const usableSiteList = () => (siteList && now() - siteList.at <= SITE_LIST_MAX_AGE_MS ? siteList : null);
+  // その人のその日の予約の件数(手元の一覧から)。一覧が無い・古ければ null
+  const listedCount = (person, date) => {
+    const l = usableSiteList();
+    return l ? (l.byPerson[person] || []).filter((r) => r.date === date).length : null;
+  };
+  // 取り直し。照会ループが待たずに呼ぶ(失敗しても予約は従来どおり動く)。戻り値は取れたかどうか
+  function refreshSiteList() {
+    if (typeof worker.plans !== 'function') return Promise.resolve(false);
+    if (siteListInflight) return siteListInflight;
+    const startedAt = now();
+    siteListNextAt = startedAt + SITE_LIST_REFRESH_MS;
+    siteListInflight = (async () => {
+      try {
+        const res = await worker.plans();
+        if (!res || !Array.isArray(res.plans)) throw new Error('Worker から予定が返らなかった');
+        // 都の予約が 1 人分でも取れていなければ使わない(取れなかった人を「0 件」と読むと毎回ログインするだけだが、誰の分かが応答から分からない)
+        const failed = (Array.isArray(res.failed) ? res.failed : []).filter((f) => /都の予約|配線/.test(String(f)));
+        if (failed.length) throw new Error(`取れなかった分: ${failed.join('、')}`);
+        const byPerson = {};
+        for (const p of res.plans) {
+          if (p?.source !== 'site' || !p.person || !p.date) continue;
+          (byPerson[p.person] ||= []).push({ date: p.date, start: p.start || '', park: p.park ?? null });
+        }
+        // 取りに行っている間に成立した自動予約は、Worker の一覧に入っていないことがあるので残す
+        for (const [person, list] of Object.entries(siteList?.byPerson || {})) {
+          for (const r of list) {
+            if (r.addedAt == null || r.addedAt < startedAt) continue;
+            if (!(byPerson[person] || []).some((x) => x.date === r.date && x.start === r.start)) (byPerson[person] ||= []).push(r);
+          }
+        }
+        siteList = { at: startedAt, byPerson };
+        log(`手元の予約一覧を更新: ${Object.keys(byPerson).sort().map((k) => `${k} ${byPerson[k].length} 件`).join('・') || '予約なし'}(次は ${Math.round(SITE_LIST_REFRESH_MS / 60000)} 分後。既に予約のある日はログインせずに見送る)`);
+        return true;
+      } catch (e) {
+        siteListNextAt = startedAt + SITE_LIST_RETRY_MS;
+        const l = usableSiteList();
+        log(`手元の予約一覧を更新できませんでした(${e.message})。${l ? `${Math.round((now() - l.at) / 60000)} 分前の一覧で続け` : '一覧が無い間は従来どおりログインして数え'}、${Math.round(SITE_LIST_RETRY_MS / 60000)} 分後にもう一度取ります`);
+        return false;
+      } finally {
+        siteListInflight = null;
+      }
+    })();
+    return siteListInflight;
+  }
 
   const describe = (s) => `${s.date} ${s.time || `${startHHMM(s.startHour)}-`} ${s.facility || parkOf(s.park)?.name || s.park}`;
   const event = (type, data) => {
@@ -335,6 +398,8 @@ export function createAutoRunner({
       lastCycle = { at: started, ms: now() - started, error: null, newSlots: newSlots.length };
       await heartbeat();
       state.save();
+      // 手元の予約一覧の取り直し(待たない)。予約の実行中は、同じ人のログインが重ならないよう次の照会に回す
+      if (bookingEnabled() && now() >= siteListNextAt && !queue.isBusy()) refreshSiteList();
       // 動いていることが分かるよう毎回 1 行(1 日 1,440 行程度。docker のログ上限 10MB×3 に収まる)
       log(`照会: 監視対象 ${targets.length} 件(全体 ${slots.length} 件)、新規 ${newSlots.length} 件${retrySlots.length ? `、再挑戦 ${retrySlots.length} 件` : ''}、所要 ${Math.round(lastCycle.ms / 1000)} 秒`);
 
@@ -462,6 +527,14 @@ export function createAutoRunner({
       state.save();
       return { status: 'capped' };
     }
+    // 手元の予約一覧(1 時間ごとに取り直し)でその日が上限なら、ログインせずに見送る(2026-11-19)
+    const listed = allowed ? null : listedCount(c.person, c.date);
+    if (listed != null && listed >= AUTO_BOOKING.MAX_PER_DAY) {
+      log(`見送り: ${describe(c)} (${c.date} は既に ${listed} 件の予約があるため。手元の予約一覧(${Math.round((now() - siteList.at) / 60000)} 分前)で判定。ログインせず)`);
+      attempt(c, 'capped', `${c.date} は既に ${listed} 件の予約があるため(手元の予約一覧)`);
+      state.save();
+      return { status: 'capped' };
+    }
     // 隣接の判定(その 1): テニスベアの予定。ログインの前に見て、隣の時間帯に別の場所の予定があれば見送る(ログインせず)
     const tb = allowed ? { configured: false, events: [], at: t } : await tennisbearPlansFor(c.person);
     if (!tb) {
@@ -539,6 +612,8 @@ export function createAutoRunner({
       const start = startHHMM(c.startHour);
       const end = startHHMM(Number(c.startHour) + 2);
       state.addOwn({ key, person: c.person, id: result.reservationNo || '', date: c.date, start, end, park: c.park, facility: park?.name || c.facility });
+      // 手元の予約一覧にもその場で足す(次の取り直しを待たずに、同じ日の枠をログインせずに見送れる)
+      if (siteList) (siteList.byPerson[c.person] ||= []).push({ date: c.date, start, park: c.park, addedAt: now() });
       await dropAllowedSlotsAt(c.date);
       // フェーズ11: その人の Google カレンダーの同期を Worker に頼む(待たない。配線が無ければ何もしない)
       if (typeof worker.calendarSync === 'function') {
@@ -669,6 +744,7 @@ export function createAutoRunner({
     tick, start, stop, mode, active, intervalMs: interval,
     effectiveMode, remoteEnabled: () => remoteEnabled, remoteNotify: () => remoteNotify,
     exclusions: () => exclusions, lastCycle: () => lastCycle, lastTargets: () => lastTargets, dayRemaining, tbPlans,
+    refreshSiteList, siteList: () => siteList,
     consecutiveFailures: () => consecutiveFailures,
     backoffMs: (normalMs) => backoffIntervalMs(consecutiveFailures, normalMs, backoffOpts()),
   };

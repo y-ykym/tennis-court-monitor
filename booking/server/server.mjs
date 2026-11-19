@@ -67,7 +67,7 @@ import { createAutoRunner, createScraper } from '../src/auto-runner.js';
 
 const require = createRequire(import.meta.url);
 const { jstTodayIso } = require('../../lib/date.js');
-const { sendHeartbeat, addExcludedSlots, dropAllowedSlots, fetchTennisbearPlans, triggerCalendarSync } = require('../../lib/auto-client.js');
+const { sendHeartbeat, addExcludedSlots, dropAllowedSlots, fetchTennisbearPlans, fetchPlansOrThrow, triggerCalendarSync } = require('../../lib/auto-client.js');
 const { AUTO_BOOKING } = require('../../lib/config.js');
 const { slotKey } = require('../../lib/auto-rules.js');
 // 従来の空き通知カード(予約ボタン付き)。予約直前に対象外になった枠を Pi から通知するのに使う。
@@ -374,6 +374,7 @@ if (AUTO_MODE !== 'off') {
         addExcludedSlots: (slots) => addExcludedSlots(WORKER_URL, SECRET, slots),
         dropAllowedSlots: (slots) => dropAllowedSlots(WORKER_URL, SECRET, slots),
         tennisbear: (person) => fetchTennisbearPlans(WORKER_URL, SECRET, person),
+        plans: () => fetchPlansOrThrow(WORKER_URL, SECRET),
         calendarSync: (person) => requestCalendarSync(person, 'auto-booked'),
       },
       credentialsFor: (person) => {
@@ -553,6 +554,10 @@ const server = http.createServer((req, res) => {
         targets: autoRunner ? autoRunner.lastTargets().map((s) => ({ key: slotKey(s), ...s })) : null,
         exclusions: autoRunner?.exclusions()
           ? { dates: autoRunner.exclusions().dates.length, slots: autoRunner.exclusions().slots.length, allowSlots: (autoRunner.exclusions().allowSlots || []).length, at: autoRunner.exclusions().at }
+          : null,
+        // 手元の予約一覧(1 時間ごとに取り直し。既に予約のある日をログインせずに見送るのに使う)。件数と取った時刻だけ
+        siteList: autoRunner?.siteList()
+          ? { at: autoRunner.siteList().at, counts: Object.fromEntries(Object.entries(autoRunner.siteList().byPerson).map(([k, v]) => [k, v.length])) }
           : null,
         queue: { running: queue.current() ? { kind: queue.current().kind, id: queue.current().id } : null, waiting: queue.waiting().map((j) => ({ kind: j.kind, id: j.id })) },
       }),

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS, PARTIAL_CARRY_MAX_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS, PARTIAL_CARRY_MAX_MS, SITE_LIST_REFRESH_MS, SITE_LIST_RETRY_MS, SITE_LIST_MAX_AGE_MS } from '../src/auto-runner.js';
 import { createEventLog, readEvents } from '../src/auto-events.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
@@ -1295,4 +1295,145 @@ test('照会の部分採用(2026-11-08): 一覧 JSON の方式(failures の week
   assert.ok(h.logs.some((l) => l.includes('空き照会の一部が取れず、前回の結果で補いました: 亀戸中央公園(亀戸中央公園 の取得に失敗')), h.logs.join('\n'));
   assert.ok(!h.logs.some((l) => l.includes('枠が消えた')), '亀戸の 2 枠(別の週)とも消えた扱いにしない: ' + h.logs.filter((l) => l.includes('枠が消えた')).join('\n'));
   assert.ok(h.logs.some((l) => l.includes('照会: 監視対象 3 件(全体 3 件)')), h.logs.filter((l) => l.includes('照会:')).join('\n'));
+});
+
+// ---- 手元の予約一覧(2026-11-19): 1 時間ごとに Worker の /auto/plans で取り直し、既に予約のある日はログインせずに見送る ----
+const sitePlan = (person, date, start, park = '1060') => ({ person, label: person, source: 'site', date, start, end: '', park, facility: '' });
+
+test('手元の予約一覧(2026-11-19): 一覧にその日の予約があれば、ログインせずに見送る(capped)。予約の無い日は従来どおりログインして予約する。テニスベアの予定は数えない', async () => {
+  let calls = 0;
+  const h = harness({
+    workerOverride: {
+      plans: async () => {
+        calls++;
+        return { plans: [sitePlan('A', '2026-09-27', '17:00'), { person: 'A', source: 'tennisbear', date: '2026-09-26', start: '09:00', end: '11:00', park: null }, sitePlan('B', '2026-09-26', '19:00')], failed: [] };
+      },
+    },
+  });
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls, 1, '最初の照会で取りに行く');
+  assert.ok(h.logs.some((l) => l.includes('手元の予約一覧を更新: A 1 件・B 1 件')), h.logs.join('\n'));
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-26', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls, 1, '1 時間たつまでは取り直さない');
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'capped');
+  assert.ok(h.logs.some((l) => l.includes('見送り: 2026-09-27') && l.includes('手元の予約一覧(1 分前)で判定。ログインせず')), h.logs.join('\n'));
+  assert.deepEqual(h.bookings, ['2026-09-26 1040 13 A'], '9/27 はログインしていない。9/26 は A の都の予約が無い(テニスベアと B の予約は数えない)ので予約する');
+  assert.equal(h.state.attemptStatus('1040|2026-09-26|13:00'), 'success');
+  // 1 時間後の照会で取り直す
+  h.advance(SITE_LIST_REFRESH_MS);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls, 2);
+});
+
+test('手元の予約一覧(2026-11-19): 自動予約が成立したらその場で一覧に足す。取りに行っている間に成立した分は、取り直しの結果に無くても残す', async () => {
+  let release = null;
+  let calls = 0;
+  const h = harness({
+    workerOverride: {
+      plans: () => {
+        calls++;
+        if (calls === 1) return Promise.resolve({ plans: [], failed: [] });
+        return new Promise((r) => (release = () => r({ plans: [], failed: [] }))); // 2 回目は成立前の一覧(空)を、成立の後に返す
+      },
+    },
+  });
+  await h.runner.tick();
+  await flush();
+  // 1 時間後: 取り直しが始まる(まだ返らない)。同じ照会で出た枠が成立する
+  h.advance(SITE_LIST_REFRESH_MS);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls, 2);
+  // 取り直し中の照会で枠が出て成立(取り直しはまだ返っていない)
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-26', '13:00-15:00')]);
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'success');
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.state.attemptStatus('1040|2026-09-26|13:00'), 'success');
+  release();
+  await flush();
+  const list = h.runner.siteList();
+  assert.deepEqual(list.byPerson.A.map((r) => `${r.date} ${r.start}`).sort(), ['2026-09-26 13:00', '2026-09-27 09:00'], '取り直しを始めた後に成立した 2 件は、Worker の一覧(成立前のもの。空)に無くても残る');
+  // 「その日は上限」の記憶(60 分)が切れた後でも、手元の一覧で 9/26 はログインせずに見送る
+  h.advance(DAY_REMAINING_TTL_MS - 5 * 60_000);
+  h.runner.dayRemaining.clear();
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00'), slot('猿江恩賜公園', '2026-09-26', '13:00-15:00'), slot('猿江恩賜公園', '2026-09-26', '15:00-17:00')]);
+  const before = h.bookings.length;
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.bookings.length, before, 'ログインしていない');
+  assert.equal(h.state.attemptStatus('1040|2026-09-26|15:00'), 'capped');
+});
+
+test('手元の予約一覧(2026-11-19): 取れなければ従来どおりログインして数え、10 分後にもう一度取る。1 人分でも都の予約が取れていなければ使わない。古い一覧(80 分超)も使わない', async () => {
+  let calls = 0;
+  let answer = () => ({ plans: [sitePlan('A', '2026-09-27', '17:00')], failed: ['nameB(都の予約)'] });
+  const reservations = { A: [{ id: '1', date: '2026-09-27', start: '17:00' }] };
+  const h = harness({
+    reservations,
+    workerOverride: {
+      plans: async () => {
+        calls++;
+        return answer();
+      },
+    },
+  });
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.runner.siteList(), null);
+  assert.ok(h.logs.some((l) => l.includes('手元の予約一覧を更新できませんでした(取れなかった分: nameB(都の予約))')), h.logs.join('\n'));
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls, 1);
+  assert.equal(h.bookings.length, 1, '一覧が無いのでログインして数えた');
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'capped');
+  // 10 分後にもう一度。今度は取れる(テニスベアだけ取れなかったのは構わない)
+  answer = () => ({ plans: [sitePlan('A', '2026-09-27', '17:00')], failed: ['nameA(テニスベアの予定)'] });
+  h.advance(SITE_LIST_RETRY_MS);
+  await h.runner.tick();
+  await flush();
+  assert.equal(calls, 2);
+  assert.equal(h.runner.siteList().byPerson.A.length, 1);
+  // その後ずっと取れない(Worker に繋がらない)。80 分を過ぎたら一覧を使わず、またログインして数える
+  answer = () => {
+    throw new Error('Worker HTTP 502 /auto/plans');
+  };
+  h.advance(SITE_LIST_MAX_AGE_MS + 60_000);
+  h.runner.dayRemaining.clear();
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '13:00-15:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.bookings.length, 2, '古い一覧は使わずログインして数えた');
+  assert.ok(h.logs.some((l) => l.includes('一覧が無い間は従来どおりログインして数え')), h.logs.join('\n'));
+});
+
+test('手元の予約一覧(2026-11-19): 追加枠は一覧に予約があっても予約する。dry-run と配線なしでは取りに行かない', async () => {
+  let calls = 0;
+  const plans = async () => {
+    calls++;
+    return { plans: [sitePlan('A', '2026-09-27', '17:00')], failed: [] };
+  };
+  const h = harness({ exclusions: { dates: [], slots: [], allowSlots: [{ park: '1160', date: '2026-09-27', start: '09:00' }] }, workerOverride: { plans } });
+  await h.runner.tick();
+  await flush();
+  h.advance(60_000);
+  h.setSlots([slot('大島小松川公園', '2026-09-27', '09:00-11:00')]);
+  await h.runner.tick();
+  await flush();
+  assert.equal(h.state.attemptStatus('1160|2026-09-27|09:00'), 'success', '追加枠は 1 日の上限を掛けない');
+  const d = harness({ mode: 'dry-run', workerOverride: { plans } });
+  const before = calls;
+  await d.runner.tick();
+  await flush();
+  assert.equal(calls, before, 'dry-run は取りに行かない');
+  assert.equal(await harness().runner.refreshSiteList(), false, '配線が無ければ何もしない');
 });
