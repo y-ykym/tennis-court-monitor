@@ -1,23 +1,14 @@
 // ============================================================
-// HTTP 先行方式(2026-11-19 試験導入。既定は無効): ログイン → 空き検索 → 枠の選択(→ 予約一覧)を、ブラウザを使わず
-// Node の fetch で済ませる。済んだセッションの Cookie を先に起こしてあるブラウザへ渡し、ブラウザは予約内容確認画面の POST と
-// 「予約」(reCAPTCHA v3 はサイトの JS がブラウザで動く)だけを行う(src/reserve.js の options.httpFirst)。
+// Cookie を持ち回る素の HTTP セッション(Node の fetch)。ブラウザを使わずに予約サイトと通信するときに使う。
+// いま使っているのは計測用の booking/scripts/http-first-measure.mjs だけ(本番の予約処理からは使っていない)。
 //
-//   httpFirstFlow({ slot, credentials, withList }, { fetchImpl?, timeoutMs? })
-//     → inPageFlow と同じ形の結果({ ok: true, applyFields, facility, vacant, listHtml?, … } | { ok: false, status, message })に
-//       cookies([{ name, value, path, secure, httpOnly, sameSite }])と steps(工程ごとの所要 ms)を足したもの
+// 経緯: 「HTTP 先行方式」(ログイン〜枠選択を HTTP で済ませ、Cookie を本番のブラウザに渡して確認画面と「予約」だけブラウザで行う)を
+// 2026-11-19 に検討して見送った。昼間(16:45)の Pi からの計測で、空きが出てからの分(ログイン 2.9 + 枠の選択 4.1 + 予約一覧 4.5 秒)は
+// 11.4 秒、今のブラウザ内 fetch は同じ 3 通信で 15.6〜16.5 秒。差は 4〜5 秒で、遅いのは主に都サイト自体だった。
+// 一方「予約」を本番のブラウザで押す試験が要り、reCAPTCHA の点数への影響を本人が避けたいと判断(docs/site-notes.md)。
 //
-// 手順そのものは site-inpage.js の inPageFlow をそのまま使う(通信の関数だけ差し替える)。ブラウザ内版と送る内容がずれないようにするため。
-// ブラウザ側のセッションで先取りしたログイン画面・検索(prefetched)は別セッションのものなので使わない(トップ → ログイン画面 → ログイン → 検索 → 枠選択)。
-//
-// 経緯(docs/site-notes.md「素の HTTP で枠選択まで済ませ…」): Pi の本番では ブラウザ内 fetch の枠選択までが 9〜25 秒、素の HTTP は 2〜4 秒(2026-11-08 実測)。
-// Cookie を Playwright に渡して確認画面に到達できることは確認済み。「予約」を押したときの reCAPTCHA v3 の点数だけが未確認
-// (11/8 の試験は新しく起こした試験用ブラウザで押して v2 に回された。同じ夜でも本番の先起こしブラウザでは成立している)。
-//
-// 注意: Cloud Run のように Node とブラウザの出口(IP)が別になる環境では使えない(サイトのロードバランサがセッションを別ノードに振る)。Pi は同じ出口。
 // ログには利用者番号・パスワード・Cookie の値を出さない。
 // ============================================================
-import { inPageFlow } from './site-inpage.js';
 
 export const SITE_ORIGIN = 'https://kouen.sports.metro.tokyo.lg.jp';
 // 1 通信の上限。固まったら error にして、呼び出し側(reserve.js)が従来のブラウザ内 fetch でやり直す
@@ -70,23 +61,4 @@ export function createHttpSession({ fetchImpl = globalThis.fetch, origin = SITE_
     cookies: () => [...jar.values()].map(({ expired, ...c }) => c),
     steps: () => steps.slice(),
   };
-}
-
-// トップ(セッション Cookie)→ inPageFlow(ログイン画面 → ログイン → 検索 → 枠選択 → 予約一覧)。例外は投げず、inPageFlow と同じ形で返す
-export async function httpFirstFlow({ slot, credentials, withList = false }, { fetchImpl, timeoutMs, now } = {}) {
-  const session = createHttpSession({ fetchImpl, timeoutMs, now });
-  const fail = (status, message) => ({ ok: false, status, message, steps: session.steps() });
-  try {
-    const top = await session.fetch('/web/index.jsp');
-    const html = new TextDecoder('shift_jis').decode(await top.arrayBuffer());
-    if (top.status !== 200 || !/rsvWTransUserLoginAction/i.test(html)) {
-      return fail('error', `トップページが想定外です (HTTP ${top.status}。メンテナンスかお知らせの可能性)`);
-    }
-    if (!session.cookies().length) return fail('error', 'トップページでセッションの Cookie が発行されませんでした');
-  } catch (e) {
-    return fail('error', `トップページを取得できませんでした: ${e?.message || e}`);
-  }
-  const r = await inPageFlow({ slot, credentials, withList, prefetched: null }, session.fetch);
-  const message = r.ok ? r.message : String(r.message || '').replace('ブラウザ内 fetch でエラー', 'HTTP でエラー');
-  return { ...r, ...(r.ok ? {} : { message }), cookies: session.cookies(), steps: session.steps() };
 }
