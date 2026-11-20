@@ -940,7 +940,7 @@ test('追加枠(2026-11-03): 場所と時間を本人が指定した枠なので
   assert.deepEqual(h.bookings, ['2026-09-16 1040 13 B']);
   assert.equal(h.state.attemptStatus('1040|2026-09-16|13:00'), 'success', '上限・隣接の判定を掛けずに取る');
   assert.deepEqual(h.tbCalls, [], 'テニスベアの予定は見に行かない');
-  assert.ok(h.logs.some((l) => l.includes('追加枠なので 1 日の上限・場所の判定は掛けません')), h.logs.join('\n'));
+  assert.ok(h.logs.some((l) => l.includes('追加枠なので 1 日の上限・場所・時間の重なりの判定は掛けません')), h.logs.join('\n'));
   // 同じ日の普段の枠(猿江 19:00)は従来どおり上限で見送り(成立分を数えて 2 件)
   h.advance(60_000);
   h.setSlots([slot('猿江恩賜公園', '2026-09-16', '13:00-15:00'), slot('猿江恩賜公園', '2026-09-20', '19:00-21:00')]);
@@ -949,7 +949,7 @@ test('追加枠(2026-11-03): 場所と時間を本人が指定した枠なので
   await flush();
   assert.deepEqual(h.bookings, ['2026-09-16 1040 13 B', '2026-09-20 1040 19 A']);
 
-  // 時間が重なる都の予約(B が 9/16 13:00-15:00 を手で取っていた)があれば、追加枠でも見送り(conflict)
+  // 時間が重なる都の予約(B が 9/16 13:00-15:00 を手で取っていた)があっても、追加枠は予約する(2026-11-20。予約がある時間帯も選べるようにした)
   const reservations2 = { B: [{ id: 'R1', date: '2026-09-16', start: '13:00', end: '15:00', facility: '大島小松川公園' }] };
   const h2 = harnessTb({ reservations: reservations2, exclusions: { dates: [], slots: [], allowSlots: [allow] } }, async () => ({ configured: true, events: [] }));
   await h2.runner.tick();
@@ -957,8 +957,8 @@ test('追加枠(2026-11-03): 場所と時間を本人が指定した枠なので
   h2.setSlots([slot('猿江恩賜公園', '2026-09-16', '13:00-15:00')]);
   assert.equal((await h2.runner.tick()).planned, 1);
   await flush();
-  assert.equal(h2.state.attemptStatus('1040|2026-09-16|13:00'), 'conflict');
-  assert.ok(h2.logs.some((l) => l.includes('時間が重なる予約')), h2.logs.join('\n'));
+  assert.equal(h2.state.attemptStatus('1040|2026-09-16|13:00'), 'success', h2.logs.join('\n'));
+  assert.deepEqual(h2.bookings, ['2026-09-16 1040 13 B']);
 });
 
 test('追加枠(2026-10-25): 平日の監視対象外の枠(大島 17:00)も追加してあれば見て予約する。追加した時点で既に空いていた枠も、次の照会で取りに行く', async () => {
