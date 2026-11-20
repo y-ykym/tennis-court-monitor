@@ -581,9 +581,9 @@ export function createAutoRunner({
       return { status: 'skipped', message: again.reason, notified: true };
     }
     // 追加枠(「せってい」で場所と時間を本人が指定した枠。again.allowed)は、1 日の上限・テニスベアの予定・接する別の場所の予約の判定を
-    // 掛けない(2026-11-03 本人指示)。2026-11-20 本人指示: 時間が重なる都の予約も見ない(予約がある時間帯も「せってい」で選べるようにしたため)
+    // 掛けない(2026-11-03 本人指示)。時間が重なる都の予約だけは予約直前の一覧で見る(選ぶ時点で予約済みの時間は Worker が出さないので通常は当たらない)
     const allowed = !!again.allowed;
-    if (allowed) log(`追加枠なので 1 日の上限・場所・時間の重なりの判定は掛けません: ${describe(c)}`);
+    if (allowed) log(`追加枠なので 1 日の上限・場所の判定は掛けません: ${describe(c)}`);
     const remaining = allowed ? null : remainingFor(c.date);
     if (remaining != null && remaining <= 0) {
       log(`見送り: ${describe(c)} (${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため。ログインせず)`);
@@ -615,12 +615,12 @@ export function createAutoRunner({
       return { status: 'conflict', message: tbConflict.reason };
     }
     // 手元の予約一覧が使えるなら、予約の前にサイトで一覧を見るのを省く(skipList)。重なり・隣の時間帯の別の公園の判定も手元の一覧で先に行う
-    // (上限 1 件のうちは上の件数の判定が先に当たる。追加枠は見ない)。成立の後に一覧を見て答え合わせをする(下の reservationsAfter)
+    // (上限 1 件のうちは上の件数の判定が先に当たる。追加枠は時間が重なる予約だけ見る)。成立の後に一覧を見て答え合わせをする(下の reservationsAfter)
     const local = skipListCheck ? usableSiteList() : null;
     const skipList = !!local;
     if (skipList) {
       const mine = (local.byPerson[c.person] || []).filter((r) => r.date === c.date);
-      const conflict = allowed ? null : findPlaceConflict(c, mine);
+      const conflict = findPlaceConflict(c, mine, { overlapOnly: allowed });
       if (conflict) {
         log(`見送り: ${describe(c)} (${conflict.reason}。手元の予約一覧(${Math.round((now() - local.at) / 60000)} 分前)で判定。ログインせず)`);
         attempt(c, 'conflict', conflict.reason);
@@ -639,8 +639,8 @@ export function createAutoRunner({
         return { status: 'capped', message: `${c.date} は既に ${listCount} 件の予約があるため見送りました(手動分を含む)` };
       }
       // 隣接の判定(その 2): 都の予約一覧。時間が重なる予約・隣の時間帯の別の公園の予約があれば見送る(上限が 1 件のうちは通常ここに来ないが、上限を戻したときのため)。
-      // 追加枠は見ない
-      const conflict = allowed ? null : findPlaceConflict(c, sameDay);
+      // 追加枠は時間が重なる予約だけ見る
+      const conflict = findPlaceConflict(c, sameDay, { overlapOnly: allowed });
       if (conflict) return { status: 'conflict', message: conflict.reason };
       return null;
     };

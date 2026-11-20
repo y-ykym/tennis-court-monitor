@@ -544,7 +544,7 @@ export async function buildAutoSettingsReply(env, { now = Date.now(), note = nul
 // postback の値。解除(u)は 1 枠 "<公園コード>_YYYYMMDD_HHMM"。選択の切り替え(t)・決定(c)は "<公園コード>-…_YYYYMMDD_<開始時>-…_<予約済みの開始時>-…"
 // (公園・時間帯とも無ければ "0"。開始時は 2 桁)。例 "1050-1160_20261026_13-15-17_09"
 //   4 つ目の「予約済みの開始時」は 2026-11-03 追加: 日を選んだときに A・B の都の予約一覧を見て決め、以後のカードはこれを持ち回る
-//   (押すたびにサイトへ見に行かない)。2026-11-20 からこの時間帯も選べる(行に「予約済み」の印を付けるだけ)。古い形(3 つ)のカードも受け付ける
+//   (押すたびにサイトへ見に行かない)。この時間帯は選べない。古い形(3 つ)のカードも受け付ける
 const slotValueOf = (s) => `${s.park}_${s.date.replace(/-/g, '')}_${s.start.replace(':', '')}`;
 const hoursValueOf = (hours) => (hours.length ? [...hours].sort((a, b) => a - b).map((h) => String(h).padStart(2, '0')).join('-') : '0');
 const pickValueOf = (parks, hours, date, blocked = []) => `${parks.length ? [...parks].sort().join('-') : '0'}_${date.replace(/-/g, '')}_${hoursValueOf(hours)}_${hoursValueOf(blocked)}`;
@@ -561,7 +561,7 @@ function parsePickValue(value) {
   const parks = m[1] === '0' ? [] : [...new Set(m[1].split('-'))].filter((p) => PARK_NAMES[p]);
   const hoursOf = (v) => (!v || v === '0' ? [] : [...new Set(v.split('-').map(Number))].filter((h) => START_HOURS.includes(h)));
   const blocked = hoursOf(m[6]);
-  return { parks, hours: hoursOf(m[5]), blocked, date: `${m[2]}-${m[3]}-${m[4]}` };
+  return { parks, hours: hoursOf(m[5]).filter((h) => !blocked.includes(h)), blocked, date: `${m[2]}-${m[3]}-${m[4]}` };
 }
 // その日に A・B のどちらかが既に取っている都の予約と時間が重なる開始時(2026-11-03)。results = fetchAllReservations の戻り値。
 // 戻り値 { blocked: [9, …], failed: ['太郎(都の予約)', …] }(failed があれば、その人の分は分からない)
@@ -579,15 +579,19 @@ const isPickableDate = (date, today) => /^\d{4}-\d{2}-\d{2}$/.test(date) && addD
 // その日のうち、まだ始まっていない枠の開始時
 const futureHours = (date, now) => START_HOURS.filter((h) => jstDateTimeMs(date, hhmmOf(h)) > now);
 // 時間帯とコートを選ぶカード(複数選択。2026-10-25)。hours/parks = いま選んでいるもの。各行のボタンには「押した後の選択」を載せ、「決定」には今の選択を載せる。
-//   blocked = 既に予約がある開始時(行に「予約済み」の印を付ける。2026-11-20 から選べる)。warn = カードに添える注意(予約一覧が取れなかった等)
+//   blocked = 既に予約がある開始時(押せない行「予約済み」として出す。2026-11-03)。warn = カードに添える注意(予約一覧が取れなかった等)
 async function buildPickReply(env, { date, hours, parks, blocked = [], today, now, warn = null }) {
   const exp = Math.floor(now / 1000) + SETTINGS_BUTTON_TTL_SEC;
   const secret = env.BOOKING_SIGNING_SECRET;
   const hourRows = [];
   for (const h of futureHours(date, now)) {
+    if (blocked.includes(h)) {
+      hourRows.push({ hour: h, label: `${h}:00〜${h + 2}:00`, selected: false, blocked: true, data: null });
+      continue;
+    }
     const on = hours.includes(h);
     const next = on ? hours.filter((x) => x !== h) : [...hours, h];
-    hourRows.push({ hour: h, label: `${h}:00〜${h + 2}:00`, selected: on, blocked: blocked.includes(h), data: await signAutoData(secret, 't', pickValueOf(parks, next, date, blocked), exp) });
+    hourRows.push({ hour: h, label: `${h}:00〜${h + 2}:00`, selected: on, data: await signAutoData(secret, 't', pickValueOf(parks, next, date, blocked), exp) });
   }
   const parkRows = [];
   for (const [park, name] of Object.entries(PARK_NAMES)) {
@@ -606,7 +610,7 @@ export const MSG_AUTO_BAD_DATE = 'その日は指定できません(今日から
 export const MSG_AUTO_BAD_SLOT = 'その枠は指定できません(今日から 35 日先までの、まだ始まっていない枠だけ)。「せってい」からやり直してください';
 
 // 「せってい」カードのボタン(postback)を処理する。戻り値 { flex, text } | { text } | null(無視)
-//   fetchResults: A・B の都の予約一覧の取得(index.js の fetchAllReservations。追加枠の日を選んだとき、予約済みの時間帯に印を付けるのに使う。2026-11-03)。
+//   fetchResults: A・B の都の予約一覧の取得(index.js の fetchAllReservations。追加枠の日を選んだとき、予約済みの時間帯を選べなくするのに使う。2026-11-03)。
 //   無ければ(テスト等)全部の時間帯を出す
 export async function handleAutoPostback(env, data, params, { now = Date.now(), fetchResults = null } = {}) {
   const t = await verifyAutoData(env.BOOKING_SIGNING_SECRET, data, now);
@@ -636,20 +640,22 @@ export async function handleAutoPostback(env, data, params, { now = Date.now(), 
     // 日付ピッカーで日を選んだ → 時間帯とコートを選ぶカードを返す(まだ KV には書かない)。その日の枠が全部始まっていれば断る
     const date = String(params?.date || '');
     if (!isPickableDate(date, today) || !futureHours(date, now).length) return { text: MSG_AUTO_BAD_SLOT };
-    // A・B の都の予約一覧を見て、既に予約がある時間帯の行に「予約済み」の印を付ける(2026-11-03。2026-11-20 から印だけで、選べる)。取れなかった人がいれば注意を添える
+    // A・B の都の予約一覧を見て、既に予約がある時間帯は選べない行にする(2026-11-03)。取れなかった人がいれば注意を添えて全部出す
     let blocked = [];
     let warn = null;
     if (typeof fetchResults === 'function') {
       try {
         const r = blockedHoursOf(await fetchResults(), date);
         blocked = r.blocked;
-        if (r.failed.length) warn = `${r.failed.join('・')}が取れなかったため、「予約済み」の印が出ていない時間帯があるかもしれません`;
+        if (r.failed.length) warn = `${r.failed.join('・')}が取れなかったため、予約済みの時間帯も出ています`;
       } catch (e) {
         console.warn(`[auto] 追加枠: 予約一覧が取れませんでした(${e.message})`);
-        warn = '都の予約一覧が取れなかったため、「予約済み」の印は出ていません';
+        warn = '都の予約一覧が取れなかったため、予約済みの時間帯も出ています';
       }
     }
+    const open = futureHours(date, now).filter((h) => !blocked.includes(h));
     console.log(`[auto] 追加枠: ${date} の時間帯とコートを選ぶカードを返す(予約済み ${blocked.length} 時間帯${warn ? `。${warn}` : ''})`);
+    if (!open.length) return { text: `${fmt(date)} は、まだ始まっていない時間帯が全部予約済みです。「せってい」からやり直してください` };
     return buildPickReply(env, { date, hours: [], parks: [], blocked, today, now, warn });
   } else if (t.kind === 't' || t.kind === 'c') {
     // 時間帯・コートの選択を切り替えた(t。カードを返すだけ)/ 決定(c。選んだ時間帯 × コートの枠をまとめて追加)。

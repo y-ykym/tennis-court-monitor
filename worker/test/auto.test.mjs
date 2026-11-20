@@ -549,7 +549,7 @@ test('追加枠(2026-10-25): 日付ピッカー(b)→ 時間帯とコートを�
   assert.deepEqual((await loadExclusions(env, NOW)).allowSlots, []);
 });
 
-test('追加枠(2026-11-03): 日を選ぶと A・B の都の予約一覧を見て、既に予約がある時間帯の行に「予約済み」の印を付ける(2026-11-20 から選べる)。以後のカードはその情報を持ち回る。一覧が取れなければ注意を添える。古い形(3 つ)の値も読める', async () => {
+test('追加枠(2026-11-03): 日を選ぶと A・B の都の予約一覧を見て、既に予約がある時間帯は押せない「予約済み」の行にする。以後のカードはその情報を持ち回り、決定でも選べない。一覧が取れなければ注意を添えて全部出す。古い形(3 つ)の値も読める', async () => {
   const env = envOf();
   env.BOOKING_KV.store.set('booking_url', 'https://abc.trycloudflare.com');
   const pi = { mode: 'on', active: true, lastCycle: { at: NOW } };
@@ -569,11 +569,11 @@ test('追加枠(2026-11-03): 日を選ぶと A・B の都の予約一覧を見�
   assert.equal(calls.length, 1);
   const t1 = texts(r1.flex.contents);
   assert.equal(t1.filter((x) => x === '予約済み').length, 2, '13:00 と 17:00 の行は「予約済み」');
-  assert.ok(t1.includes('13:00〜15:00') && t1.includes('17:00〜19:00'), '行は出す');
-  const HOURS_OPEN = ['9:00〜11:00', '11:00〜13:00', '13:00〜15:00', '15:00〜17:00', '17:00〜19:00', '19:00〜21:00'];
+  assert.ok(t1.includes('13:00〜15:00') && t1.includes('17:00〜19:00'), '行自体は出す(押せない)');
+  const HOURS_OPEN = ['9:00〜11:00', '11:00〜13:00', '15:00〜17:00', '19:00〜21:00'];
   const PARKS = ['猿江恩賜公園', '亀戸中央公園', '木場公園', '大島小松川公園']; // 公園コードの昇順(1040・1050・1060・1160)
-  assert.deepEqual(pb(r1).map((a) => a.label), [...HOURS_OPEN, ...PARKS], '予約済みの時間帯も押せる');
-  assert.match(r1.text, /・13:00〜15:00\(予約済み\)/);
+  assert.deepEqual(pb(r1).map((a) => a.label), [...HOURS_OPEN, ...PARKS], '予約済みの時間帯にはボタンが無い');
+  assert.match(r1.text, /×13:00〜15:00\(予約済み\)/);
   assert.ok(!t1.some((x) => x.includes('取れなかった')), '全員分取れたので注意は無い');
   // 押すと、予約済みの情報(13-17)を持ち回る(サイトへは見に行かない)
   const v1 = await verifyAutoData(SECRET, pb(r1)[0].data, NOW);
@@ -581,31 +581,26 @@ test('追加枠(2026-11-03): 日を選ぶと A・B の都の予約一覧を見�
   const r2 = await buildPostbackReply(env, pb(r1)[0].data, { now: NOW, fetchResults });
   assert.equal(calls.length, 1, '切り替えでは予約一覧を見に行かない');
   assert.equal(texts(r2.flex.contents).filter((x) => x === '予約済み').length, 2);
-  const r3 = await buildPostbackReply(env, pb(r2)[7].data, { now: NOW, fetchResults }); // 亀戸
+  const r3 = await buildPostbackReply(env, pb(r2)[5].data, { now: NOW, fetchResults }); // 亀戸
   assert.ok(texts(r3.flex.contents).includes('決定(1 枠)'));
   const confirm = pb(r3).find((a) => a.label === '決定');
   assert.equal((await verifyAutoData(SECRET, confirm.data, NOW)).value, '1050_20260916_09_13-17');
-  // 予約済みの 13:00 を押すと選択に入り(印は残る)、決定でそのまま追加枠に入る
-  const r4 = await buildPostbackReply(env, pb(r3)[2].data, { now: NOW, fetchResults });
-  assert.ok(texts(r4.flex.contents).includes('決定(2 枠)'));
-  assert.match(r4.text, /✓13:00〜15:00\(予約済み\)/);
-  const confirm2 = pb(r4).find((a) => a.label === '決定');
-  assert.equal((await verifyAutoData(SECRET, confirm2.data, NOW)).value, '1050_20260916_09-13_13-17');
-  await withPiStatus(pi, () => buildPostbackReply(env, confirm2.data, { now: NOW }));
-  assert.deepEqual((await loadExclusions(env, NOW)).allowSlots.map(slotKeyOf).sort(), ['1050|2026-09-16|09:00', '1050|2026-09-16|13:00']);
+  // 細工して予約済みの 13:00 を選択に入れても、決定では落ちる(9:00 だけ入る)
+  const forged = await signAutoData(SECRET, 'c', '1050_20260916_09-13_13-17', Math.floor(NOW / 1000) + 3600);
+  await withPiStatus(pi, () => buildPostbackReply(env, forged, { now: NOW }));
+  assert.deepEqual((await loadExclusions(env, NOW)).allowSlots.map(slotKeyOf), ['1050|2026-09-16|09:00']);
   // 古い形(3 つ)の値も今までどおり読める
   const old = await signAutoData(SECRET, 't', '1050_20260916_15', Math.floor(NOW / 1000) + 3600);
   const rOld = await buildPostbackReply(env, old, { now: NOW });
   assert.ok(texts(rOld.flex.contents).includes('決定(1 枠)'));
-  // まだ始まっていない時間帯が全部予約済みでも、カードは出る(全部選べる)
+  // まだ始まっていない時間帯が全部予約済みなら断る
   const allDay = async () => [{ slot: 'A', label: 'ゆう', reservations: [9, 11, 13, 15, 17, 19].map((h) => ({ date: '2026-09-18', start: `${String(h).padStart(2, '0')}:00`, end: `${h + 2}:00`, facility: '猿江恩賜公園' })) }];
   const rFull = await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-09-18' }, fetchResults: allDay });
-  assert.equal(pb(rFull).filter((a) => a.label.includes('〜')).length, 6);
-  assert.equal(texts(rFull.flex.contents).filter((x) => x === '予約済み').length, 6);
+  assert.match(rFull.text, /全部予約済み/);
   // 片方の人の一覧が取れなければ、その旨を添えて全部の時間帯を出す。取得自体が落ちても同じ
   const half = async () => [{ slot: 'A', label: 'ゆう', reservations: [] }, { slot: 'B', label: 'たろ', error: 'timeout' }];
   const rHalf = await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-09-16' }, fetchResults: half });
-  assert.ok(texts(rHalf.flex.contents).some((x) => x.includes('たろ(都の予約)が取れなかったため、「予約済み」の印が出ていない時間帯があるかもしれません')));
+  assert.ok(texts(rHalf.flex.contents).some((x) => x.includes('たろ(都の予約)が取れなかったため、予約済みの時間帯も出ています')));
   assert.equal(pb(rHalf).filter((a) => a.label.includes('〜')).length, 6);
   const rErr = await buildPostbackReply(env, add.data, { now: NOW, params: { date: '2026-09-16' }, fetchResults: async () => { throw new Error('down'); } });
   assert.ok(texts(rErr.flex.contents).some((x) => x.includes('都の予約一覧が取れなかったため')));

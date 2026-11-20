@@ -253,11 +253,11 @@ export function autoSettingsText({ status, dates, slots, allowSlots = [], today 
 }
 
 // ---- 「追加枠」の「＋ 追加」で日を選んだあとの、時間帯とコートを選ぶカード(複数選択。2026-10-25) ----
-// model = { date, penalty, hours: [{ hour, label, selected, data, blocked? }](まだ始まっていない枠だけ。blocked = 既に予約がある時間帯。右端に「予約済み」の印。2026-11-20 から選べる),
+// model = { date, penalty, hours: [{ hour, label, selected, data, blocked? }](まだ始まっていない枠だけ。blocked = 既に予約がある時間帯。押せない「予約済み」の行。2026-11-03),
 //           parks: [{ park, name, selected, data }], count, confirmData | null, warn(予約一覧が取れなかった等の注意) | null }
 //   行は押すたびに選択が切り替わる(postback x|t|…。Worker がこのカードを選択を変えて返す。チャットには何も残さない)。
 //   選んだ行は濃紺に「✓」、選んでいない行は薄い枠。下の「決定」(postback x|c|…)で 時間帯 × コート の枠をまとめて対象に入れる
-const toggleRow = (label, selected, data, note = null) => ({
+const toggleRow = (label, selected, data) => ({
   type: 'box',
   layout: 'horizontal',
   margin: 'sm',
@@ -274,7 +274,26 @@ const toggleRow = (label, selected, data, note = null) => ({
   contents: [
     text(selected ? '✓' : '　', { size: 'sm', weight: 'bold', color: '#FFFFFF', flex: 0 }),
     text(label, { size: 'sm', weight: 'bold', color: selected ? '#FFFFFF' : COLOR_TEXT, flex: 1, margin: 'md' }),
-    ...(note ? [text(note, { size: 'xs', color: selected ? '#FFFFFF' : COLOR_MUTED, flex: 0 })] : []),
+  ],
+});
+// 既に予約がある時間帯の行(押せない。薄い灰色に「予約済み」)
+const blockedRow = (label) => ({
+  type: 'box',
+  layout: 'horizontal',
+  margin: 'sm',
+  alignItems: 'center',
+  backgroundColor: '#F3F4F6',
+  borderColor: COLOR_LINE,
+  borderWidth: '1px',
+  cornerRadius: 'xl',
+  paddingTop: '8px',
+  paddingBottom: '8px',
+  paddingStart: '16px',
+  paddingEnd: '16px',
+  contents: [
+    text('　', { size: 'sm', weight: 'bold', color: COLOR_MUTED, flex: 0 }),
+    text(label, { size: 'sm', weight: 'bold', color: COLOR_MUTED, flex: 1, margin: 'md' }),
+    text('予約済み', { size: 'xs', color: COLOR_MUTED, flex: 0 }),
   ],
 });
 export function buildPickFlex({ date, penalty, hours, parks, count, confirmData = null, warn = null }) {
@@ -285,7 +304,7 @@ export function buildPickFlex({ date, penalty, hours, parks, count, confirmData 
   if (penalty) body.push(text('⚠ ペナルティ期間の日です。取れたあとで取り消すとペナルティ 1 点が付きます', { size: 'xs', color: '#8A4B00', wrap: true, margin: 'md' }));
   if (warn) body.push(text(`⚠ ${warn}`, { size: 'xs', color: '#8A4B00', wrap: true, margin: 'md' }));
   body.push(text('時間帯', { size: 'xs', weight: 'bold', color: COLOR_SUB, margin: 'lg' }));
-  for (const h of hours) body.push(toggleRow(h.label, h.selected, h.data, h.blocked ? '予約済み' : null));
+  for (const h of hours) body.push(h.blocked ? blockedRow(h.label) : toggleRow(h.label, h.selected, h.data));
   body.push(text('コート', { size: 'xs', weight: 'bold', color: COLOR_SUB, margin: 'lg' }));
   for (const p of parks) body.push(toggleRow(p.name, p.selected, p.data));
   if (confirmData) {
@@ -317,7 +336,7 @@ export function buildPickFlex({ date, penalty, hours, parks, count, confirmData 
   };
 }
 export function pickText({ date, penalty, hours, parks, count, warn = null }) {
-  const mark = (x, label) => `${x.selected ? '✓' : '・'}${label}${x.blocked ? '(予約済み)' : ''}`;
+  const mark = (x, label) => `${x.blocked ? '×' : x.selected ? '✓' : '・'}${label}${x.blocked ? '(予約済み)' : ''}`;
   return [
     `➕ 追加枠を追加: ${fmtDate(date)}`,
     `時間帯(複数可): ${hours.map((h) => mark(h, h.label)).join(' ')}`,
