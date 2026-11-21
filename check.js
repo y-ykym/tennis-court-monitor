@@ -18,7 +18,7 @@
 //   予定が取れなければ従来どおり全部通知(安全側)
 // ============================================================
 const fs = require('fs');
-const { scrapeAvailability } = require('./lib/scrape');
+const { scrapeAvailability, createListScraper } = require('./lib/scrape');
 const { filterTargetSlots } = require('./lib/filter');
 const { loadState, diffNewSlots, saveState } = require('./lib/state');
 const { sendLineMessage, formatMessage, warmupBookingServer } = require('./lib/notify');
@@ -35,7 +35,17 @@ const DRY_RUN = process.argv.includes('--dry-run');
     console.log(`[mock] ${process.env.MOCK_SLOTS_FILE} から ${slots.length}件読込`);
   } else {
     try {
-      slots = await scrapeAvailability();
+      // 空いている枠だけ返る一覧 JSON を公園ごとに 1 本取る(Pi の自動予約と同じ取り方。2026-11-21)。
+      // 以前は公園ごとに トップ + 検索 + 週 JSON × 4 の 6 通信(4 公園で 24 通信・週 JSON は 1 本 5.6 秒)だったのを、
+      // トップ + 一覧 の 2 通信(4 公園で 8 通信・一覧は 1 本 0.3〜0.4 秒)に減らす。都サイトへの負荷を下げるため。
+      // SCRAPE_LIST=0 で以前の取り方に戻す
+      if (process.env.SCRAPE_LIST === '0') {
+        slots = await scrapeAvailability();
+      } else {
+        slots = await createListScraper()();
+        // 一部の公園だけ取れなかった回は使わない(取れなかった公園の枠が「消えた」ことになり、次の回に同じ空きをもう一度通知してしまう)
+        if (slots.failures && slots.failures.length > 0) throw slots.failures[0].error;
+      }
     } catch (e) {
       // メンテナンスや一時的な障害の可能性が高いので、静かにスキップ(次回に任せる)。
       // 定期メンテの時間帯の決め打ちはしない(旧システムの公表値「毎月 27 日 12:00〜28 日 8:45」で
