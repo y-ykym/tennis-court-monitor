@@ -128,6 +128,7 @@ test('起動に失敗したら 1 分後にやり直す。読み直しに失敗�
   await flush();
   assert.equal(w.status().state, 'idle');
   assert.equal(w.status().failures, 1);
+  assert.equal(w.status().launchFailures, 1, 'Chromium 自体の起動失敗は launchFailures にも数える');
   failFirst = false;
   await clock.advance(60 * 1000);
   assert.equal(w.status().state, 'ready');
@@ -277,4 +278,17 @@ test('prefetch を渡すとトップを開くたびに呼び、結果を bundle.
   assert.equal(launched[0].prefetched.loginFields.loginJKey, 'K4');
   const b = await w.acquire();
   assert.equal(b.prefetched.loginFields.loginJKey, 'K4');
+});
+
+test('都サイトの「お知らせ」でトップが開けないだけなら launchFailures は数えない(警報の誤報よけ。2026-11-22)', async () => {
+  const clock = fakeClock();
+  const { launch } = fakeLaunch({ notice: true });
+  const w = createBrowserWarmer({ launch, topUrl: TOP, now: clock.now, timers: clock.timers });
+  w.start();
+  await flush();
+  await clock.advance(60 * 1000);
+  await clock.advance(2 * 60 * 1000);
+  assert.equal(w.status().failures, 3);
+  assert.equal(w.status().launchFailures, 0);
+  w.stop();
 });

@@ -62,7 +62,7 @@ if ck.get('checks'): print(f"    サイトとの照らし合わせ(起動して�
 nh = s.get('nightHold')
 if nh and nh.get('held'): print(f"  夜間に溜めている成立カード: {nh['held']} 件(8:00 にまとめて送る。次の送信 {jst(nh.get('nextFlushAt') or 0)})")
 w = s.get('warm')
-if w: print(f"  先に起こしたブラウザ: {w.get('state')}{'(予約で使用中)' if w.get('busy') else ''}  トップ読み込み {jst(w.get('topLoadedAt') or 0)}  起動 {w.get('launched')} 回  連続失敗 {w.get('failures')}")
+if w: print(f"  先に起こしたブラウザ: {w.get('state')}{'(予約で使用中)' if w.get('busy') else ''}  トップ読み込み {jst(w.get('topLoadedAt') or 0)}  起動 {w.get('launched')} 回  連続失敗 {w.get('failures')}(うち起動失敗 {w.get('launchFailures', '-')})")
 if last_err: print(f'  ※ 直近の照会でエラー(連続 {fails} 回)。回線か予約サイト側の一時的な不調が多い。下の fetch failed 件数を見る')
 if fails >= 3: print('  ※ 想定外の応答の実物は docker compose exec booking cat /var/lib/booking/last-scrape-failure.html で見られる(最新 1 件)')
 

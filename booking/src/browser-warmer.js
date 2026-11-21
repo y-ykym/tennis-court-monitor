@@ -20,7 +20,10 @@
 //                      (同じプロファイルで 2 つ目を起こすと「使用中」で失敗するため。null を返した場合も同じ)
 //   warmer.resume()    予約が終わった合図。少し置いて次を起こす(手放した束が閉じられていることも確かめる)
 //   warmer.stop()      止めて閉じる
-//   warmer.status()    { state: 'idle'|'launching'|'ready'|'refreshing'|'handed'|'stopped', busy, topLoadedAt, launched, failures }
+//   warmer.status()    { state: 'idle'|'launching'|'ready'|'refreshing'|'handed'|'stopped', busy, topLoadedAt, launched, failures, launchFailures }
+//                      failures は起こし直しの待ち方に使う連続失敗(都サイトの 502 やお知らせも含む)。
+//                      launchFailures は Chromium 自体を起動できなかった連続回数(都サイトの不調は数えない)。
+//                      「ブラウザが起動できません」の警報は launchFailures で判定する(2026-11-22: 22 日 0 時の都サイト 502 で誤報した)
 //
 // 予約の行列は直列なので、同時に使われる bundle は常に 1 つ。
 // ============================================================
@@ -52,6 +55,7 @@ export function createBrowserWarmer({
   let timer = null;
   let launched = 0;
   let failures = 0;
+  let launchFailures = 0;
   let stopped = false;
 
   const clearTimer = () => {
@@ -112,7 +116,13 @@ export function createBrowserWarmer({
     inflight = (async () => {
       let b = null;
       try {
-        b = await launch();
+        try {
+          b = await launch();
+        } catch (e) {
+          launchFailures++;
+          throw e;
+        }
+        launchFailures = 0;
         launched++;
         await loadTop(b);
         if (stopped) {
@@ -232,5 +242,5 @@ export function createBrowserWarmer({
     state = 'stopped';
   }
 
-  return { start, acquire, resume, stop, status: () => ({ state, busy, topLoadedAt: bundle?.topLoadedAt ?? null, launched, failures }) };
+  return { start, acquire, resume, stop, status: () => ({ state, busy, topLoadedAt: bundle?.topLoadedAt ?? null, launched, failures, launchFailures }) };
 }

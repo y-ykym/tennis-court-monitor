@@ -138,6 +138,9 @@ test('monitor: 自動予約の判定(autoIssue)。auto-check.sh の「✔ 動い
   const c = autoIssue({ ...autoOk, lastSeenAt: now - 60000, warm: { state: 'launching', failures: 3 } }, now);
   assert.equal(c.kind, 'browser_failing');
   assert.match(c.text, /ブラウザが起動できません\(3 回連続\)/);
+  // 都サイトの 502 でトップが開けないだけ(Chromium は起動できている)なら鳴らさない(2026-11-22 の誤報)
+  assert.equal(autoIssue({ ...autoOk, lastSeenAt: now - 60000, warm: { state: 'idle', failures: 6, launchFailures: 0 } }, now), null);
+  assert.equal(autoIssue({ ...autoOk, lastSeenAt: now - 60000, warm: { state: 'idle', failures: 3, launchFailures: 3 } }, now)?.kind, 'browser_failing');
   // 古い Pi(項目が無い)でも落ちない
   assert.equal(autoIssue({ ...autoOk, lastSeenAt: now - 60000, consecutiveFailures: null, warm: null }, now), null);
 });

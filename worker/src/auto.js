@@ -315,7 +315,7 @@ export async function autoStatus(env, now = Date.now(), { attempts = PROBE_ATTEM
           lastSeenAt,
           startedAt: typeof st.startedAt === 'number' ? st.startedAt : null,
           consecutiveFailures: typeof st.consecutiveFailures === 'number' ? st.consecutiveFailures : null,
-          warm: st.warm && typeof st.warm === 'object' ? { state: st.warm.state ?? null, failures: typeof st.warm.failures === 'number' ? st.warm.failures : 0 } : null,
+          warm: st.warm && typeof st.warm === 'object' ? { state: st.warm.state ?? null, failures: typeof st.warm.failures === 'number' ? st.warm.failures : 0, launchFailures: typeof st.warm.launchFailures === 'number' ? st.warm.launchFailures : null } : null,
           reason: '',
         };
       }

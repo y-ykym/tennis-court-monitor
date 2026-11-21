@@ -105,8 +105,10 @@ export async function probeBookingServer(env, { attempts = PROBE_ATTEMPTS, retry
 //   (a) 照会ループが止まっている: mode が 'on' なのに最後の照会が AUTO_STALL_MS より古い。起動直後(startedAt から AUTO_STALL_MS 以内)は初回の照会前なので見ない
 //   (b) 空き照会がずっと失敗している: consecutiveFailures が AUTO_FAIL_ALERT_AFTER 以上(Pi は 3 回目から間隔を 3→5→10→15 分と広げるので、
 //       6 回目はおよそ 20 分以上失敗が続いた状態。予約サイトのメンテナンス、仕様変更、回線の長い不調)。10/31 の回線不調では最大 5 回だった
-//   (c) ブラウザを先に起こせない: warm.failures が AUTO_WARM_ALERT_AFTER 以上(Chromium が起動できない。プロファイルの壊れなど。
-//       起こせないと予約は UI 経路でもやり直すが、毎回 40 秒ほど遅れて先を越されやすい)
+//   (c) ブラウザを先に起こせない: warm.launchFailures が AUTO_WARM_ALERT_AFTER 以上(Chromium が起動できない。プロファイルの壊れなど。
+//       起こせないと予約は UI 経路でもやり直すが、毎回 40 秒ほど遅れて先を越されやすい)。
+//       都サイトの 502・お知らせでトップが開けないだけのときは数えない((b) の空きチェック失敗の側で知らせる)。
+//       launchFailures を返さない古い Pi では従来どおり warm.failures で判定する
 // どれかに当てはまったら 1 回だけ ⚠️(何が起きているかを書く)、全部消えたら ✅ を 1 回
 export const AUTO_STALL_MS = 15 * 60 * 1000;
 export const AUTO_FAIL_ALERT_AFTER = 6;
@@ -122,8 +124,9 @@ export function autoIssue(auto, now) {
   if (auto.consecutiveFailures != null && auto.consecutiveFailures >= AUTO_FAIL_ALERT_AFTER) {
     return { kind: 'scrape_failing', text: `⚠️ 自動予約の空きチェックが連続 ${auto.consecutiveFailures} 回失敗しています(予約サイトのメンテナンスか、サイトの変更か、自宅回線の不調)\n空き通知(Actions)が届いていればサイトは生きているので Pi 側の問題です。Pi で ./auto-check.sh を確認してください` };
   }
-  if (auto.warm && auto.warm.failures >= AUTO_WARM_ALERT_AFTER) {
-    return { kind: 'browser_failing', text: `⚠️ 自動予約のブラウザが起動できません(${auto.warm.failures} 回連続)。空きが出ても予約が遅れるか失敗します\nPi で ./auto-check.sh と docker compose logs booking を確認してください` };
+  const warmFails = auto.warm ? (typeof auto.warm.launchFailures === 'number' ? auto.warm.launchFailures : auto.warm.failures) : 0;
+  if (warmFails >= AUTO_WARM_ALERT_AFTER) {
+    return { kind: 'browser_failing', text: `⚠️ 自動予約のブラウザが起動できません(${warmFails} 回連続)。空きが出ても予約が遅れるか失敗します\nPi で ./auto-check.sh と docker compose logs booking を確認してください` };
   }
   return null;
 }
