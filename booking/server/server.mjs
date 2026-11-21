@@ -31,6 +31,8 @@
 //   DEBUG_DIR               失敗時のスクリーンショットと HTML の置き場(既定 /tmp/debug-out。volume に置くと作り直しても残る。7 日で削除)
 //   WARM_PRESEARCH_PARK     先に起こしたブラウザで検索しておく公園コード。カンマ区切りで複数可(例 1160,1050,1040。2026-11-01 から)。
 //                           既定 1040 = 猿江。空にすると検索の先取りをしない。ログイン画面の先取りは常に行う
+//   WARM_SEARCH_HTTP=0      検索の先取りをブラウザの外(src/search-cache.js。公園ごとに別の通信で同時に取る。既定 on。2026-11-21)で行うのをやめ、
+//                           以前のとおり先に起こしたブラウザの中で公園を順番に検索する
 //   LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID  結果カードと「確認が必要です」カードを LINE に push する。
 //                           回線断で送れなかったカードは PENDING_LINE_FILE に保存し、1 分ごとに再送(src/line-queue.js)
 //   BOOKING_PUBLIC_URL / WORKER_URL  そのカードのボタンに使う、外から届く URL(玄関の Worker)。WORKER_URL は自動予約の合図の宛先にも使う
@@ -56,6 +58,7 @@ import { createRequire } from 'node:module';
 import { reserve, launchBrowserForReserve } from '../src/reserve.js';
 import { createBrowserWarmer } from '../src/browser-warmer.js';
 import { prefetchInPage } from '../src/site-inpage.js';
+import { createSearchCache } from '../src/search-cache.js';
 import { createFileLog } from '../src/file-log.js';
 import { createMorningDigest } from '../src/morning-digest.js';
 import { buildChallengeFlex, buildResultFlex, pushResult } from '../src/result-flex.js';
@@ -187,11 +190,16 @@ function launchOptions() {
   if (PROFILE_LOCAL) o.userDataDir = PROFILE_DIR; // ブラウザプロファイル(Cookie 等)を前回から引き継ぐ
   return o;
 }
+// 検索の先取りはブラウザの外で行う(2026-11-21)。ブラウザの中で 4 公園を順番に検索すると昼間は 15〜30 秒かかり、30 秒の打ち切りで全部捨てる回と、
+// 先取りの最中に空きが出て終わるまで待つ回があった。検索結果の hidden はセッションに依らないので、別の通信で同時に取って予約のときに渡す。
+// ブラウザの先取りはログイン画面 1 往復だけになる
+const SEARCH_HTTP = process.env.WARM_SEARCH_HTTP !== '0' && WARM_PRESEARCH_PARKS.length > 0;
+const searchCache = SEARCH_HTTP ? createSearchCache({ parks: WARM_PRESEARCH_PARKS, log: (m) => log(`[warm] ${m}`) }) : null;
 const warmer = BROWSER_WARM
   ? createBrowserWarmer({
       launch: () => launchBrowserForReserve(launchOptions(), (m) => log(`  [warm] ${m}`)),
       topUrl: 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp',
-      prefetch: (b) => b.page.evaluate(prefetchInPage, { parks: WARM_PRESEARCH_PARKS, date: jstTodayIso() }),
+      prefetch: (b) => b.page.evaluate(prefetchInPage, { parks: searchCache ? [] : WARM_PRESEARCH_PARKS, date: jstTodayIso() }),
       log: (m) => log(`[warm] ${m}`),
     })
   : null;
@@ -262,6 +270,10 @@ async function runReserve(s, extra = {}) {
     debugDir: DEBUG_DIR, // 失敗時のスクリーンショットと HTML(個人情報を含む。Pi の外に出さない)
     log: (m) => log(`  ${m}`),
     ...extraOptions,
+    // ブラウザの外で取っておいた検索結果(やり直しのたびに最新を渡す)
+    get searches() {
+      return searchCache ? searchCache.current() : null;
+    },
   };
   let result;
   try {
@@ -551,6 +563,8 @@ const server = http.createServer((req, res) => {
         lastCycle: autoRunner?.lastCycle() ?? null,
         // 先に起こしてあるブラウザの状態(src/browser-warmer.js。auto-check が表示する)
         warm: warmer ? warmer.status() : null,
+        // 検索の先取り(ブラウザの外。src/search-cache.js)で今使える公園
+        searchCache: searchCache ? searchCache.status() : null,
         // 夜間に溜めている成立カード(8:00 にまとめて送る)
         nightHold: morningDigest ? morningDigest.status() : null,
         // 空き照会の連続失敗回数(3 回以上で照会の間隔を広げている。サイトのメンテナンス中はここが増え続ける)
@@ -646,6 +660,7 @@ if (morningDigest) {
   morningDigest.start();
   log('夜間(0:00〜8:00)に成立した自動予約のカードは 8:00 にまとめて送ります(NIGHT_HOLD=0 でやめられる)');
 }
+if (searchCache) searchCache.start();
 if (warmer) {
   warmer.start();
   log('[warm] ブラウザを先に起こしておきます(BROWSER_WARM=0 でやめられる)');

@@ -24,6 +24,8 @@
 //     listAfter: false,      予約が成立した後に、その人の予約一覧(prwha1000)を開いて結果に reservationsAfter として付ける(2026-11-19)。
 //                            予約の前の一覧(reservationList)を省いたとき、同じ日に 2 件入っていないかを呼び出し側が確かめるのに使う。
 //                            成立の後なので取り合いには影響しない。取れなければ付けない(結果は success のまま)
+//     searches: null,        ブラウザの外で取っておいた検索結果 { [公園コード]: { instCd, facility, fields, date } }(src/search-cache.js)。
+//                            その公園の分があれば、高速経路はログイン後の検索 1 往復を省く(先に起こしたブラウザの先取りと同じ扱い)
 //     warm: null,            launchBrowserForReserve() で先に起こしてあるブラウザ { browser, context, page, setPhase, close, topLoadedAt }。
 //                            渡すと起動を省き、fastInPage で topLoadedAt が新しければトップページの読み込みも省く(src/browser-warmer.js。2026-10-25)。
 //                            渡したブラウザはこの関数が閉じる
@@ -285,6 +287,14 @@ async function parseResultTable(page) {
   });
 }
 
+// 先に起こしたブラウザの先取り(prefetched。無ければ null)に、ブラウザの外で取っておいた検索結果(searches)を足して返す。
+// 今日の日付で取れていて中身のある公園だけを使う。足すものが無ければ prefetched をそのまま返す
+export function mergeSearches(prefetched, searches, today) {
+  const extra = searches && typeof searches === 'object' ? Object.fromEntries(Object.entries(searches).filter(([, v]) => v && v.instCd && v.fields && v.date === today)) : {};
+  if (Object.keys(extra).length === 0) return prefetched;
+  return { loginFields: null, loginRecaptcha: false, search: null, ...(prefetched || {}), searches: { ...(prefetched?.searches || {}), ...extra } };
+}
+
 export async function reserve(slot, credentials, options = {}) {
   const { headless = true, dryRun = false, log = () => {}, debugDir = null, onConfirm = null, fastInPage = false, reservationList = false, beforeApply = null } = options;
   const started = Date.now();
@@ -426,6 +436,9 @@ export async function reserve(slot, credentials, options = {}) {
         // 日付が変わった直後(0:00〜次の読み直し)は検索条件が前日のまま。ログイン画面の先取りだけ使い、検索はやり直す(3 公園分 searches も)
         prefetched = { ...prefetched, search: null, searches: null };
       }
+      // ブラウザの外で取っておいた検索結果(options.searches。src/search-cache.js。2026-11-21)を足す。検索結果の hidden はセッションに依らないので、
+      // 先に起こしたブラウザが無い・トップを読み直した場合でも使える(ログイン画面の先取りだけは、同じセッションのものでないと使えない)
+      prefetched = mergeSearches(prefetched, options.searches, jstTodayIso());
       const r = await page.evaluate(inPageFlow, {
         slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour), vacant: Number.isFinite(vacant) && vacant >= 1 ? vacant : null, tzoneNo: tz },
         credentials,
