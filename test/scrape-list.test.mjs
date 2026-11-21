@@ -97,9 +97,21 @@ test('一覧が JSON でない・別の公園のもの(セッション未認識)
   assert.deepEqual(slots.failures, []);
 });
 
-test('使い回したセッションで空(all=0)なら、新しいセッションで 1 回取り直してから「空きなし」と受け入れる', async () => {
+test('使い回したセッションで空(all=0)でも取り直さず、そのまま「空きなし」と受け入れる(満員の公園で照会が延びないように)', async () => {
   const site = fakeSite({ list: (session, form) => (form.selectAreaBcd === '1050' ? listJson([]) : undefined) });
   const { scrape } = make(site);
+  let slots = await scrape();
+  assert.equal(site.calls.top, 2);
+  slots = await scrape(); // 2 回目(使い回し)で空 → 取り直さない
+  assert.equal(site.calls.top, 2, 'セッションは作り直さない');
+  assert.equal(site.calls.list, 4, '公園ごとに 1 照会 1 本だけ');
+  assert.equal(slots.filter((s) => s.facility === '亀戸中央公園').length, 0);
+  assert.deepEqual(slots.failures, []);
+});
+
+test('recheckEmpty(AUTO_LIST_RECHECK_EMPTY=1)なら、使い回したセッションで空のとき新しいセッションで 1 回取り直す(以前の動き)', async () => {
+  const site = fakeSite({ list: (session, form) => (form.selectAreaBcd === '1050' ? listJson([]) : undefined) });
+  const { scrape } = make(site, { recheckEmpty: true });
   let slots = await scrape(); // 初回(新しいセッション)は取り直さない
   assert.equal(slots.filter((s) => s.facility === '亀戸中央公園').length, 0);
   assert.equal(site.calls.top, 2);

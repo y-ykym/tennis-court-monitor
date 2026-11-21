@@ -48,6 +48,8 @@ services:
       AUTO_SCRAPE_WEEKS: '1'
       # 2026-11-08: 既定は「空いている枠だけ返る一覧 JSON を公園ごとに 1 本」(1〜2 秒)。'0' で上の公園 × 週の方式に戻す
       AUTO_SCRAPE_LIST: '1'
+      # 2026-11-21: 一覧が空(満員)の公園を新しいセッションで取り直すのをやめた(照会が 5 秒 → 10〜18 秒に延びていたため)。'1' で以前の取り直しに戻す
+      AUTO_LIST_RECHECK_EMPTY: '0'
       # 想定外の応答(メンテナンス画面など)の最新 1 件だけを上書きで残す(メンテ中に何が返るかの実物を記録するため。2026-09-27)
       SCRAPE_LAST_FAILURE_FILE: /var/lib/booking/last-scrape-failure.html
       AUTO_STATE_FILE: /var/lib/booking/auto-state.json
