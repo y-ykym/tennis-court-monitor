@@ -502,6 +502,13 @@ test('照会間隔(JST): 1 分が基本、12 時台・20〜24 時は 30 秒、7�
   assert.equal(pollIntervalAt(jst('2026-09-15', '22:00'), 60_000), 30_000); // 2026-11-01 に 22〜24 時は 30 秒
   assert.equal(pollIntervalAt(jst('2026-09-15', '23:59'), 60_000), 30_000);
   assert.equal(pollIntervalAt(jst('2026-09-15', '03:00'), 60_000, []), 60_000, '設定が無ければ常に同じ');
+  // 2026-11-21: 毎月 22 日の 0 時台だけ 30 秒(翌月分の先着受付が 22 日 0:00 に開く)
+  assert.equal(pollIntervalAt(jst('2026-11-21', '23:59'), 60_000), 30_000);
+  assert.equal(pollIntervalAt(jst('2026-11-22', '00:00'), 60_000), 30_000);
+  assert.equal(pollIntervalAt(jst('2026-11-22', '00:59'), 60_000), 30_000);
+  assert.equal(pollIntervalAt(jst('2026-11-22', '01:00'), 60_000), 180_000);
+  assert.equal(pollIntervalAt(jst('2026-11-23', '00:00'), 60_000), 60_000);
+  assert.equal(pollIntervalAt(jst('2026-12-22', '00:30'), 60_000), 30_000);
 });
 
 test('実枠テスト用: forgetFile に書いた枠キーは既知から外れ、次の周期で「新しく出た」扱いになる(ファイルは消える)', async () => {

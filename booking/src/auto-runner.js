@@ -123,11 +123,14 @@ export function nextDelayMs({ startedAt, finishedAt, intervalMs, minGapMs = MIN_
   return Math.max(startedAt + intervalMs - finishedAt, minGapMs);
 }
 
-// その時刻(JST)に使う照会間隔。AUTO_BOOKING.POLL_SCHEDULE の時間帯(FROM <= 時刻 < TO)に当たればその間隔、当たらなければ baseIntervalMs
+// その時刻(JST)に使う照会間隔。AUTO_BOOKING.POLL_SCHEDULE の時間帯(FROM <= 時刻 < TO)に当たればその間隔、当たらなければ baseIntervalMs。
+// DAY(JST の日。1〜31)がある行はその日だけ当たる。上から順に見て最初に当たった行を使うので、日付つきの行は先に書く(2026-11-21)
 export function pollIntervalAt(nowMs, baseIntervalMs, schedule = AUTO_BOOKING.POLL_SCHEDULE) {
   if (!schedule || schedule.length === 0) return baseIntervalMs;
   const hhmm = jstHHMM(nowMs);
+  const day = new Date(nowMs + 9 * 3600 * 1000).getUTCDate();
   for (const w of schedule) {
+    if (w.DAY != null && w.DAY !== day) continue;
     const hit = w.FROM < w.TO ? hhmm >= w.FROM && hhmm < w.TO : hhmm >= w.FROM || hhmm < w.TO;
     if (hit) return Math.max(w.POLL_INTERVAL_MS, AUTO_BOOKING.MIN_POLL_INTERVAL_MS);
   }
@@ -829,7 +832,7 @@ export function createAutoRunner({
 
   function start() {
     if (timer) return api;
-    const sched = (AUTO_BOOKING.POLL_SCHEDULE || []).map((w) => `${w.FROM}〜${w.TO} は ${Math.round(w.POLL_INTERVAL_MS / 1000)} 秒`).join('、');
+    const sched = (AUTO_BOOKING.POLL_SCHEDULE || []).map((w) => `${w.DAY != null ? `毎月 ${w.DAY} 日の ` : ''}${w.FROM}〜${w.TO} は ${Math.round(w.POLL_INTERVAL_MS / 1000)} 秒`).join('、');
     log(`自動予約の照会ループを開始: mode=${mode} 間隔=${Math.round(interval / 1000)}秒${sched ? `(${sched})` : ''}`);
     const loop = async () => {
       const startedAt = now();
