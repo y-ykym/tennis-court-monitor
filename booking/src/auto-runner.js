@@ -10,6 +10,7 @@
 //     → 候補を 1 件ずつ予約の行列(booking-queue.js)に入れる。行列は 1 件ずつ実行し、手動(LINE ボタン)を優先する
 //     → 一時エラー(error)で終わった枠は、直近の照会でまだ空いていれば待たずにその場でもう一度予約する(ERROR_RETRY_NOW_MAX=1 回。2026-11-08)
 //     → それでも error で終わった枠が ERROR_RETRY_AFTER_MS(5 分)後もまだ空いていれば、同じ流れで再挑戦する(ERROR_RETRY_MAX=2 回まで。2026-11-06)
+//     → 行列に他の枠が待っているときは、error の枠をすぐ捨てずに行列の後ろへ戻す(ERROR_REQUEUE_MAX=2 回まで。2026-11-22)
 //   各候補の実行(行列の中):
 //     まず「いま」の時刻で対象かどうかをもう一度判定する(要件 #11。23:59 に見つけて 00:01 に実行すると +3 日 = ペナルティ期間になる。
 //     +4 日の枠は 23:35 以降は自動予約しない)。対象外になっていたら予約せず、Pi 自身が従来の空き通知カード(予約ボタン付き)を送る
@@ -74,6 +75,12 @@ export const ERROR_RETRY_MAX = 2;
 // (reserve.js が押した後の error では予約一覧で未成立を確かめて error にしている)ので、やり直しの前に一覧を見直す処理は入れない。
 // 直近の照会で枠が消えていれば taken 相当なのでやり直さない
 export const ERROR_RETRY_NOW_MAX = 1;
+// error で終わった枠を、行列の後ろへ戻してもう一度挑戦する回数(2026-11-22 本人指示)。
+// 22 日 0 時の先着受付で亀戸 9 枠が並んだとき、都サイトの 502 で 1 枠に 1〜5 分かかり、error の枠はそのまま捨てられた。
+// 同時に空き照会も 502 で止まり(15 分の間隔あけ)、5 分後の再挑戦(tick 側)も動けず、25 分後に 9 枠とも消えていた。
+// 戻すのは「他の枠が行列で待っている」ときだけ(先に他の枠の 1 回目を済ませる。行列が空なら従来どおり 5 分後の再挑戦に任せる)。
+// 予約が入っていないことは reserve.js が error の前に確かめているので、戻しても二重にはならない
+export const ERROR_REQUEUE_MAX = 2;
 // 照会が間隔より長くかかったとき、次の照会までに最低これだけ空ける
 export const MIN_GAP_MS = 15 * 1000;
 // 空き照会で一部の 公園×週 だけ取れなかったとき(lib/scrape.js の failures)、その分は前回の結果で補って照会を続ける(2026-11-08)。
@@ -186,7 +193,8 @@ export function createAutoRunner({
   // 利用日ごとの残り枚数(予約一覧を見た結果から)。DAY_REMAINING_TTL_MS を過ぎたら忘れて、次はまた一覧を見て数える
   // (本人が LINE やサイトで取り消した後に「まだ 1 件ある」と思い込み続けないため)
   const dayRemaining = new Map(); // date → { remaining, at }
-  const authFailedAt = new Map(); // person → ログインが拒否された時刻
+  const authFailedAt = new Map();
+  const requeued = new Map(); // 枠ごとの「行列の後ろへ戻した」回数(ERROR_REQUEUE_MAX まで。再起動で消えてよい) // person → ログインが拒否された時刻
   const tbPlans = new Map(); // person → { configured, events, at }(テニスベアの予定。隣接の判定用)
   const remainingFor = (date) => {
     const r = dayRemaining.get(date);
@@ -711,6 +719,7 @@ export function createAutoRunner({
     }
     attempt(c, result.status, result.message, resultExtra(result));
     log(`自動予約 結果: ${result.status} ${describe(c)} ${result.message || ''}`.trim());
+    if (result.status === 'error') requeueAfterError(c, creds, stillVacant);
 
     if (ok) {
       const park = parkOf(c.park);
@@ -759,6 +768,26 @@ export function createAutoRunner({
     }
     state.save();
     return result;
+  }
+
+  // error で終わった枠を行列の後ろへ戻す(ERROR_REQUEUE_MAX 回まで)。今の実行が終わる前に入れるので、待っている他の枠の後ろに付く
+  function requeueAfterError(c, creds, stillVacant) {
+    const key = c.key;
+    const n = requeued.get(key) || 0;
+    if (n >= ERROR_REQUEUE_MAX) return;
+    if (queue.waiting().length === 0) return; // 待っている枠が無ければ従来どおり 5 分後の再挑戦に任せる
+    if (!stillVacant()) {
+      log(`  行列の後ろへは戻しません(その後の空き照会で枠が消えている): ${describe(c)}`);
+      return;
+    }
+    if (!bookingEnabled()) return;
+    const r = queue.submit({ id: key, kind: 'auto', meta: c, run: () => runCandidate(c, creds) }, { requeue: true });
+    if (r.status === 'duplicate') return;
+    requeued.set(key, n + 1);
+    state.markAttempt(key, 'queued');
+    state.save();
+    event('requeued', { key, n: n + 1 });
+    log(`  行列の後ろへ戻しました(一時エラーのため。${n + 1}/${ERROR_REQUEUE_MAX} 回目。待ち ${queue.waiting().length} 件): ${describe(c)}`);
   }
 
   // その人のテニスベアの予定(隣接の判定用)。Worker の /auto/tennisbear を呼び、TB_PLANS_TTL_MS の間は使い回す。

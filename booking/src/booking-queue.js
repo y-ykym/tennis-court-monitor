@@ -2,7 +2,7 @@
 // 予約実行の行列(フェーズ3)。ブラウザは 1 つしかないので予約は 1 件ずつ順に実行する。
 //
 //   const q = createBookingQueue({ log })
-//   q.submit({ id, kind: 'manual'|'auto', run: () => Promise<result> })
+//   q.submit({ id, kind: 'manual'|'auto', run: () => Promise<result> }, { requeue })
 //     → { status: 'started'|'queued'|'duplicate', promise }
 //        started   すぐ実行を始めた(空いていた)
 //        queued    いま別の予約を実行中なので待たせた(実行が終わると順に始まる)
@@ -40,9 +40,10 @@ export function createBookingQueue({ log = () => {} } = {}) {
       });
   }
 
-  function submit(job) {
+  // requeue: true は「実行中の自分を行列の後ろへ入れ直す」用(auto-runner の error の枠。2026-11-22)。実行中の同じ id は重複とみなさない
+  function submit(job, { requeue = false } = {}) {
     if (!job || !job.id || typeof job.run !== 'function') throw new Error('job には id と run が必要です');
-    if (has(job.id)) return { status: 'duplicate', promise: null };
+    if (requeue ? waiting.some((j) => j.id === job.id) : has(job.id)) return { status: 'duplicate', promise: null };
     const entry = { id: job.id, kind: job.kind === 'manual' ? 'manual' : 'auto', run: job.run, meta: job.meta || null, queuedAt: Date.now() };
     entry.promise = new Promise((resolve) => {
       entry.resolve = resolve;

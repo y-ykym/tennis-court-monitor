@@ -60,3 +60,22 @@ test('行列: 失敗しても止まらず次へ進む。結果は promise で受
   assert.match(r1.error.message, /boom/);
   assert.deepEqual(await good.promise, { ok: true, result: 'fine' });
 });
+
+test('requeue: 実行中の自分を行列の後ろへ入れ直せる(待ち行列に同じ id があれば重複)', async () => {
+  const q = createBookingQueue();
+  const order = [];
+  let again = true;
+  const runA = async () => {
+    order.push('A');
+    if (again) {
+      again = false;
+      assert.equal(q.submit({ id: 'A', kind: 'auto', run: runA }).status, 'duplicate', '通常の submit では実行中の id は重複');
+      assert.equal(q.submit({ id: 'A', kind: 'auto', run: runA }, { requeue: true }).status, 'queued');
+      assert.equal(q.submit({ id: 'A', kind: 'auto', run: runA }, { requeue: true }).status, 'duplicate', '待ち行列に既にあれば重複');
+    }
+  };
+  q.submit({ id: 'A', kind: 'auto', run: runA });
+  q.submit({ id: 'B', kind: 'auto', run: async () => order.push('B') });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(order, ['A', 'B', 'A']);
+});

@@ -200,7 +200,7 @@ test('1 日の上限: 一覧で既にその日に予約(手動分)があれば�
 });
 
 test('失敗カード: ログインできない・reCAPTCHA 拒否は送る(放置すると自動予約が止まる)。先に取られた・断られた・サイトのエラーは送らない', async () => {
-  const statuses = ['auth_error', 'rejected', 'error', 'error' /* error 直後のその場のやり直し(2026-11-08) */, 'taken', 'duplicate'];
+  const statuses = ['auth_error', 'rejected', 'error', 'error' /* error 直後のその場のやり直し(2026-11-08) */, 'taken', 'duplicate', 'taken' /* error の枠を行列の後ろへ戻した分(2026-11-22) */];
   let i = 0;
   const h = harness({ book: async () => ({ status: statuses[i++], message: 'x' }) });
   await h.runner.tick();
@@ -213,8 +213,8 @@ test('失敗カード: ログインできない・reCAPTCHA 拒否は送る(放�
     slot('猿江恩賜公園', '2026-09-30', '19:00-21:00'),
   ]);
   await h.runner.tick();
-  await flush();
-  assert.equal(i, 6);
+  for (let k = 0; k < 3; k++) await flush();
+  assert.equal(i, 7);
   const reasons = h.notified.map((x) => JSON.stringify(x.m.contents.body));
   assert.equal(reasons.length, 2);
   assert.match(reasons[0], /ログインできませんでした/);
@@ -1701,4 +1701,69 @@ test('一覧の省略(2026-11-19): 成立後の一覧が取れなくても成立
   await flush();
   assert.equal(h2.state.attemptStatus('1160|2026-10-03|09:00'), 'success');
   assert.deepEqual(h2.added.map((s) => `${s.date} ${s.start}`), ['2026-09-26 13:00'], '一覧から消えた自動予約の枠を除外枠に登録');
+});
+
+test('行列の後ろへ戻す(2026-11-22): error の枠は、他の枠が待っていれば後ろへ戻してもう一度挑戦する', async () => {
+  const calls = [];
+  const h = harness({
+    book: async (c, { beforeApply }) => {
+      const stop = await beforeApply({ reservations: [] });
+      if (stop) return stop;
+      const k = `${c.date} ${c.startHour}`;
+      calls.push(k);
+      const mine = calls.filter((x) => x === k).length;
+      if (c.date === '2026-09-29' && mine <= 2) return { status: 'error', message: 'HTTP 502' };
+      return { status: 'success', reservationNo: `R${calls.length}`, facility: c.facility };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-30', '19:00-21:00')]);
+  await h.runner.tick();
+  for (let i = 0; i < 5; i++) await flush();
+  assert.deepEqual(calls, ['2026-09-29 19', '2026-09-29 19', '2026-09-30 19', '2026-09-29 19'], '29 日は 2 回 error のあと、30 日の 1 回目を先に済ませてから戻って挑戦');
+  assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'success');
+  assert.equal(h.state.attemptStatus('1040|2026-09-30|19:00'), 'success');
+  assert.ok(h.logs.some((l) => l.includes('行列の後ろへ戻しました(一時エラーのため。1/2 回目')), h.logs.join('\n'));
+});
+
+test('行列の後ろへ戻す(2026-11-22): 戻すのは 1 枠 2 回まで。待っている枠が無ければ戻さない', async () => {
+  const calls = [];
+  const h = harness({
+    book: async (c, { beforeApply }) => {
+      const stop = await beforeApply({ reservations: [] });
+      if (stop) return stop;
+      calls.push(`${c.date} ${c.startHour}`);
+      return { status: 'error', message: 'HTTP 502' };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00'), slot('猿江恩賜公園', '2026-09-30', '19:00-21:00')]);
+  await h.runner.tick();
+  for (let i = 0; i < 10; i++) await flush();
+  // 1 回の実行 = その場のやり直し込みで 2 回。初回 + 戻し 2 回 = 3 回の実行 × 2 枠
+  assert.equal(calls.length, 12, calls.join(',') + '\n' + h.logs.filter((l) => /行列|結果|戻/.test(l)).join('\n'));
+  assert.equal(h.state.attemptStatus('1040|2026-09-29|19:00'), 'error');
+  assert.equal(h.queue.waiting().length, 0);
+  assert.equal(h.queue.isBusy(), false);
+});
+
+test('行列の後ろへ戻す(2026-11-22): 1 枠だけなら戻さず、従来どおり 5 分後の再挑戦に任せる', async () => {
+  const calls = [];
+  const h = harness({
+    book: async (c, { beforeApply }) => {
+      const stop = await beforeApply({ reservations: [] });
+      if (stop) return stop;
+      calls.push(`${c.date} ${c.startHour}`);
+      return { status: 'error', message: 'HTTP 502' };
+    },
+  });
+  await h.runner.tick();
+  h.advance(60_000);
+  h.setSlots([slot('猿江恩賜公園', '2026-09-29', '19:00-21:00')]);
+  await h.runner.tick();
+  for (let i = 0; i < 5; i++) await flush();
+  assert.equal(calls.length, 2);
+  assert.ok(!h.logs.some((l) => l.includes('行列の後ろへ戻しました')), h.logs.join('\n'));
 });
