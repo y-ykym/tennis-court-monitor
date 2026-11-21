@@ -68,6 +68,7 @@ import { createBookingQueue } from '../src/booking-queue.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createEventLog } from '../src/auto-events.js';
 import { createAutoRunner, createScraper } from '../src/auto-runner.js';
+import { createCalendarSyncRequester } from '../src/calendar-sync-request.js';
 
 const require = createRequire(import.meta.url);
 const { jstTodayIso } = require('../../lib/date.js');
@@ -362,14 +363,11 @@ const AUTO_MODE = (() => {
 const WORKER_URL = (process.env.WORKER_URL || process.env.BOOKING_PUBLIC_URL || '').replace(/\/$/, '');
 // フェーズ11: 予約が成立した直後に Worker へ「その人の Google カレンダーを同期して」と頼む(fire-and-forget。失敗してもログだけ。
 // Worker は毎時 0 分にも同じ同期をするので、ここが落ちても最大 1 時間遅れて載る)
+// 都サイトが混んで同期が空振りしたとき(予約一覧を取れない)は 3 分後にやり直す(3 回まで。src/calendar-sync-request.js。2026-11-22)
+const calendarSyncRequest = createCalendarSyncRequester({ trigger: (person, reason) => triggerCalendarSync(WORKER_URL, SECRET, person, { reason }), log });
 function requestCalendarSync(person, reason) {
   if (!WORKER_URL || !SECRET || (person !== 'A' && person !== 'B')) return;
-  triggerCalendarSync(WORKER_URL, SECRET, person, { reason })
-    .then((r) => {
-      const st = r?.[person];
-      log(`[gcal] ${person} のカレンダー同期: ${r?.skipped ? `skipped(${r.skipped})` : st?.error ? `失敗 ${st.error}` : `追加 ${st?.inserted ?? '-'} / 更新 ${st?.updated ?? '-'} / 削除 ${st?.deleted ?? '-'}`}`);
-    })
-    .catch((e) => log(`[gcal] ${person} のカレンダー同期を頼めませんでした(毎時の同期で載ります): ${e.message}`));
+  calendarSyncRequest(person, reason);
 }
 let autoRunner = null;
 if (AUTO_MODE !== 'off') {
