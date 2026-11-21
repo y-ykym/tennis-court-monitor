@@ -392,6 +392,10 @@ export function createAutoRunner({
     if (running) return { skipped: 'busy' };
     running = true;
     const started = now();
+    // Worker への合図(除外一覧・スイッチの受け取り)は照会と同時に投げる(2026-11-21。以前は照会の後に順番に待ち、
+    // 新しい空きを行列へ入れるのが合図 1 往復分(0.5 秒前後)遅れていた)。Worker は合図の中身を使わない(生存は Pi の /auto/status を直接見る)ので、
+    // 中身の lastCycle が 1 周期前でも困らない。heartbeat() は失敗しても throw しない
+    const hb = heartbeat();
     try {
       const today = jstTodayIso(started);
       let slots;
@@ -404,12 +408,13 @@ export function createAutoRunner({
         log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます${e.siteNotice ? '(都サイトの「お知らせ」が続いているため。短い不調が多いので 3 分より長くは空けない)' : '(メンテナンスか長い障害の可能性)'}` : ''}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
         event('poll_failed', { consecutive: consecutiveFailures, message: e.message, ...(e.siteNotice ? { siteNotice: true } : {}) });
-        await heartbeat();
+        await hb;
         return { skipped: 'scrape_failed', consecutiveFailures };
       }
       if (consecutiveFailures >= BACKOFF_AFTER) log(`空き照会が回復しました(連続失敗 ${consecutiveFailures} 回のあと)。通常の間隔に戻します`);
       consecutiveFailures = 0;
       lastFailureWasNotice = false;
+      await hb; // 照会の間に届いているのが普通。ここから下は受け取った除外一覧・追加枠・スイッチで判定する
       // 監視対象(平日は猿江 19:00 だけ・土日祝は全部。lib/filter.js)に加えて、「せってい」の追加枠はいつでも見る
       // (平日の 17:00 や大島・亀戸は監視対象ではないため、これが無いと追加しても見てもらえない。2026-10-25)
       const allowKeys = new Set((exclusions?.allowSlots || []).map(slotKey));
@@ -460,7 +465,6 @@ export function createAutoRunner({
       state.setSeen(targets.map((s) => ({ key: slotKey(s), at: started, facility: s.facility, date: s.date, time: s.time, baseline })));
       state.prune(today);
       lastCycle = { at: started, ms: now() - started, error: null, newSlots: newSlots.length };
-      await heartbeat();
       state.save();
       // 手元の予約一覧の取り直し(待たない)。予約の実行中は、同じ人のログインが重ならないよう次の照会に回す
       if (bookingEnabled() && now() >= siteListNextAt && !queue.isBusy()) refreshSiteList();

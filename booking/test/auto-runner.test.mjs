@@ -319,7 +319,7 @@ test('照会の失敗はスキップし、heartbeat だけ送る。30 秒未満�
   assert.equal(runner.intervalMs, 30000);
   assert.deepEqual(await runner.tick(), { skipped: 'scrape_failed', consecutiveFailures: 1 });
   assert.equal(heartbeats.length, 1);
-  assert.ok(heartbeats[0].lastCycle.error.includes('502'));
+  assert.ok(runner.lastCycle().error.includes('502'), '失敗は /auto/status の lastCycle に残る(合図は照会と同時に投げるので中身には載らない)');
 });
 
 test('空き照会の連続失敗で間隔を広げ、成功で戻す', async () => {
@@ -984,9 +984,8 @@ test('追加枠(2026-10-25): 平日の監視対象外の枠(大島 17:00)も追�
   assert.deepEqual(h.runner.exclusions().allowSlots, [], '手元の写しからも消える');
 
   // 運用中に「せってい」で猿江 9/15 19:00 を追加 → 既に空いていて既知だが、次の照会で「新しい空き」として予約しに行く
+  // (2026-11-21: 合図は照会と同時に投げるので、追加を受け取ったその回に動く。以前は 1 周期あとだった)
   ex = { dates: [], slots: [], allowSlots: [allowOoshima, { park: '1040', date: '2026-09-15', start: '19:00', end: '21:00', facility: '猿江恩賜公園' }] };
-  h.advance(60_000);
-  await h.runner.tick(); // heartbeat で追加を受け取る(照会はその前なので、この回はまだ動かない)
   h.advance(60_000);
   const r2 = await h.runner.tick();
   assert.equal(r2.planned, 1);

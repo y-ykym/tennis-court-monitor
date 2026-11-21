@@ -16,11 +16,11 @@ const listJson = (results, { all = results.length, next = results.length + 1 } =
 
 // 偽のサイト。hooks.list(session, form) で一覧の応答を差し替えられる
 function fakeSite(hooks = {}) {
-  const site = { sessions: [], calls: { top: 0, list: 0 }, forms: [] };
+  const site = { sessions: [], calls: { top: 0, list: 0 }, forms: [], listOpts: [] };
   site.createSession = () => {
     const session = { id: site.sessions.length };
     site.sessions.push(session);
-    return async (pathname, form) => {
+    return async (pathname, form, opts) => {
       await new Promise((r) => setTimeout(r, 1));
       if (pathname === '/web/index.jsp') {
         site.calls.top++;
@@ -29,6 +29,7 @@ function fakeSite(hooks = {}) {
       if (pathname === '/web/rsvWOpeUnreservedSearchAjaxAction.do') {
         site.calls.list++;
         site.forms.push(form);
+        site.listOpts.push(opts);
         if (hooks.list) {
           const r = hooks.list(session, form);
           if (r !== undefined) return r;
@@ -120,6 +121,16 @@ test('recheckEmpty(AUTO_LIST_RECHECK_EMPTY=1)なら、使い回したセッシ�
   assert.equal(site.calls.list, 5, '亀戸は 2 回目に 2 本(使い回し + 取り直し)');
   assert.equal(slots.filter((s) => s.facility === '亀戸中央公園').length, 0);
   assert.deepEqual(slots.failures, []);
+});
+
+test('小休止(0.3 秒): 使い回しのセッションで取る一覧の 1 本目だけ省く。作ったばかりのセッション(トップの直後)では省かない', async () => {
+  const site = fakeSite();
+  const { scrape } = make(site);
+  await scrape(); // 初回: トップ → 一覧(連続した通信なので休む)
+  assert.deepEqual(site.listOpts.map((o) => !!o?.skipInterval), [false, false]);
+  site.listOpts.length = 0;
+  await scrape(); // 2 回目: 使い回し(単発なので休まない)
+  assert.deepEqual(site.listOpts.map((o) => !!o?.skipInterval), [true, true]);
 });
 
 test('一部の公園だけ 3 回とも失敗したら、取れた分を返して failures(week: null)を添える。全部失敗なら throw', async () => {
