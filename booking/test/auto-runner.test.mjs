@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS, PARTIAL_CARRY_MAX_MS, SITE_LIST_REFRESH_MS, SITE_LIST_RETRY_MS, SITE_LIST_MAX_AGE_MS } from '../src/auto-runner.js';
+import { createAutoRunner, nextDelayMs, pollIntervalAt, backoffIntervalMs, backoffCapAt, MIN_GAP_MS, DAY_REMAINING_TTL_MS, AUTH_PAUSE_MS, TB_PLANS_TTL_MS, PARTIAL_CARRY_MAX_MS, SITE_LIST_REFRESH_MS, SITE_LIST_RETRY_MS, SITE_LIST_MAX_AGE_MS } from '../src/auto-runner.js';
 import { createEventLog, readEvents } from '../src/auto-events.js';
 import { createAutoState } from '../src/auto-state.js';
 import { createBookingQueue } from '../src/booking-queue.js';
@@ -341,6 +341,7 @@ test('空き照会の連続失敗で間隔を広げ、成功で戻す', async ()
   let fail = true;
   const logs = [];
   const runner = createAutoRunner({
+    now: () => T0, // 実時刻だと 22 日 0 時台に上限 1 分が当たる(2026-11-22)
     mode: 'on',
     scrape: async () => { if (fail) throw new Error('fetch failed'); return []; },
     queue: createBookingQueue(),
@@ -1171,6 +1172,7 @@ test('都サイトの「お知らせ」ページ(siteNotice)は 2 回目まで�
   let fail = true;
   const logs = [];
   const runner = createAutoRunner({
+    now: () => T0, // 実時刻だと 22 日 0 時台に上限 1 分が当たる(2026-11-22)
     mode: 'on',
     scrape: async () => {
       if (!fail) return [];
@@ -1766,4 +1768,28 @@ test('行列の後ろへ戻す(2026-11-22): 1 枠だけなら戻さず、従来�
   for (let i = 0; i < 5; i++) await flush();
   assert.equal(calls.length, 2);
   assert.ok(!h.logs.some((l) => l.includes('行列の後ろへ戻しました')), h.logs.join('\n'));
+});
+
+test('22 日 0 時台(2026-11-22): 照会が連続で失敗しても間隔は 1 分より広げない。ほかの時間はこれまでどおり 15 分まで', async () => {
+  const at = (iso) => Date.parse(iso);
+  assert.equal(backoffCapAt(at('2026-12-21T15:10:00Z')), 60_000, '12/22 0:10 JST');
+  assert.equal(backoffCapAt(at('2026-12-21T16:00:00Z')), Infinity, '12/22 1:00 JST は対象外');
+  assert.equal(backoffCapAt(at('2026-12-20T15:10:00Z')), Infinity, '12/21 0:10 JST は対象外');
+  assert.equal(backoffIntervalMs(6, 30_000, { max: 60_000 }), 60_000);
+  assert.equal(backoffIntervalMs(6, 30_000), 15 * 60_000);
+  assert.equal(backoffIntervalMs(2, 30_000, { max: 60_000 }), 30_000, '閾値未満は通常の間隔');
+  // ランナー経由: 22 日 0:05 に 6 回連続で失敗しても 1 分
+  const h = harness({ start: at('2026-12-21T15:05:00Z') });
+  h.runner; // eslint-disable-line no-unused-expressions
+  let fail = true;
+  const logs = [];
+  const runner = createAutoRunner({
+    mode: 'on', queue: createBookingQueue(), state: h.state, worker: h.workerRef ?? { heartbeat: async () => ({ dates: [], slots: [] }) },
+    scrape: async () => { if (fail) throw new Error('HTTP 502: /web/index.jsp'); return []; },
+    book: async () => ({ status: 'error' }), credentialsFor: () => null, notify: async () => {}, log: (m) => logs.push(m), now: () => at('2026-12-21T15:05:00Z'),
+  });
+  for (let i = 0; i < 6; i++) await runner.tick();
+  assert.equal(runner.consecutiveFailures(), 6);
+  assert.equal(runner.backoffMs(30_000), 60_000);
+  assert.ok(logs.some((m) => m.includes('先着受付の開く時間帯なので 1 分より長くは空けない')), logs.join('\n'));
 });

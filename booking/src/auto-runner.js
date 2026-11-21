@@ -118,11 +118,24 @@ export const BACKOFF_STEPS_MS = [3 * 60 * 1000, 5 * 60 * 1000, 10 * 60 * 1000, 1
 // 直近の失敗が都サイトの「お知らせ」ページだったときの広げ方(3 回目以降ずっと 3 分。短い不調が大半なので長く空けない。2026-11-11)
 export const NOTICE_BACKOFF_STEPS_MS = [3 * 60 * 1000];
 
-// 連続失敗の回数に応じた照会間隔。閾値未満なら通常の間隔(normalMs)
-export function backoffIntervalMs(consecutiveFailures, normalMs, { after = BACKOFF_AFTER, steps = BACKOFF_STEPS_MS } = {}) {
+// 連続失敗の回数に応じた照会間隔。閾値未満なら通常の間隔(normalMs)。max があれば広げてもそれまで(22 日 0 時台。2026-11-22)
+export function backoffIntervalMs(consecutiveFailures, normalMs, { after = BACKOFF_AFTER, steps = BACKOFF_STEPS_MS, max = Infinity } = {}) {
   if (consecutiveFailures < after) return normalMs;
   const step = steps[Math.min(consecutiveFailures - after, steps.length - 1)];
-  return Math.max(step, normalMs);
+  return Math.max(Math.min(step, max), normalMs);
+}
+
+// その時刻(JST)の POLL_SCHEDULE の行に MAX_BACKOFF_MS があれば、それが間隔を広げる上限(無ければ Infinity)。当たる行の選び方は pollIntervalAt と同じ
+export function backoffCapAt(nowMs, schedule = AUTO_BOOKING.POLL_SCHEDULE) {
+  if (!schedule || schedule.length === 0) return Infinity;
+  const hhmm = jstHHMM(nowMs);
+  const day = new Date(nowMs + 9 * 3600 * 1000).getUTCDate();
+  for (const w of schedule) {
+    if (w.DAY != null && w.DAY !== day) continue;
+    const hit = w.FROM < w.TO ? hhmm >= w.FROM && hhmm < w.TO : hhmm >= w.FROM || hhmm < w.TO;
+    if (hit) return w.MAX_BACKOFF_MS != null ? w.MAX_BACKOFF_MS : Infinity;
+  }
+  return Infinity;
 }
 
 // 次の照会までの待ち時間: 「前回の開始 + 間隔」を目標にし、既に過ぎていれば MIN_GAP_MS だけ空ける
@@ -186,7 +199,7 @@ export function createAutoRunner({
   let lastCycle = { at: null, ms: null, error: null, newSlots: 0 };
   let consecutiveFailures = 0; // 空き照会の連続失敗回数(成功で 0 に戻る。間隔を広げる判断に使う)
   let lastFailureWasNotice = false; // 直近の失敗が都サイトの「お知らせ」ページだったか(広げる上限を 3 分にする)
-  const backoffOpts = () => (lastFailureWasNotice ? { steps: NOTICE_BACKOFF_STEPS_MS } : {});
+  const backoffOpts = (atMs = now()) => ({ ...(lastFailureWasNotice ? { steps: NOTICE_BACKOFF_STEPS_MS } : {}), max: backoffCapAt(atMs) });
   let lastTargets = []; // 直近の照会で見えていた監視対象の枠(/auto/status で確認できる)
   let lastAllSlots = []; // 直近の照会の全枠(一部の公園×週が取れなかったとき、その分を補うのに使う)
   const parkFreshAt = new Map(); // 公園名 → その公園の全週をきちんと取れた最後の照会の時刻
@@ -415,8 +428,10 @@ export function createAutoRunner({
       } catch (e) {
         consecutiveFailures++;
         lastFailureWasNotice = !!e.siteNotice;
-        const backoff = backoffIntervalMs(consecutiveFailures, 0, backoffOpts());
-        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます${e.siteNotice ? '(都サイトの「お知らせ」が続いているため。短い不調が多いので 3 分より長くは空けない)' : '(メンテナンスか長い障害の可能性)'}` : ''}`);
+        const opts = backoffOpts(started);
+        const backoff = backoffIntervalMs(consecutiveFailures, 0, opts);
+        const capped = Number.isFinite(opts.max);
+        log(`空き照会に失敗(今回はスキップ。連続 ${consecutiveFailures} 回): ${e.message}${backoff ? `。次の照会まで ${Math.round(backoff / 60000)} 分空けます${capped ? '(先着受付の開く時間帯なので 1 分より長くは空けない)' : e.siteNotice ? '(都サイトの「お知らせ」が続いているため。短い不調が多いので 3 分より長くは空けない)' : '(メンテナンスか長い障害の可能性)'}` : ''}`);
         lastCycle = { at: started, ms: now() - started, error: e.message, newSlots: 0 };
         event('poll_failed', { consecutive: consecutiveFailures, message: e.message, ...(e.siteNotice ? { siteNotice: true } : {}) });
         await hb;
@@ -866,7 +881,7 @@ export function createAutoRunner({
     const loop = async () => {
       const startedAt = now();
       await tick();
-      const intervalMs = backoffIntervalMs(consecutiveFailures, pollIntervalAt(startedAt, interval), backoffOpts());
+      const intervalMs = backoffIntervalMs(consecutiveFailures, pollIntervalAt(startedAt, interval), backoffOpts(startedAt));
       timer = setTimeout(loop, nextDelayMs({ startedAt, finishedAt: now(), intervalMs }));
     };
     timer = setTimeout(loop, 3000);
