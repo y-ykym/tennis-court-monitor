@@ -12,6 +12,10 @@ import { verifyCancelToken } from '../src/cancel-token.js';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { AUTO_BOOKING } = require('../../lib/config.js');
+// このファイルのテストの多くは土日の日付で「上限 1 件」の動きを見ているので、土日祝の上限もここでは 1 件に固定する。
+// 本番の値(土日祝 2 件。2026-11-21)での動きは「土日祝は 1 日 2 件まで」のテストで、値を戻して確かめる
+const HOLIDAY_MAX = AUTO_BOOKING.MAX_PER_DAY_HOLIDAY;
+AUTO_BOOKING.MAX_PER_DAY_HOLIDAY = 1;
 
 const SECRET = 'test-signing-secret';
 // 2026-09-14(月) JST 10:00
@@ -797,9 +801,41 @@ test('隣接(テニスベア未設定): configured=false なら都の予約だ�
   assert.ok(h.logs.some((l) => l.includes('テニスベアは未設定')));
 });
 
+test('土日祝は 1 日 2 件まで(2026-11-21): 手元の一覧に 1 件ある土曜はもう 1 件取り、3 件目は見送る。平日は 1 件のまま', async () => {
+  assert.equal(HOLIDAY_MAX, 2, '本番の設定は土日祝 2 件');
+  AUTO_BOOKING.MAX_PER_DAY_HOLIDAY = HOLIDAY_MAX;
+  try {
+    // A は 9/26(土) に 猿江 9:00-11:00、B は 9/24(木) に 猿江 17:00-19:00 を持っている
+    const reservations = {
+      A: [{ id: 'R1', date: '2026-09-26', start: '09:00', end: '11:00', facility: '猿江恩賜公園' }],
+      B: [{ id: 'R2', date: '2026-09-24', start: '17:00', end: '19:00', facility: '猿江恩賜公園' }],
+    };
+    const h = harness({ reservations });
+    await h.runner.tick();
+    h.advance(60_000);
+    h.setSlots([slot('猿江恩賜公園', '2026-09-26', '13:00-15:00')]);
+    await h.runner.tick();
+    await flush();
+    assert.equal(h.state.attemptStatus('1040|2026-09-26|13:00'), 'success', '土曜の 2 件目は取る');
+    h.advance(60_000);
+    h.setSlots([slot('猿江恩賜公園', '2026-09-26', '17:00-19:00')]);
+    await h.runner.tick();
+    await flush();
+    assert.equal(h.state.attemptStatus('1040|2026-09-26|17:00'), 'capped', '土曜の 3 件目は見送り');
+    h.advance(60_000);
+    h.setSlots([slot('猿江恩賜公園', '2026-09-24', '19:00-21:00')]);
+    await h.runner.tick();
+    await flush();
+    assert.equal(h.state.attemptStatus('1040|2026-09-24|19:00'), 'capped', '平日は 1 件のまま');
+    assert.equal(h.notified.length, 1, '成立カードは 1 通');
+  } finally {
+    AUTO_BOOKING.MAX_PER_DAY_HOLIDAY = 1;
+  }
+});
+
 test('隣接(都の予約): 予約直前の一覧に、隣の時間帯の別の公園の予約があれば見送り(conflict)。上限を 2 件にして確認(上限 1 件のうちは capped が先に当たる)', async () => {
-  const saved = AUTO_BOOKING.MAX_PER_DAY;
-  AUTO_BOOKING.MAX_PER_DAY = 2;
+  const saved = AUTO_BOOKING.MAX_PER_DAY_HOLIDAY;
+  AUTO_BOOKING.MAX_PER_DAY_HOLIDAY = 2;
   try {
     // A は 9/27 に 亀戸 11:00-13:00 を手動で持っている → 猿江 13:00 は見送り(ログインして一覧を見た上で)、猿江 15:00 は 2 時間空くので予約
     const reservations = { A: [{ id: 'R9', date: '2026-09-27', start: '11:00', end: '13:00', facility: '亀戸中央公園' }] };
@@ -836,7 +872,7 @@ test('隣接(都の予約): 予約直前の一覧に、隣の時間帯の別の�
     assert.equal(h2.state.attemptStatus('1040|2026-09-27|09:00'), 'conflict', '同じ公園でも時間が重なれば見送り');
     assert.ok(h2.logs.some((l) => l.includes('時間が重なるテニスベアの予定') && l.includes('ログインせず')), h2.logs.join('\n'));
   } finally {
-    AUTO_BOOKING.MAX_PER_DAY = saved;
+    AUTO_BOOKING.MAX_PER_DAY_HOLIDAY = saved;
   }
 });
 

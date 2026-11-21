@@ -20,7 +20,7 @@
 //     または時間が接する別の場所の予定があれば見送り 'conflict'(ログイン不要。2026-09-24 追加。lib/auto-rules.js の findPlaceConflict)。
 //     テニスベアの予定が取れなければ、直近 60 分以内の結果があればそれで判定し、無ければ見送る(判定できないため予約しない)。
 //     そうでなければ reserve() を reservationList + beforeApply 付きで呼び、ログイン直後の予約一覧でその日の件数を数え、
-//     上限(MAX_PER_DAY 件。テニスベアの予定は数えない)なら予約せず 'capped'。同じ一覧で、候補と時間が重なる予約・接する別の公園の予約が
+//     上限(平日 MAX_PER_DAY 件・土日祝 MAX_PER_DAY_HOLIDAY 件。テニスベアの予定は数えない)なら予約せず 'capped'。同じ一覧で、候補と時間が重なる予約・接する別の公園の予約が
 //     あれば同じく 'conflict'。成立したら結果カード(自動予約の表記。
 //     利用日 = 今日+4 日なら「ペナルティなしで取り消せるのは今日 23:59 まで」とキャンセルボタン)。見送りはカードなし。
 //     失敗のうち「先に取られた(taken)」「サイトが断った(duplicate)」は LINE の通数を節約するためカードを送らずログのみ(人が何もできない失敗)。
@@ -56,7 +56,7 @@ const require = createRequire(import.meta.url);
 const { AUTO_BOOKING, PARKS } = require('../../lib/config.js');
 const { isTargetSlot } = require('../../lib/filter.js');
 const { jstTodayIso, jstEndOfDaySec, jstHHMM, daysBetween } = require('../../lib/date.js');
-const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, isPenaltyPeriod, startHHMM, findPlaceConflict } = require('../../lib/auto-rules.js');
+const { slotKey, parkOf, planAutoBooking, classifySlot, isFreeCancelLastDay, isPenaltyPeriod, startHHMM, findPlaceConflict, maxPerDayFor } = require('../../lib/auto-rules.js');
 
 // 除外一覧はこれより古いものを使わない(Worker に繋がらない間は、これを過ぎたら予約しない)
 const EXCLUSIONS_MAX_AGE_MS = 30 * 60 * 1000;
@@ -588,16 +588,17 @@ export function createAutoRunner({
     // 掛けない(2026-11-03 本人指示)。時間が重なる都の予約だけは予約直前の一覧で見る(選ぶ時点で予約済みの時間は Worker が出さないので通常は当たらない)
     const allowed = !!again.allowed;
     if (allowed) log(`追加枠なので 1 日の上限・場所の判定は掛けません: ${describe(c)}`);
+    const maxDay = maxPerDayFor(c.date); // 平日 1 件・土日祝 2 件(2026-11-21)
     const remaining = allowed ? null : remainingFor(c.date);
     if (remaining != null && remaining <= 0) {
-      log(`見送り: ${describe(c)} (${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため。ログインせず)`);
-      attempt(c, 'capped', `${c.date} は既に ${AUTO_BOOKING.MAX_PER_DAY} 件あるため`);
+      log(`見送り: ${describe(c)} (${c.date} は既に ${maxDay} 件あるため。ログインせず)`);
+      attempt(c, 'capped', `${c.date} は既に ${maxDay} 件あるため`);
       state.save();
       return { status: 'capped' };
     }
     // 手元の予約一覧(1 時間ごとに取り直し)でその日が上限なら、ログインせずに見送る(2026-11-19)
     const listed = allowed ? null : listedCount(c.person, c.date);
-    if (listed != null && listed >= AUTO_BOOKING.MAX_PER_DAY) {
+    if (listed != null && listed >= maxDay) {
       log(`見送り: ${describe(c)} (${c.date} は既に ${listed} 件の予約があるため。手元の予約一覧(${Math.round((now() - siteList.at) / 60000)} 分前)で判定。ログインせず)`);
       attempt(c, 'capped', `${c.date} は既に ${listed} 件の予約があるため(手元の予約一覧)`);
       state.save();
@@ -639,7 +640,7 @@ export function createAutoRunner({
       const sameDay = reservations.filter((r) => r.date === c.date);
       listCount = sameDay.length;
       await detectReleased(c.person, reservations, today);
-      if (!allowed && listCount >= AUTO_BOOKING.MAX_PER_DAY) {
+      if (!allowed && listCount >= maxDay) {
         return { status: 'capped', message: `${c.date} は既に ${listCount} 件の予約があるため見送りました(手動分を含む)` };
       }
       // 隣接の判定(その 2): 都の予約一覧。時間が重なる予約・隣の時間帯の別の公園の予約があれば見送る(上限が 1 件のうちは通常ここに来ないが、上限を戻したときのため)。
@@ -681,7 +682,7 @@ export function createAutoRunner({
       const after = result.reservationsAfter;
       const sameDay = after.filter((r) => r.date === c.date);
       listCount = Math.max(sameDay.length - 1, 0); // 今回の 1 件を除いた、予約の前の件数に当たる数
-      if (!allowed && sameDay.length > AUTO_BOOKING.MAX_PER_DAY) {
+      if (!allowed && sameDay.length > maxDay) {
         const others = sameDay.filter((r) => !(r.start === startHHMM(c.startHour) && parkOf(r.facility)?.code === c.park));
         doubled = others.length ? others : sameDay;
         log(`⚠ 二重予約: ${c.date} に ${sameDay.length} 件の予約があります(手元の予約一覧に無かった予約: ${doubled.map((r) => `${r.start} ${r.facility}`).join(' / ')})。どちらかを取り消してください`);
@@ -692,7 +693,7 @@ export function createAutoRunner({
     } else if (ok && skipList) {
       log('  予約後の一覧が取れなかったため、答え合わせは次の取り直し(1 時間ごと)に任せます');
     }
-    if (listCount != null) dayRemaining.set(c.date, { remaining: AUTO_BOOKING.MAX_PER_DAY - listCount - (ok ? 1 : 0), at: now() }); // 追加枠の成立で負になることがある(その日の普段の枠は capped)
+    if (listCount != null) dayRemaining.set(c.date, { remaining: maxDay - listCount - (ok ? 1 : 0), at: now() }); // 追加枠の成立で負になることがある(その日の普段の枠は capped)
     if (result.status === 'auth_error') {
       const first = !authFailedAt.has(c.person) || now() - authFailedAt.get(c.person) >= AUTH_PAUSE_MS;
       authFailedAt.set(c.person, now());

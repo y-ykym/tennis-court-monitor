@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
-  slotKey, isPenaltyPeriod, isFreeCancelLastDay, isPastLastDayDeadline, personFor, classifySlot, sortCandidates, planAutoBooking, splitForNotification, pruneExclusions,
+  slotKey, isPenaltyPeriod, isFreeCancelLastDay, isPastLastDayDeadline, personFor, classifySlot, sortCandidates, planAutoBooking, splitForNotification, pruneExclusions, maxPerDayFor,
 } = require('../lib/auto-rules.js');
 const { AUTO_BOOKING } = require('../lib/config.js');
 const { jstEndOfDaySec, daysBetween, addDaysIso } = require('../lib/date.js');
@@ -69,6 +69,10 @@ test('並べ替え: 日付 → 公園の優先順(大島 > 木場 > 猿江 > 亀
   ]);
   assert.deepEqual(AUTO_BOOKING.HOUR_PRIORITY, [11, 9, 15, 13, 17, 19]);
   assert.equal(AUTO_BOOKING.MAX_PER_DAY, 1);
+  assert.equal(AUTO_BOOKING.MAX_PER_DAY_HOLIDAY, 2);
+  assert.equal(maxPerDayFor('2026-09-25'), 1, '金曜');
+  assert.equal(maxPerDayFor('2026-09-26'), 2, '土曜');
+  assert.equal(maxPerDayFor('2026-09-23'), 2, '祝日(秋分の日)');
 });
 
 test('計画: 利用日ごとに候補を並べ、予約者を付け、対象外は理由付きで見送る', () => {
