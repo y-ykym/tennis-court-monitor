@@ -133,6 +133,45 @@ test('小休止(0.3 秒): 使い回しのセッションで取る一覧の 1 本
   assert.deepEqual(site.listOpts.map((o) => !!o?.skipInterval), [true, true]);
 });
 
+const ERR_MANAGER = JSON.stringify({ ErrManager: { message: 'データ通信を正しく行うことができませんでした。' } });
+
+test('都サイトの一時エラー(ErrManager)は、セッションを作り直さず同じセッションで 1 回だけ取り直す', async () => {
+  let n = 0;
+  const site = fakeSite({ list: (session, form) => (form.selectAreaBcd === '1050' && ++n === 2 ? ERR_MANAGER : undefined) });
+  const logs = [];
+  const { scrape } = make(site, { log: (m) => logs.push(m) });
+  await scrape(); // 初回(n=1)は正常
+  const top = site.calls.top;
+  const sessions = site.sessions.length;
+  const slots = await scrape(); // 2 回目: 亀戸が一時エラー → 同じセッションで取り直して通る
+  assert.equal(site.calls.top, top, 'トップは開き直さない');
+  assert.equal(site.sessions.length, sessions, '新しいセッションを作らない');
+  assert.equal(site.calls.list, 5, '亀戸だけ 2 本(エラー + 取り直し)');
+  assert.equal(slots.filter((s) => s.facility === '亀戸中央公園').length, 1);
+  assert.deepEqual(slots.failures, []);
+  assert.ok(logs.some((l) => l.includes('同じセッションで取り直します')));
+  assert.deepEqual(site.listOpts.slice(-1).map((o) => !!o?.skipInterval), [false], '取り直しは連続した通信なので小休止を置く');
+});
+
+test('同じセッションでの取り直しも一時エラーなら、従来どおり新しいセッションでやり直す。retrySameSession: false なら最初から新しいセッション', async () => {
+  let n = 0;
+  const site = fakeSite({ list: (session, form) => (form.selectAreaBcd === '1050' && ++n <= 2 ? ERR_MANAGER : undefined) });
+  const { scrape } = make(site);
+  let slots = await scrape(); // 亀戸: エラー → 同じセッションでもエラー → 新しいセッションで通る
+  assert.equal(site.calls.top, 3, '亀戸だけトップを開き直す');
+  assert.equal(site.calls.list, 4, '猿江 1 本 + 亀戸 3 本');
+  assert.equal(slots.filter((s) => s.facility === '亀戸中央公園').length, 1);
+  assert.deepEqual(slots.failures, []);
+
+  let m = 0;
+  const site2 = fakeSite({ list: (session, form) => (form.selectAreaBcd === '1050' && ++m === 1 ? ERR_MANAGER : undefined) });
+  const off = make(site2, { retrySameSession: false });
+  slots = await off.scrape();
+  assert.equal(site2.calls.top, 3, 'すぐ新しいセッション(以前の動き)');
+  assert.equal(site2.calls.list, 3);
+  assert.deepEqual(slots.failures, []);
+});
+
 test('一部の公園だけ 3 回とも失敗したら、取れた分を返して failures(week: null)を添える。全部失敗なら throw', async () => {
   const site = fakeSite({ list: (session, form) => (form.selectAreaBcd === '1050' ? '<html>502</html>' : undefined) });
   const { scrape } = make(site);
