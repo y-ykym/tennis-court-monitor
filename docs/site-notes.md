@@ -696,3 +696,44 @@ selectEventName / selectApplyNum / fieldCnt` に値を入れ、`availableTZoneNo
   「検索 → ログイン画面 → ログイン」の順(本番の先取りと同じ)では通った。`--no-prefetch` で再現を試せる
 - 副産物: **ログイン直後の予約一覧(件数の上限判定・手放しの検出)は昼間で 1 通信 4.5 秒**。同日に入れた「手元の予約一覧」(1 時間ごと)で代えれば
   その分縮むが、サイトで直接取った予約を最大 1 時間見逃す(二重予約)のと引き換え。未着手
+
+# 追加調査: 予約手続きをさらに縮める手の洗い出し (2026-11-21 昼、公開ページ・JS の静的解析 + 匿名 HTTP。ログインも「予約」もしていない)
+
+目的: 「見つけてから開始まで」と「開始から押すまで」をまだ縮められるか。本人依頼。
+
+## 1. 昼間の 1 通信 約 3 秒は、都サイトの入口でかかる一律の待ち(こちらでは削れない)
+
+- Pi から curl で内訳を計測(13:20): 名前解決 0.01 秒・TCP 0.02 秒・TLS 0.04 秒、**送信してから最初の 1 バイトまで 2.6〜3.9 秒**。
+  接続を使い回しても(2 本目・3 本目は接続 0 秒)同じ。HTTP/1.1・`Server: nginx`・`Connection: keep-alive`
+- **中身に関係なく同じだけ待つ**: 一覧 JSON(1,650 バイト)3〜4 秒、トップ(40 KB)2.6〜3.1 秒、**122 バイトの JS(paw_doaction.js)でも 3.3 秒**。
+  JS 12 本を同時に取ると 12 本とも 4.1〜4.2 秒でそろう(順番待ちではなく一律の遅れ)。深夜は同じ通信が 0.2〜0.4 秒(11/8 02:00)
+- → 1 通信を軽くする工夫(`days` を減らす・曜日や時間帯で絞る・接続の使い回し・HTTP/2)は効かない。**縮める手は「往復の回数を減らす」だけ**
+- 一覧の Ajax には曜日(`dayofweek`)・時間帯(`timezone`)の絞り込みがある(`prwre1000.js` の `doSearch`)。上の理由で速さには効かない
+
+## 2. 未使用の導線: 匿名のまま一覧の「予約」(`doReserved`)を送ると、ログイン画面が返る
+
+- 匿名で トップ → `POST /web/rsvWOpeUnreservedDailyAction.do`(一覧画面 `prwrc1000.jsp`。form1 に `displayNoSub=prwrc1000` と `select*` の空の hidden 一式)
+  → 一覧 Ajax → **`POST /web/rsvWOpeReservedApplyAction.do`**(`doReserved` と同じ項目: 一覧画面の hidden 全部 + `selectUseYmd / selectBldCd / selectInstCd /
+  selectPpsCd / selectPpsClsCd / selectStimeZoneNo / selectEtimeZoneNo / selectStime / selectEtime / fieldCnt` + `availableTZoneNo / availableSTime / availableETime`、`displayNo=prwrc1000`)
+  → **HTTP 200・16 KB の `pawab2100.jsp`(ログイン画面。`loginJKey` 付き)**。11/8 のログイン済みでの試行(本文 0 バイト)と違い、匿名では受け付けられた
+- 見込み(**未検証。ログインが要る**): サイトは「予約を押す → ログイン → 予約内容確認画面」と続ける作りのはずなので、このログイン画面でログインを送ると
+  その応答がそのまま確認画面(`prwea1000.jsp`)になる可能性が高い。通れば確認画面まで **3 往復(ログイン・枠選択 Ajax・確認画面 POST)→ 2 往復(匿名の予約送信・ログイン)**
+  で、昼間なら 3〜4 秒の短縮。ログインをブラウザの画面遷移(form 送信)で行うことになるので、reCAPTCHA の見え方は今より本物に近い
+- **検証結果(2026-11-21 13:41、Pi のコンテナから素の HTTP、本人 A、猿江 11/27 9:00。ブラウザなし・「予約」は押していない・ログイン 1 回): 通らなかった**
+  - 匿名の部分は Node でも通る(日本語の hidden を省いても可)。**一覧画面を開かず、トップの hidden + `doReserved` の項目 + `displayNo=prwrc1000` だけでもログイン画面が返る**
+  - しかし **ログインの応答は確認画面ではなく一覧画面(`prwrc1000.jsp`、24.8 KB)**。サイトは「ログイン後に元の一覧へ戻す(利用者がもう一度「予約」を押す)」作りだった
+  - 戻った一覧からもう一度 `doReserved` を送れば確認画面に行けるかもしれないが、それだと 3 往復(匿名の予約・ログイン・予約)で今と同じ。**往復は減らないので不採用**
+    (ログイン済みの `doReserved` は 11/8 に 0 バイトだった。この「ログイン後に戻った一覧」からなら通るかは未確認だが、通っても得が無い)
+  - 計測に使ったスクリプト: `booking/scripts/list-apply-measure.mjs`(`--anon-only` でログインなし、`--no-daily` で一覧画面を省く)
+- 確かめ方: 本人ログインの dry-run 1 回(確認画面に着いたら `rsvWOpeReservedApplyBackAction` で戻る。「予約」は押さない)。11/8 夜の教訓(新しいブラウザから
+  短時間にログイン・押下を繰り返すと v2 に回される)から、回数は 1 回・本番の先起こしブラウザは使わない
+- 一覧画面の `formData.displayNo` は `pawab2000`(lib/scrape.js は `prwre1000` を送っているが通っている)。`listMax = 100`、画面は `limit: 5`
+
+## 3. そのほか(公開 JS に出てくる通信先を全部見た結果)
+
+- トップに定義されている通信先は 37 個。予約に関係しそうで未使用なのは `rsvWOpeUnreservedDailyAction`(上記)・`rsvWTranceKodawariAction`(こだわり検索の入口)・
+  お気に入り(`rsvWTransFavorite2Info*`。検索条件の保存で、予約の近道ではない)・`rsvWOpeUnreservedSearchBuildAjaxAction`(公園 → 施設の選択肢を作るだけ)。
+  残りは抽選(`lotW*`)・利用者情報・支払い・案内で、予約の往復を減らすものは無い
+- `prwrc1000.js` に「空き状況への直接リンク」(2024-01 追加。`initBcd / initIcd / initPpsClPpscd`)がある。検索条件を URL で渡して一覧画面を開く入口で、先取りの中身は変わらない
+- もう 1 つの案「先にログインしておく」(先起こしのブラウザをログイン済みで待たせる)は、ログイン 1 往復を省けるが、同じ利用者の二重ログインの扱い・
+  1 日 100 回超のログイン・A と B の 2 人分が要る点が未調査。上の 2. とは両立しない(2. はログインの応答で確認画面に入るため)
