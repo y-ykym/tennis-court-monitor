@@ -287,6 +287,11 @@ async function parseResultTable(page) {
   });
 }
 
+// 先取り(prefetched)の中に、このブラウザのセッションで行った検索が 1 つでもあるか
+export function sessionHasSearched(prefetched) {
+  return !!(prefetched && (prefetched.search || Object.keys(prefetched.searches || {}).length > 0));
+}
+
 // 先に起こしたブラウザの先取り(prefetched。無ければ null)に、ブラウザの外で取っておいた検索結果(searches)を足して返す。
 // 今日の日付で取れていて中身のある公園だけを使う。足すものが無ければ prefetched をそのまま返す
 export function mergeSearches(prefetched, searches, today) {
@@ -438,7 +443,11 @@ export async function reserve(slot, credentials, options = {}) {
       }
       // ブラウザの外で取っておいた検索結果(options.searches。src/search-cache.js。2026-11-21)を足す。検索結果の hidden はセッションに依らないので、
       // 先に起こしたブラウザが無い・トップを読み直した場合でも使える(ログイン画面の先取りだけは、同じセッションのものでないと使えない)
-      prefetched = mergeSearches(prefetched, options.searches, jstTodayIso());
+      // 週データ JSON(空きの再確認。LINE の「よやく」ボタンなど、面数を渡されない予約で取る)は、そのセッションが一度も検索していないと
+      // 「システム異常が発生しました」になる(どの公園の検索でもよい。2026-11-21 匿名で確認)。なので外で取った検索結果を使うのは、
+      // 週データを取らない予約(自動予約)か、このブラウザが先取りで 1 回は検索しているときだけにする。それ以外は従来どおりその場で検索する
+      const weekSkippable = Number.isFinite(vacant) && vacant >= 1 && !!tz;
+      if (weekSkippable || sessionHasSearched(prefetched)) prefetched = mergeSearches(prefetched, options.searches, jstTodayIso());
       const r = await page.evaluate(inPageFlow, {
         slot: { park: slot.park, date: slot.date, startHour: Number(slot.startHour), vacant: Number.isFinite(vacant) && vacant >= 1 ? vacant : null, tzoneNo: tz },
         credentials,

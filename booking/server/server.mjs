@@ -192,14 +192,16 @@ function launchOptions() {
 }
 // 検索の先取りはブラウザの外で行う(2026-11-21)。ブラウザの中で 4 公園を順番に検索すると昼間は 15〜30 秒かかり、30 秒の打ち切りで全部捨てる回と、
 // 先取りの最中に空きが出て終わるまで待つ回があった。検索結果の hidden はセッションに依らないので、別の通信で同時に取って予約のときに渡す。
-// ブラウザの先取りはログイン画面 1 往復だけになる
+// ブラウザの先取りは 検索 1 公園 + ログイン画面 の 2 往復になる(以前は 公園の数 + 1 往復)
 const SEARCH_HTTP = process.env.WARM_SEARCH_HTTP !== '0' && WARM_PRESEARCH_PARKS.length > 0;
 const searchCache = SEARCH_HTTP ? createSearchCache({ parks: WARM_PRESEARCH_PARKS, log: (m) => log(`[warm] ${m}`) }) : null;
 const warmer = BROWSER_WARM
   ? createBrowserWarmer({
       launch: () => launchBrowserForReserve(launchOptions(), (m) => log(`  [warm] ${m}`)),
       topUrl: 'https://kouen.sports.metro.tokyo.lg.jp/web/index.jsp',
-      prefetch: (b) => b.page.evaluate(prefetchInPage, { parks: searchCache ? [] : WARM_PRESEARCH_PARKS, date: jstTodayIso() }),
+      // ブラウザの中でも 1 公園だけは検索しておく(週データ JSON は、セッションが一度も検索していないと取れない。LINE の「よやく」ボタンの予約で要る。
+      // どの公園の検索でもよいので先頭の 1 つ)。残りの公園の hidden は searchCache のものを使う
+      prefetch: (b) => b.page.evaluate(prefetchInPage, { parks: searchCache ? WARM_PRESEARCH_PARKS.slice(0, 1) : WARM_PRESEARCH_PARKS, date: jstTodayIso() }),
       log: (m) => log(`[warm] ${m}`),
     })
   : null;

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSearchCache } from '../src/search-cache.js';
-import { mergeSearches } from '../src/reserve.js';
+import { mergeSearches, sessionHasSearched } from '../src/reserve.js';
 
 const TOP = "<html><!-- pawab2000.jsp --><script>var gRsvWTransUserLoginAction = '/web/rsvWTransUserLoginAction.do';</script></html>";
 const week = (park, inst) =>
@@ -117,4 +117,11 @@ test('mergeSearches: ブラウザの先取り(ログイン画面)に、外で取
   assert.equal(alone.searches['1040'].instCd, '10400030');
   assert.equal(mergeSearches(warm, null, '2026-11-08'), warm);
   assert.equal(mergeSearches(null, {}, '2026-11-08'), null);
+});
+
+test('sessionHasSearched: 先取りにこのブラウザでの検索が 1 つでもあれば true(週データ JSON を取る予約で、外の検索結果を使ってよいかの判定)', () => {
+  assert.equal(sessionHasSearched(null), false);
+  assert.equal(sessionHasSearched({ loginFields: { loginJKey: 'K' }, search: null, searches: {} }), false);
+  assert.equal(sessionHasSearched({ loginFields: null, search: null, searches: null }), false);
+  assert.equal(sessionHasSearched({ search: { park: '1160' }, searches: { 1160: { park: '1160' } } }), true);
 });
